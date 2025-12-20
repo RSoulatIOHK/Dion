@@ -1,0 +1,10 @@
+name = "Cleanode"
+version = "0.1.0"
+defaultTargets = ["cleanode"]
+
+[[lean_lib]]
+name = "Cleanode"
+
+[[lean_exe]]
+name = "cleanode"
+root = "Main"

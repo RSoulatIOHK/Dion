@@ -1,0 +1,223 @@
+import Cleanode.Network.Cbor
+import Cleanode.Network.Multiplexer
+import Cleanode.Network.Socket
+import Cleanode.Network.ChainSync
+
+/-!
+# BlockFetch Mini-Protocol
+
+The BlockFetch protocol is used to download full block bodies from peers.
+While ChainSync only provides block headers, BlockFetch provides the complete
+block including all transactions.
+
+## Protocol Flow
+1. Client sends MsgRequestRange with range of blocks to fetch
+2. Server responds with:
+   - MsgStartBatch → MsgBlock (repeated) → MsgBatchDone, or
+   - MsgNoBlocks (if range not available)
+3. Client can request more ranges or send MsgClientDone to terminate
+
+## State Machine
+- StIdle: Client can send MsgRequestRange or MsgClientDone
+- StBusy: Server sends MsgStartBatch/MsgNoBlocks, then blocks, then MsgBatchDone
+- StStreaming: Server sending block bodies
+- StDone: Protocol terminated
+
+## References
+- Ouroboros Network Spec Section 3.8 (Block Fetch)
+- Protocol number: 3 (node-to-node)
+-/
+
+namespace Cleanode.Network.BlockFetch
+
+open Cleanode.Network.Cbor
+open Cleanode.Network.Multiplexer
+open Cleanode.Network.Socket
+open Cleanode.Network.ChainSync
+
+-- ==============
+-- = Core Types =
+-- ==============
+
+/-- Full block (header + body) -/
+structure Block where
+  header : Header       -- Block header (from ChainSync)
+  bodyBytes : ByteArray -- Full block body (CBOR encoded)
+
+instance : Repr Block where
+  reprPrec b _ := s!"Block(era={b.header.era}, headerSize={b.header.headerBytes.size}B, bodySize={b.bodyBytes.size}B)"
+
+-- ===================
+-- = Protocol Messages =
+-- ===================
+
+/-- BlockFetch protocol messages -/
+inductive BlockFetchMessage where
+  | MsgRequestRange (fromPoint : Point) (toPoint : Point)  -- [0] Request block range
+  | MsgClientDone                                          -- [1] Client terminates
+  | MsgStartBatch                                          -- [2] Server starts batch
+  | MsgNoBlocks                                            -- [3] No blocks in range
+  | MsgBlock (block : ByteArray)                           -- [4] Block body (raw CBOR)
+  | MsgBatchDone                                           -- [5] Batch complete
+
+instance : Repr BlockFetchMessage where
+  reprPrec
+    | .MsgRequestRange fp tp, _ => s!"MsgRequestRange({repr fp}, {repr tp})"
+    | .MsgClientDone, _ => "MsgClientDone"
+    | .MsgStartBatch, _ => "MsgStartBatch"
+    | .MsgNoBlocks, _ => "MsgNoBlocks"
+    | .MsgBlock block, _ => s!"MsgBlock({block.size}B)"
+    | .MsgBatchDone, _ => "MsgBatchDone"
+
+-- ==============
+-- = Encoding   =
+-- ==============
+
+/-- Encode BlockFetch message -/
+def encodeBlockFetchMessage : BlockFetchMessage → ByteArray
+  | .MsgRequestRange fromPoint toPoint =>
+      let arr := encodeArrayHeader 3
+      let msgId := encodeUInt 0
+      let fromEnc := encodePoint fromPoint
+      let toEnc := encodePoint toPoint
+      arr ++ msgId ++ fromEnc ++ toEnc
+  | .MsgClientDone =>
+      let arr := encodeArrayHeader 1
+      let msgId := encodeUInt 1
+      arr ++ msgId
+  | .MsgStartBatch =>
+      let arr := encodeArrayHeader 1
+      let msgId := encodeUInt 2
+      arr ++ msgId
+  | .MsgNoBlocks =>
+      let arr := encodeArrayHeader 1
+      let msgId := encodeUInt 3
+      arr ++ msgId
+  | .MsgBlock blockBytes =>
+      let arr := encodeArrayHeader 2
+      let msgId := encodeUInt 4
+      arr ++ msgId ++ blockBytes
+  | .MsgBatchDone =>
+      let arr := encodeArrayHeader 1
+      let msgId := encodeUInt 5
+      arr ++ msgId
+
+-- ==============
+-- = Decoding   =
+-- ==============
+
+/-- Decode BlockFetch message -/
+partial def decodeBlockFetchMessage (bs : ByteArray) : Option (DecodeResult BlockFetchMessage) := do
+  let r1 ← decodeArrayHeader bs
+  let r2 ← decodeUInt r1.remaining
+
+  match r2.value with
+  | 0 => do  -- MsgRequestRange
+      if r1.value != 3 then none
+      let r3 ← decodePoint r2.remaining
+      let r4 ← decodePoint r3.remaining
+      some { value := .MsgRequestRange r3.value r4.value, remaining := r4.remaining }
+  | 1 => if r1.value == 1 then some { value := .MsgClientDone, remaining := r2.remaining } else none
+  | 2 => if r1.value == 1 then some { value := .MsgStartBatch, remaining := r2.remaining } else none
+  | 3 => if r1.value == 1 then some { value := .MsgNoBlocks, remaining := r2.remaining } else none
+  | 4 => do  -- MsgBlock
+      if r1.value != 2 then none
+      -- The block data is wrapped in tag24, then a CBOR bytestring
+      -- Skip tag24 if present (0xD8 0x18)
+      let afterTag :=
+        if r2.remaining.size >= 2 && r2.remaining[0]! == 0xD8 && r2.remaining[1]! == 0x18 then
+          r2.remaining.extract 2 r2.remaining.size
+        else
+          r2.remaining
+      -- Now decode the bytestring
+      let r3 ← decodeBytes afterTag
+      some { value := .MsgBlock r3.value, remaining := r3.remaining }
+  | 5 => if r1.value == 1 then some { value := .MsgBatchDone, remaining := r2.remaining } else none
+  | _ => none
+
+-- ==============
+-- = Client API =
+-- ==============
+
+/-- Send BlockFetch message over socket -/
+def sendBlockFetch (sock : Socket) (msg : BlockFetchMessage) : IO (Except SocketError Unit) := do
+  let payload := encodeBlockFetchMessage msg
+  let frame ← createFrame .BlockFetch .Initiator payload
+  let frameBytes := encodeMuxFrame frame
+  socket_send sock frameBytes
+
+/-- Result of receiving a BlockFetch message, including any leftover bytes -/
+structure BlockFetchReceiveResult where
+  message : BlockFetchMessage
+  leftoverBytes : ByteArray
+
+/-- Receive BlockFetch message from socket, handling multi-frame messages.
+    If leftoverBytes is provided, starts decoding from those bytes. -/
+def receiveBlockFetch (sock : Socket) (leftoverBytes : ByteArray := ⟨#[]⟩) (maxSize : UInt32 := 65535) : IO (Except SocketError (Option BlockFetchReceiveResult)) := do
+  -- Start with leftover bytes from previous decode (if any)
+  let mut completePayload := leftoverBytes
+
+  -- If we have leftover bytes, try to decode them first
+  if leftoverBytes.size > 0 then do
+    match decodeBlockFetchMessage leftoverBytes with
+    | some result => return .ok (some { message := result.value, leftoverBytes := result.remaining })
+    | none => pure ()  -- Fall through to read more frames
+
+  -- Read first frame
+  match ← socket_receive sock 8 with
+  | .error e => return .error e
+  | .ok headerBytes => do
+      match decodeMuxHeader headerBytes with
+      | none => return .ok none
+      | some firstHeader => do
+          let payloadSize := firstHeader.payloadLength.toNat.toUInt32
+          if payloadSize > maxSize then return .ok none
+
+          match ← socket_receive sock payloadSize with
+          | .error e => return .error e
+          | .ok firstPayload => do
+              completePayload := completePayload ++ firstPayload
+
+              -- Try to decode - if it succeeds, return it with leftover bytes
+              match decodeBlockFetchMessage completePayload with
+              | some result => return .ok (some { message := result.value, leftoverBytes := result.remaining })
+              | none => do
+                  -- Message incomplete - likely a multi-frame MsgBlock
+                  -- Keep reading frames from the same protocol and append payloads
+                  let targetProtocol := firstHeader.protocolId
+
+                  -- Read additional frames until we can decode or hit limit
+                  for _ in [0:10] do  -- Max 10 additional frames
+                    match ← socket_receive sock 8 with
+                    | .error _ => break
+                    | .ok nextHeaderBytes => do
+                        match decodeMuxHeader nextHeaderBytes with
+                        | none => break
+                        | some nextHeader => do
+                            if nextHeader.protocolId != targetProtocol then break
+
+                            let nextPayloadSize := nextHeader.payloadLength.toNat.toUInt32
+                            match ← socket_receive sock nextPayloadSize with
+                            | .error _ => break
+                            | .ok nextPayload => do
+                                completePayload := completePayload ++ nextPayload
+                                -- Try to decode again
+                                match decodeBlockFetchMessage completePayload with
+                                | some result =>
+                                    return .ok (some { message := result.value, leftoverBytes := result.remaining })
+                                | none => continue  -- Keep reading
+
+                  -- Final attempt to decode
+                  match decodeBlockFetchMessage completePayload with
+                  | some result => return .ok (some { message := result.value, leftoverBytes := result.remaining })
+                  | none => return .ok none
+
+/-- Request a range of blocks (typically just one block at a time) -/
+def requestBlockRange (fromPoint : Point) (toPoint : Point) : BlockFetchMessage :=
+  .MsgRequestRange fromPoint toPoint
+
+/-- Request a single block by point -/
+def requestSingleBlock (point : Point) : BlockFetchMessage :=
+  .MsgRequestRange point point
+
+end Cleanode.Network.BlockFetch

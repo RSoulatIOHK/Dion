@@ -1,1 +1,6 @@
 /.lake
+/data/
+*.o
+*.a
+/PlutusCore/
+/test_except.lean

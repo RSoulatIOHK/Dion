@@ -182,39 +182,34 @@ lean_obj_res cleanode_socket_receive(lean_obj_arg sock_obj, uint32_t max_bytes, 
         return lean_io_result_mk_ok(except_err);
     }
 
-    // Loop until we receive exactly max_bytes (or error/EOF)
-    size_t total_received = 0;
-    while (total_received < max_bytes) {
-        ssize_t received = recv(sockfd, buffer + total_received, max_bytes - total_received, 0);
+    // Receive up to max_bytes (return after first successful recv)
+    ssize_t received = recv(sockfd, buffer, max_bytes, 0);
 
-        if (received < 0) {
-            free(buffer);
-            char err_msg[256];
-            // Check if it's a timeout (EAGAIN or EWOULDBLOCK)
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                snprintf(err_msg, sizeof(err_msg), "recv timeout");
-            } else {
-                snprintf(err_msg, sizeof(err_msg), "recv: %s", strerror(errno));
-            }
-            lean_object* err = mk_socket_error_receive_failed(lean_mk_string(err_msg));
-            lean_object* except_err = mk_except_error(err);
-            return lean_io_result_mk_ok(except_err);
+    if (received < 0) {
+        free(buffer);
+        char err_msg[256];
+        // Check if it's a timeout (EAGAIN or EWOULDBLOCK)
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            snprintf(err_msg, sizeof(err_msg), "recv timeout");
+        } else {
+            snprintf(err_msg, sizeof(err_msg), "recv: %s", strerror(errno));
         }
+        lean_object* err = mk_socket_error_receive_failed(lean_mk_string(err_msg));
+        lean_object* except_err = mk_except_error(err);
+        return lean_io_result_mk_ok(except_err);
+    }
 
-        if (received == 0) {
-            // Connection closed by peer
-            free(buffer);
-            lean_object* err = mk_socket_error_receive_failed(lean_mk_string("connection closed by peer"));
-            lean_object* except_err = mk_except_error(err);
-            return lean_io_result_mk_ok(except_err);
-        }
-
-        total_received += received;
+    if (received == 0) {
+        // Connection closed by peer
+        free(buffer);
+        lean_object* err = mk_socket_error_receive_failed(lean_mk_string("connection closed by peer"));
+        lean_object* except_err = mk_except_error(err);
+        return lean_io_result_mk_ok(except_err);
     }
 
     // Create ByteArray from received data
-    lean_object* byte_array = lean_alloc_sarray(sizeof(uint8_t), total_received, total_received);
-    memcpy(lean_sarray_cptr(byte_array), buffer, total_received);
+    lean_object* byte_array = lean_alloc_sarray(sizeof(uint8_t), received, received);
+    memcpy(lean_sarray_cptr(byte_array), buffer, received);
     free(buffer);
 
     lean_object* except_ok = mk_except_ok(byte_array);

@@ -49,6 +49,7 @@ def testHandshake (host : String) (port : UInt16) : IO Unit := do
           IO.println "Waiting for handshake response..."
 
           -- Receive and parse handshake response
+          IO.println "Waiting for handshake response..."
           match ← socket_receive sock 1024 with
           | .error e => do
               IO.println s!"✗ Failed to receive: {e}"
@@ -120,6 +121,7 @@ def testChainSync (host : String) (port : UInt16) (proposal : HandshakeMessage) 
               IO.println s!"✗ Failed to receive handshake: {e}"
               socket_close sock
           | .ok rawData => do
+              IO.println s!"✓ Received {rawData.size} bytes"
               match decodeMuxFrame rawData with
               | none => do
                   IO.println "✗ Failed to decode handshake MUX frame"
@@ -270,7 +272,7 @@ def testChainSync (host : String) (port : UInt16) (proposal : HandshakeMessage) 
                                                                       let lo := n % 16
                                                                       let hiChar := if hi < 10 then Char.ofNat (48 + hi) else Char.ofNat (87 + hi)
                                                                       let loChar := if lo < 10 then Char.ofNat (48 + lo) else Char.ofNat (87 + lo)
-                                                                      String.ofList [hiChar, loChar]
+                                                                      String.mk [hiChar, loChar]
                                                                     )
                                                                     IO.println s!"  Prev hash prefix: {String.intercalate "" hashHex}..."
 
@@ -314,7 +316,7 @@ def testChainSync (host : String) (port : UInt16) (proposal : HandshakeMessage) 
                                                                   let lo := n % 16
                                                                   let hiChar := if hi < 10 then Char.ofNat (48 + hi) else Char.ofNat (87 + hi)
                                                                   let loChar := if lo < 10 then Char.ofNat (48 + lo) else Char.ofNat (87 + lo)
-                                                                  String.ofList [hiChar, loChar]
+                                                                  String.mk [hiChar, loChar]
                                                                 )
                                                                 IO.println s!"  Prev hash prefix: {String.intercalate "" hashHex}..."
 
@@ -369,6 +371,7 @@ def testBlockFetch (host : String) (port : UInt16) (proposal : HandshakeMessage)
               IO.println s!"✗ Failed to receive handshake: {e}"
               socket_close sock
           | .ok rawData => do
+              IO.println s!"✓ Received {rawData.size} bytes"
               match decodeMuxFrame rawData with
               | none => do
                   IO.println "✗ Failed to decode handshake MUX frame"
@@ -544,7 +547,7 @@ def testBlockFetch (host : String) (port : UInt16) (proposal : HandshakeMessage)
                                                                                             let isPrintable := asset.assetName.toList.all (fun b => b >= 32 && b <= 126)
                                                                                             let assetNameStr :=
                                                                                               if asset.assetName.size > 0 && isPrintable then
-                                                                                                String.ofList (asset.assetName.toList.map fun b => Char.ofNat b.toNat)
+                                                                                                String.mk (asset.assetName.toList.map fun b => Char.ofNat b.toNat)
                                                                                               else
                                                                                                 assetNameHex
                                                                                             IO.println s!"       + {asset.amount} {assetNameStr}"

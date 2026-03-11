@@ -633,6 +633,63 @@ def testBlockFetch (host : String) (port : UInt16) (proposal : HandshakeMessage)
                                                                                        (" ".style)] ++ outputStyled
                                                                                     concat parts
 
+                                                                                    -- Display native assets on separate lines
+                                                                                    if h : i < tx.body.outputs.length then
+                                                                                      let output := tx.body.outputs.get ⟨i, h⟩
+                                                                                      for asset in output.nativeAssets do
+                                                                                        let policyHex := bytesToHex asset.policyId
+
+                                                                                        -- Decode asset name if printable
+                                                                                        let assetNameDisplay := if asset.assetName.size > 0 then
+                                                                                          match String.fromUTF8? asset.assetName with
+                                                                                          | some name =>
+                                                                                              let isPrintable := name.all fun c => c.toNat >= 32 && c.toNat <= 126
+                                                                                              if isPrintable && name.length > 0 then
+                                                                                                s!":{name}"
+                                                                                              else
+                                                                                                let nameHex := bytesToHex asset.assetName
+                                                                                                s!":{nameHex.take 8}..."
+                                                                                          | none =>
+                                                                                              let nameHex := bytesToHex asset.assetName
+                                                                                              s!":{nameHex.take 8}..."
+                                                                                        else
+                                                                                          ""
+
+                                                                                        let assetDisplay := s!"  +{asset.amount} {policyHex.take 8}...{assetNameDisplay}"
+
+                                                                                        -- Empty input and connector for asset lines
+                                                                                        let emptyInput := String.join (List.replicate 17 " ")
+                                                                                        let emptyConnector := "│                  │"
+                                                                                        let assetParts : List StyledText :=
+                                                                                          [("│ ".style |> blue),
+                                                                                           (emptyInput.style |> dim),
+                                                                                           (emptyConnector.style |> magenta),
+                                                                                           (" ".style),
+                                                                                           (assetDisplay.style |> yellow)]
+                                                                                        concat assetParts
+
+                                                                                  -- Display redeemers if present
+                                                                                  let redeemers := tx.witnesses.redeemers
+                                                                                  if redeemers.length > 0 then
+                                                                                    redeemers.forM fun redeemer => do
+                                                                                      let tagStr := match redeemer.tag with
+                                                                                        | .Spend => "Spend"
+                                                                                        | .Mint => "Mint"
+                                                                                        | .Cert => "Cert"
+                                                                                        | .Reward => "Reward"
+                                                                                      let redeemerDisplay := s!"  Redeemer: {tagStr} #{redeemer.index} (mem={redeemer.exUnits.mem}, steps={redeemer.exUnits.steps})"
+
+                                                                                      -- Empty input and connector for redeemer lines
+                                                                                      let emptyInput := String.join (List.replicate 17 " ")
+                                                                                      let emptyConnector := "│                  │"
+                                                                                      let redeemerParts : List StyledText :=
+                                                                                        [("│ ".style |> blue),
+                                                                                         (emptyInput.style |> dim),
+                                                                                         (emptyConnector.style |> magenta),
+                                                                                         (" ".style),
+                                                                                         (redeemerDisplay.style |> cyan)]
+                                                                                      concat redeemerParts
+
                                                                                   println ((("└" ++ String.join (List.replicate 69 "─") ++ "┘").style |> blue))
                                                                                   txNum := txNum + 1
 

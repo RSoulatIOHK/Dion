@@ -162,6 +162,28 @@ partial def decodeVersionData (bs : ByteArray) : Option (DecodeResult VersionDat
     remaining := r5.remaining
   }
 
+/-- Decode a single version proposal (version number + version data) -/
+partial def decodeVersionProposal (bs : ByteArray) : Option (DecodeResult (VersionNumber × VersionData)) := do
+  -- Decode version number (UInt)
+  let r1 ← decodeUInt bs
+  let vn := VersionNumber.mk r1.value
+
+  -- Decode version data
+  let r2 ← decodeVersionData r1.remaining
+
+  some {
+    value := (vn, r2.value),
+    remaining := r2.remaining
+  }
+
+/-- Decode ProposeVersions map of versions -/
+partial def decodeVersionMap (bs : ByteArray) (count : Nat) (acc : List (VersionNumber × VersionData)) : Option (List (VersionNumber × VersionData)) :=
+  if count == 0 then
+    some acc.reverse
+  else do
+    let r ← decodeVersionProposal bs
+    decodeVersionMap r.remaining (count - 1) (r.value :: acc)
+
 /-- Decode handshake message (v14+ format) -/
 partial def decodeHandshakeMessage (bs : ByteArray) : Option HandshakeMessage := do
   -- Decode array header
@@ -171,7 +193,18 @@ partial def decodeHandshakeMessage (bs : ByteArray) : Option HandshakeMessage :=
   let r2 ← decodeUInt r1.remaining
 
   match r2.value with
-  | 0 => none  -- ProposeVersions (complex, TODO)
+  | 0 => do    -- ProposeVersions: [0, {versionNumber: versionData, ...}]
+      -- For v14+, this is a 2-element array: [msgId, versionsMap]
+      if r1.value != 2 then none
+
+      -- Decode map header to get number of versions
+      let r3 ← decodeMapHeader r2.remaining
+      let versionCount := r3.value
+
+      -- Decode all version proposals
+      let versions ← decodeVersionMap r3.remaining versionCount []
+
+      some (.ProposeVersions versions)
   | 1 => do    -- AcceptVersion: [1, versionNumber, versionData]
       -- For v14+, this is a 3-element array
       if r1.value != 3 then none

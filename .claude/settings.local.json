@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(lake build:*)",
+      "Bash(~/.elan/toolchains/leanprover--lean4---v4.24.0/bin/clang:*)",
+      "Bash(\"/c/Program Files/LLVM/bin/clang\" -c native/blake2b.c -o native/blake2b.o -I~/.elan/toolchains/leanprover--lean4---v4.24.0/include -fPIC)",
+      "Bash(\"/c/Program Files/LLVM/bin/clang\" -c native/test_ffi.c -o native/test_ffi.o -I~/.elan/toolchains/leanprover--lean4---v4.24.0/include -fPIC)",
+      "Bash(sudo apt-get update:*)",
+      "Bash(sudo apt-get install:*)"
+    ]
+  }
+}

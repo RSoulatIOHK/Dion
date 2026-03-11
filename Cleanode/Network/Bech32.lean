@@ -95,7 +95,7 @@ def bech32Encode (hrp : String) (data : List UInt8) : String :=
     let val := b.toNat % 32  -- Clamp to 0-31
     bech32Charset[val]!
   )
-  hrp ++ "1" ++ String.ofList chars
+  hrp ++ "1" ++ String.mk chars
 
 /-- Encode Cardano address to Bech32 format -/
 def encodeAddress (addressBytes : ByteArray) (isTestnet : Bool := false) : String :=

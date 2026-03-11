@@ -76,7 +76,36 @@ structure TxOutput where
 instance : Repr TxOutput where
   reprPrec o _ := s!"TxOutput(addr={o.address.size}B, amount={o.amount}, assets={o.nativeAssets.length})"
 
-/-- Transaction body (core transaction data) -/
+/-- Redeemer tag indicating what it's validating -/
+inductive RedeemerTag where
+  | Spend    -- Validating a script input
+  | Mint     -- Validating a minting policy
+  | Cert     -- Validating a certificate
+  | Reward   -- Validating a reward withdrawal
+  deriving Repr, BEq
+
+/-- Execution units (memory and CPU steps) -/
+structure ExUnits where
+  mem : Nat
+  steps : Nat
+  deriving Repr
+
+/-- Redeemer for Plutus script execution -/
+structure Redeemer where
+  tag : RedeemerTag
+  index : Nat              -- Which input/mint/cert this redeemer applies to
+  data : ByteArray         -- Plutus data (CBOR encoded)
+  exUnits : ExUnits        -- Execution budget used
+
+instance : Repr Redeemer where
+  reprPrec r _ := s!"Redeemer({repr r.tag}, idx={r.index}, data={r.data.size}B, mem={r.exUnits.mem}, steps={r.exUnits.steps})"
+
+/-- Witness set containing signatures, scripts, and redeemers -/
+structure WitnessSet where
+  redeemers : List Redeemer
+  -- We could add more fields here: vkey_witnesses, scripts, datums, etc.
+  deriving Repr
+
 structure TransactionBody where
   inputs : List TxInput
   outputs : List TxOutput
@@ -90,10 +119,10 @@ instance : Repr TransactionBody where
 /-- Complete transaction with witnesses -/
 structure Transaction where
   body : TransactionBody
-  witnessSetSize : Nat  -- Size of witness set (we won't parse it fully yet)
+  witnesses : WitnessSet
 
 instance : Repr Transaction where
-  reprPrec tx _ := s!"Transaction({repr tx.body}, witnesses={tx.witnessSetSize}B)"
+  reprPrec tx _ := s!"Transaction({repr tx.body}, redeemers={tx.witnesses.redeemers.length})"
 
 /-- Parsed Conway block body -/
 structure ConwayBlockBody where
@@ -267,6 +296,90 @@ partial def parseTxOutput (bs : ByteArray) : Option (DecodeResult TxOutput) := d
         value := { address := r2.value, amount := amount, datum := none, nativeAssets := nativeAssets },
         remaining := remaining
       }
+
+/-- Parse a single redeemer from CBOR array [tag, index, data, ex_units] -/
+partial def parseRedeemer (bs : ByteArray) : Option (DecodeResult Redeemer) := do
+  let r1 ← decodeArrayHeader bs
+  if r1.value != 4 then none  -- Must have exactly 4 elements
+
+  -- Parse tag (0=Spend, 1=Mint, 2=Cert, 3=Reward)
+  let tagResult ← decodeUInt r1.remaining
+  let tag := match tagResult.value with
+    | 0 => RedeemerTag.Spend
+    | 1 => RedeemerTag.Mint
+    | 2 => RedeemerTag.Cert
+    | 3 => RedeemerTag.Reward
+    | _ => RedeemerTag.Spend  -- Default
+
+  -- Parse index
+  let indexResult ← decodeUInt tagResult.remaining
+
+  -- Parse data (Plutus data as raw CBOR bytes)
+  let dataStart := indexResult.remaining
+  let afterData ← skipCborValue dataStart
+  let dataBytes := dataStart.extract 0 (dataStart.size - afterData.size)
+
+  -- Parse ex_units [mem, steps]
+  let exUnitsResult ← decodeArrayHeader afterData
+  if exUnitsResult.value != 2 then none
+  let memResult ← decodeUInt exUnitsResult.remaining
+  let stepsResult ← decodeUInt memResult.remaining
+
+  some {
+    value := {
+      tag := tag,
+      index := indexResult.value,
+      data := dataBytes,
+      exUnits := { mem := memResult.value, steps := stepsResult.value }
+    },
+    remaining := stepsResult.remaining
+  }
+
+/-- Parse redeemers array from witness set -/
+partial def parseRedeemers (bs : ByteArray) : Option (List Redeemer) := do
+  let r1 ← decodeArrayHeader bs
+  let count := r1.value
+
+  let rec parseLoop (remaining : ByteArray) (acc : List Redeemer) (n : Nat) : Option (List Redeemer) :=
+    if n == 0 then
+      some acc
+    else
+      match parseRedeemer remaining with
+      | some r => parseLoop r.remaining (acc ++ [r.value]) (n - 1)
+      | none => none
+
+  parseLoop r1.remaining [] count
+
+/-- Parse witness set from CBOR map -/
+partial def parseWitnessSet (bs : ByteArray) : Option WitnessSet := do
+  -- Witness set is a map: { ?0: vkeys, ?1: scripts, ?5: redeemers, ... }
+  let r1 ← decodeMapHeader bs
+  let mapSize := r1.value
+
+  let rec parseMapEntries (remaining : ByteArray) (redeemers : List Redeemer) (n : Nat) : Option (List Redeemer) :=
+    if n == 0 then
+      some redeemers
+    else
+      match decodeUInt remaining with
+      | some keyResult =>
+          if keyResult.value == 5 then
+            -- Key 5 is redeemers
+            match parseRedeemers keyResult.remaining with
+            | some redList =>
+                match skipCborValue keyResult.remaining with
+                | some afterValue => parseMapEntries afterValue redList (n - 1)
+                | none => none
+            | none => none
+          else
+            -- Skip this key-value pair
+            match skipCborValue keyResult.remaining with
+            | some afterValue => parseMapEntries afterValue redeemers (n - 1)
+            | none => none
+      | none => none
+
+  match parseMapEntries r1.remaining [] mapSize with
+  | some redList => some { redeemers := redList }
+  | none => none
 
 /-- Parse transaction body from CBOR map (Babbage+) -/
 partial def parseTransactionBodyMap (bs : ByteArray) : Option (DecodeResult TransactionBody) := do
@@ -447,6 +560,33 @@ partial def parseTransactionBodiesIO (bs : ByteArray) : IO (Option (List Transac
 
       return some bodies.reverse
 
+/-- Parse array of witness sets (IO version) -/
+partial def parseWitnessSetsArrayIO (bs : ByteArray) : IO (Option (List WitnessSet)) := do
+  match decodeArrayHeader bs with
+  | none => return none
+  | some r1 =>
+      let witnessCount := r1.value
+      let mut remaining := r1.remaining
+      let mut witnessSets : List WitnessSet := []
+
+      for _ in [0:witnessCount] do
+        -- Parse each witness set
+        match parseWitnessSet remaining with
+        | none =>
+            -- If parsing fails, use empty witness set
+            witnessSets := { redeemers := [] } :: witnessSets
+            match skipCborValue remaining with
+            | none => break
+            | some afterWitness => remaining := afterWitness
+        | some witnessSet =>
+            witnessSets := witnessSet :: witnessSets
+            -- Skip the witness set to move to next one
+            match skipCborValue remaining with
+            | none => break
+            | some afterWitness => remaining := afterWitness
+
+      return some witnessSets.reverse
+
 /-- Parse array of transaction bodies (non-IO version for compatibility) -/
 partial def parseTransactionBodies (bs : ByteArray) : Option (List TransactionBody) := do
   let r1 ← decodeArrayHeader bs
@@ -510,7 +650,7 @@ def parseConwayBlockBodyIO (bs : ByteArray) : IO (Option ConwayBlockBody) := do
             match skipCborValue blockArray.remaining with
             | none => return none
             | some afterHeader => do
-                -- Element 1 is tx_bodies array directly
+                -- Element 1: Parse tx_bodies array
                 match ← parseTransactionBodiesIO afterHeader with
                   | none =>
                       return some {
@@ -518,13 +658,44 @@ def parseConwayBlockBodyIO (bs : ByteArray) : IO (Option ConwayBlockBody) := do
                         invalidTxs := []
                       }
                   | some txBodies =>
-                      let transactions := txBodies.map (fun body =>
-                        { body := body, witnessSetSize := 0 }
-                      )
-                      return some {
-                        transactions := transactions,
-                        invalidTxs := []
-                      }
+                      -- Skip tx_bodies to get to witnesses array (element 2)
+                      match skipCborValue afterHeader with
+                      | none =>
+                          let transactions := txBodies.map (fun body =>
+                            { body := body, witnesses := { redeemers := [] } }
+                          )
+                          return some {
+                            transactions := transactions,
+                            invalidTxs := []
+                          }
+                      | some afterTxBodies => do
+                          -- Element 2: Parse witnesses array
+                          match ← parseWitnessSetsArrayIO afterTxBodies with
+                          | none =>
+                              let transactions := txBodies.map (fun body =>
+                                { body := body, witnesses := { redeemers := [] } }
+                              )
+                              return some {
+                                transactions := transactions,
+                                invalidTxs := []
+                              }
+                          | some witnessSets =>
+                              -- Pair tx bodies with witness sets
+                              let transactions := List.zipWith (fun body witnesses =>
+                                { body := body, witnesses := witnesses }
+                              ) txBodies witnessSets
+                              -- Handle case where lists have different lengths
+                              let transactions :=
+                                if txBodies.length > witnessSets.length then
+                                  transactions ++ (txBodies.drop witnessSets.length).map (fun body =>
+                                    { body := body, witnesses := { redeemers := [] } }
+                                  )
+                                else
+                                  transactions
+                              return some {
+                                transactions := transactions,
+                                invalidTxs := []
+                              }
           else
             -- Old format not supported yet
             return none
@@ -554,7 +725,7 @@ partial def parseConwayBlockBody (bs : ByteArray) : Option ConwayBlockBody := do
       }
   | some txBodies =>
       let transactions := txBodies.map (fun body =>
-        { body := body, witnessSetSize := 0 }
+        { body := body, witnesses := { redeemers := [] } }
       )
       some {
         transactions := transactions,

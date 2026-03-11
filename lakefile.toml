@@ -1,0 +1,15 @@
+name = "Cleanode"
+version = "0.1.0"
+defaultTargets = ["cleanode"]
+
+[[require]]
+name = "Pigment"
+git = "https://github.com/RSoulatIOHK/Pigment"
+rev = "comp-4.24.0"
+
+[[lean_lib]]
+name = "Cleanode"
+
+[[lean_exe]]
+name = "cleanode"
+root = "Main"

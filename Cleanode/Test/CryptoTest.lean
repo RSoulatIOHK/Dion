@@ -85,6 +85,80 @@ def runEd25519Tests : IO (List (String × Bool)) := do
   ]
 
 -- ====================
+-- = Property Tests   =
+-- ====================
+
+/-- Property: Blake2b-256 is deterministic (same input -> same output) -/
+def testBlake2bDeterministic : IO Bool := do
+  let input := "determinism test".toUTF8
+  let h1 ← blake2b_256 input
+  let h2 ← blake2b_256 input
+  return h1 == h2
+
+/-- Property: Blake2b-256 always produces 32 bytes -/
+def testBlake2bOutputSize : IO Bool := do
+  let inputs : List ByteArray := [
+    ByteArray.empty,
+    "a".toUTF8,
+    "abc".toUTF8,
+    ("x" ++ String.mk (List.replicate 1000 'x')).toUTF8
+  ]
+  let mut allOk := true
+  for input in inputs do
+    let hash ← blake2b_256 input
+    if hash.size != 32 then
+      allOk := false
+  return allOk
+
+/-- Property: Blake2b-256 produces different hashes for different inputs -/
+def testBlake2bDistinct : IO Bool := do
+  let h1 ← blake2b_256 "hello".toUTF8
+  let h2 ← blake2b_256 "world".toUTF8
+  return h1 != h2
+
+/-- Property: Ed25519 sign then verify roundtrip -/
+def testEd25519SignVerifyRoundtrip : IO Bool := do
+  let (pk, sk) ← ed25519_keypair
+  let msg := "test message for signing".toUTF8
+  let sig ← ed25519_sign sk msg
+  ed25519_verify pk msg sig
+
+/-- Property: Ed25519 rejects wrong message -/
+def testEd25519RejectWrongMessage : IO Bool := do
+  let (pk, sk) ← ed25519_keypair
+  let msg := "correct message".toUTF8
+  let sig ← ed25519_sign sk msg
+  let wrongMsg := "wrong message".toUTF8
+  let result ← ed25519_verify pk wrongMsg sig
+  return !result  -- Should reject
+
+/-- Property: Ed25519 rejects wrong key -/
+def testEd25519RejectWrongKey : IO Bool := do
+  let (_, sk) ← ed25519_keypair
+  let (pk2, _) ← ed25519_keypair
+  let msg := "test message".toUTF8
+  let sig ← ed25519_sign sk msg
+  let result ← ed25519_verify pk2 msg sig
+  return !result  -- Should reject
+
+/-- Run all property-based tests -/
+def runPropertyTests : IO (List (String × Bool)) := do
+  let r1 ← testBlake2bDeterministic
+  let r2 ← testBlake2bOutputSize
+  let r3 ← testBlake2bDistinct
+  let r4 ← testEd25519SignVerifyRoundtrip
+  let r5 ← testEd25519RejectWrongMessage
+  let r6 ← testEd25519RejectWrongKey
+  return [
+    ("blake2b_deterministic", r1),
+    ("blake2b_output_32_bytes", r2),
+    ("blake2b_distinct_inputs", r3),
+    ("ed25519_sign_verify_roundtrip", r4),
+    ("ed25519_reject_wrong_message", r5),
+    ("ed25519_reject_wrong_key", r6)
+  ]
+
+-- ====================
 -- = Test Runner      =
 -- ====================
 
@@ -114,7 +188,17 @@ def runAllCryptoTests : IO UInt32 := do
       failures := failures + 1
 
   IO.println ""
-  let total := blake2bResults.length + ed25519Results.length
+  IO.println "--- Property-Based Tests ---"
+  let propResults ← runPropertyTests
+  for (name, passed) in propResults do
+    if passed then
+      IO.println s!"  PASS: {name}"
+    else
+      IO.println s!"  FAIL: {name}"
+      failures := failures + 1
+
+  IO.println ""
+  let total := blake2bResults.length + ed25519Results.length + propResults.length
   let passed := total - failures
   IO.println s!"Results: {passed}/{total} passed"
 

@@ -158,4 +158,100 @@ def recordMissed (state : KeepAliveState) : KeepAliveState :=
 def isConnectionDead (config : KeepAliveConfig) (state : KeepAliveState) : Bool :=
   state.missedResponses ≥ config.maxMissed
 
+-- ====================
+-- = Latency          =
+-- ====================
+
+/-- Timestamp in milliseconds (from IO.monoMsNow) -/
+abbrev TimestampMs := Nat
+
+/-- Extended keep-alive state with latency tracking -/
+structure KeepAliveLatencyState where
+  base : KeepAliveState
+  sentTimestamp : Option TimestampMs     -- When last cookie was sent
+  latencyHistory : List Nat              -- Recent RTT measurements (ms)
+  maxHistorySize : Nat := 10             -- Keep last N measurements
+  deriving Repr
+
+/-- Initial latency state -/
+def KeepAliveLatencyState.initial : KeepAliveLatencyState :=
+  { base := KeepAliveState.initial
+  , sentTimestamp := none
+  , latencyHistory := [] }
+
+/-- Send a keep-alive with timestamp recording -/
+def sendKeepAliveWithLatency (sock : Socket) (state : KeepAliveLatencyState)
+    : IO (Except SocketError KeepAliveLatencyState) := do
+  let now ← IO.monoMsNow
+  let cookie := state.base.lastSentCookie + 1
+  match ← sendKeepAlive sock (.MsgKeepAlive cookie) with
+  | .error e => return .error e
+  | .ok () =>
+      return .ok { state with
+        base := { state.base with
+          lastSentCookie := cookie
+          totalSent := state.base.totalSent + 1 }
+        sentTimestamp := some now }
+
+/-- Process a response with latency measurement -/
+def processResponseWithLatency (state : KeepAliveLatencyState) (msg : KeepAliveMessage)
+    : IO KeepAliveLatencyState := do
+  match msg with
+  | .MsgKeepAliveResponse cookie =>
+      let now ← IO.monoMsNow
+      let rtt := match state.sentTimestamp with
+        | some sent => now - sent
+        | none => 0
+      let history := (rtt :: state.latencyHistory).take state.maxHistorySize
+      return { state with
+        base := { state.base with
+          lastReceivedCookie := cookie
+          missedResponses := 0
+          totalReceived := state.base.totalReceived + 1
+          lastRoundTripMs := some rtt }
+        sentTimestamp := none
+        latencyHistory := history }
+  | .MsgKeepAlive _ => return state
+
+/-- Get average latency from history -/
+def averageLatencyMs (state : KeepAliveLatencyState) : Option Nat :=
+  if state.latencyHistory.isEmpty then none
+  else
+    let sum := state.latencyHistory.foldl (· + ·) 0
+    some (sum / state.latencyHistory.length)
+
+/-- Record a timeout (no response received within deadline) -/
+def recordTimeout (state : KeepAliveLatencyState) : KeepAliveLatencyState :=
+  { state with
+    base := recordMissed state.base
+    sentTimestamp := none }
+
+/-- Check if we're waiting for a response and it has timed out -/
+def checkTimeout (config : KeepAliveConfig) (state : KeepAliveLatencyState)
+    : IO (Bool × KeepAliveLatencyState) := do
+  match state.sentTimestamp with
+  | none => return (false, state)
+  | some sent =>
+      let now ← IO.monoMsNow
+      if now - sent > config.timeoutMs then
+        return (true, recordTimeout state)
+      else
+        return (false, state)
+
+-- ====================
+-- = Proof Scaffolds  =
+-- ====================
+
+/-- KeepAlive protocol: response cookie matches request cookie -/
+theorem keepalive_cookie_echo :
+    ∀ (cookie : UInt16),
+      decodeKeepAliveMessage (encodeKeepAliveMessage (.MsgKeepAliveResponse cookie)) =
+        some (.MsgKeepAliveResponse cookie) := by
+  sorry
+
+/-- Timeout detection is monotonic: missed count only increases on timeout -/
+theorem timeout_increases_missed (state : KeepAliveState) :
+    (recordMissed state).missedResponses = state.missedResponses + 1 := by
+  simp [recordMissed]
+
 end Cleanode.Network.KeepAlive

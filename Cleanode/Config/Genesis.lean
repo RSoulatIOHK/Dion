@@ -1,0 +1,248 @@
+import Lean
+
+/-!
+# Genesis File Parsers
+
+Parses the genesis configuration files for each Cardano era.
+Only the fields needed by the node for protocol operation are extracted.
+
+## Genesis Files
+- **Byron genesis**: Initial chain state, security parameter, slot duration
+- **Shelley genesis**: Epoch/slot parameters, protocol parameters, initial funds
+- **Alonzo genesis**: Plutus cost models, execution prices, script limits
+- **Conway genesis**: Governance parameters, voting thresholds, committee
+
+## References
+- cardano-ledger genesis specs
+- https://github.com/IntersectMBO/cardano-node/tree/master/configuration
+-/
+
+namespace Cleanode.Config.Genesis
+
+open Lean (Json)
+
+-- ====================
+-- = Byron Genesis    =
+-- ====================
+
+/-- Byron genesis essential parameters -/
+structure ByronGenesis where
+  securityParameter : Nat           -- k: number of blocks for stability
+  slotDuration : Nat                -- Slot duration in milliseconds
+  startTime : Nat                   -- Genesis timestamp (Unix epoch seconds)
+  protocolMagic : Nat               -- Network identifier
+  maxBlockSize : Nat                -- Maximum block size in bytes
+  maxHeaderSize : Nat               -- Maximum header size in bytes
+  maxTxSize : Nat                   -- Maximum transaction size in bytes
+  deriving Repr
+
+/-- Parse Byron genesis from JSON -/
+def parseByronGenesis (j : Json) : Option ByronGenesis := do
+  -- protocolConsts.k
+  let protocolConsts ← (j.getObjVal? "protocolConsts").toOption
+  let k ← (protocolConsts.getObjValAs? Nat "k").toOption
+
+  -- blockVersionData
+  let bvd ← (j.getObjVal? "blockVersionData").toOption
+  let slotDuration ← (bvd.getObjValAs? Nat "slotDuration").toOption
+  let maxBlockSize ← (bvd.getObjValAs? Nat "maxBlockSize").toOption
+  let maxHeaderSize ← (bvd.getObjValAs? Nat "maxHeaderSize").toOption
+  let maxTxSize ← (bvd.getObjValAs? Nat "maxTxSize").toOption
+
+  -- startTime (ISO 8601 string, store as-is for now)
+  let protocolMagic ← (protocolConsts.getObjValAs? Nat "protocolMagic").toOption
+
+  some {
+    securityParameter := k,
+    slotDuration := slotDuration,
+    startTime := 0,  -- TODO: parse ISO 8601 timestamp
+    protocolMagic := protocolMagic,
+    maxBlockSize := maxBlockSize,
+    maxHeaderSize := maxHeaderSize,
+    maxTxSize := maxTxSize
+  }
+
+-- ====================
+-- = Shelley Genesis  =
+-- ====================
+
+/-- Shelley protocol parameters (subset) -/
+structure ShelleyProtocolParams where
+  minFeeA : Nat                     -- Linear fee coefficient (lovelace per byte)
+  minFeeB : Nat                     -- Constant fee (lovelace)
+  maxBlockBodySize : Nat            -- Max block body size (bytes)
+  maxBlockHeaderSize : Nat          -- Max block header size (bytes)
+  maxTxSize : Nat                   -- Max transaction size (bytes)
+  keyDeposit : Nat                  -- Stake key deposit (lovelace)
+  poolDeposit : Nat                 -- Pool deposit (lovelace)
+  eMax : Nat                        -- Max epoch for pool retirement
+  nOpt : Nat                        -- Desired number of pools
+  decentralisationParam : Float     -- Decentralisation parameter (0.0 = fully decentralised)
+  deriving Repr
+
+/-- Shelley genesis essential parameters -/
+structure ShelleyGenesis where
+  epochLength : Nat                 -- Slots per epoch
+  slotLength : Nat                  -- Slot duration in seconds (typically 1)
+  activeSlotsCoeff : Float          -- Active slots coefficient (typically 0.05)
+  securityParam : Nat               -- k: security parameter
+  maxLovelaceSupply : Nat           -- Maximum ADA supply in lovelace
+  networkMagic : Nat                -- Network identifier
+  networkId : String                -- "Mainnet" or "Testnet"
+  protocolParams : Option ShelleyProtocolParams
+  deriving Repr
+
+/-- Parse Shelley protocol parameters from JSON -/
+def parseShelleyProtocolParams (j : Json) : Option ShelleyProtocolParams := do
+  let minFeeA ← (j.getObjValAs? Nat "minFeeA").toOption
+  let minFeeB ← (j.getObjValAs? Nat "minFeeB").toOption
+  let maxBlockBodySize ← (j.getObjValAs? Nat "maxBlockBodySize").toOption
+  let maxBlockHeaderSize ← (j.getObjValAs? Nat "maxBlockHeaderSize").toOption
+  let maxTxSize ← (j.getObjValAs? Nat "maxTxSize").toOption
+  let keyDeposit ← (j.getObjValAs? Nat "keyDeposit").toOption
+  let poolDeposit ← (j.getObjValAs? Nat "poolDeposit").toOption
+  let eMax ← (j.getObjValAs? Nat "eMax").toOption
+  let nOpt ← (j.getObjValAs? Nat "nOpt").toOption
+  some {
+    minFeeA, minFeeB, maxBlockBodySize, maxBlockHeaderSize,
+    maxTxSize, keyDeposit, poolDeposit, eMax, nOpt,
+    decentralisationParam := 0.0
+  }
+
+/-- Parse Shelley genesis from JSON -/
+def parseShelleyGenesis (j : Json) : Option ShelleyGenesis := do
+  let epochLength ← (j.getObjValAs? Nat "epochLength").toOption
+  let slotLength ← (j.getObjValAs? Nat "slotLength").toOption
+  let securityParam ← (j.getObjValAs? Nat "securityParam").toOption
+  let maxLovelaceSupply ← (j.getObjValAs? Nat "maxLovelaceSupply").toOption
+  let networkMagic ← (j.getObjValAs? Nat "networkMagic").toOption
+  let networkId ← (j.getObjValAs? String "networkId").toOption
+
+  -- activeSlotsCoeff is a fraction, parse as float
+  let activeSlotsCoeff : Float := 0.05  -- Default, TODO: parse from JSON
+
+  let protocolParams := match j.getObjVal? "protocolParams" with
+    | .ok pp => parseShelleyProtocolParams pp
+    | .error _ => none
+
+  some {
+    epochLength, slotLength, activeSlotsCoeff, securityParam,
+    maxLovelaceSupply, networkMagic, networkId, protocolParams
+  }
+
+-- ====================
+-- = Alonzo Genesis   =
+-- ====================
+
+/-- Alonzo execution unit limits -/
+structure ExUnitLimits where
+  mem : Nat                         -- Memory units
+  steps : Nat                       -- CPU steps
+  deriving Repr
+
+/-- Alonzo genesis essential parameters -/
+structure AlonzoGenesis where
+  maxTxExUnits : ExUnitLimits       -- Per-transaction execution limits
+  maxBlockExUnits : ExUnitLimits    -- Per-block execution limits
+  maxValSize : Nat                  -- Maximum value size in bytes
+  collateralPercentage : Nat        -- Collateral percentage (e.g., 150)
+  maxCollateralInputs : Nat         -- Max collateral inputs
+  deriving Repr
+
+/-- Parse ExUnitLimits from JSON -/
+def parseExUnitLimits (j : Json) : Option ExUnitLimits := do
+  let mem ← (j.getObjValAs? Nat "exUnitsMem").toOption
+  let steps ← (j.getObjValAs? Nat "exUnitsSteps").toOption
+  some { mem, steps }
+
+/-- Parse Alonzo genesis from JSON -/
+def parseAlonzoGenesis (j : Json) : Option AlonzoGenesis := do
+  let maxTxExUnits ← match j.getObjVal? "maxTxExUnits" with
+    | .ok v => parseExUnitLimits v
+    | .error _ => none
+  let maxBlockExUnits ← match j.getObjVal? "maxBlockExUnits" with
+    | .ok v => parseExUnitLimits v
+    | .error _ => none
+  let maxValSize ← (j.getObjValAs? Nat "maxValueSize").toOption
+  let collateralPercentage ← (j.getObjValAs? Nat "collateralPercentage").toOption
+  let maxCollateralInputs ← (j.getObjValAs? Nat "maxCollateralInputs").toOption
+  some {
+    maxTxExUnits, maxBlockExUnits, maxValSize,
+    collateralPercentage, maxCollateralInputs
+  }
+
+-- ====================
+-- = Conway Genesis   =
+-- ====================
+
+/-- Conway governance voting thresholds -/
+structure VotingThresholds where
+  motionNoConfidence : Float
+  committeeNormal : Float
+  committeeNoConfidence : Float
+  updateToConstitution : Float
+  hardForkInitiation : Float
+  ppNetworkGroup : Float
+  ppEconomicGroup : Float
+  ppTechnicalGroup : Float
+  ppGovGroup : Float
+  treasuryWithdrawal : Float
+  deriving Repr
+
+/-- Conway genesis essential parameters -/
+structure ConwayGenesis where
+  committeeMinSize : Nat            -- Minimum committee size
+  committeeMaxTermLength : Nat      -- Maximum term length in epochs
+  dRepVotingThresholds : Option VotingThresholds
+  poolVotingThresholds : Option VotingThresholds
+  govActionLifetime : Nat           -- Governance action lifetime in epochs
+  govActionDeposit : Nat            -- Deposit for governance actions (lovelace)
+  dRepDeposit : Nat                 -- DRep registration deposit (lovelace)
+  dRepActivity : Nat                -- DRep activity period in epochs
+  deriving Repr
+
+/-- Parse Conway genesis from JSON -/
+def parseConwayGenesis (j : Json) : Option ConwayGenesis := do
+  let committeeMinSize := (j.getObjValAs? Nat "committeeMinSize").toOption |>.getD 7
+  let committeeMaxTermLength := (j.getObjValAs? Nat "committeeMaxTermLength").toOption |>.getD 146
+  let govActionLifetime := (j.getObjValAs? Nat "govActionLifetime").toOption |>.getD 6
+  let govActionDeposit := (j.getObjValAs? Nat "govActionDeposit").toOption |>.getD 100000000000
+  let dRepDeposit := (j.getObjValAs? Nat "dRepDeposit").toOption |>.getD 500000000
+  let dRepActivity := (j.getObjValAs? Nat "dRepActivity").toOption |>.getD 20
+  some {
+    committeeMinSize, committeeMaxTermLength,
+    dRepVotingThresholds := none,  -- TODO: parse nested thresholds
+    poolVotingThresholds := none,
+    govActionLifetime, govActionDeposit, dRepDeposit, dRepActivity
+  }
+
+-- ====================
+-- = File Loaders     =
+-- ====================
+
+/-- Load and parse a genesis file -/
+private def loadGenesisFile (path : System.FilePath) (parser : Json → Option α) : IO (Except String α) := do
+  try
+    let contents ← IO.FS.readFile path
+    match Json.parse contents with
+    | .error e => return .error s!"Failed to parse genesis JSON: {e}"
+    | .ok json =>
+        match parser json with
+        | none => return .error s!"Failed to extract genesis parameters from {path}"
+        | some genesis => return .ok genesis
+  catch e =>
+    return .error s!"Failed to read genesis file {path}: {e}"
+
+def loadByronGenesis (path : System.FilePath) : IO (Except String ByronGenesis) :=
+  loadGenesisFile path parseByronGenesis
+
+def loadShelleyGenesis (path : System.FilePath) : IO (Except String ShelleyGenesis) :=
+  loadGenesisFile path parseShelleyGenesis
+
+def loadAlonzoGenesis (path : System.FilePath) : IO (Except String AlonzoGenesis) :=
+  loadGenesisFile path parseAlonzoGenesis
+
+def loadConwayGenesis (path : System.FilePath) : IO (Except String ConwayGenesis) :=
+  loadGenesisFile path parseConwayGenesis
+
+end Cleanode.Config.Genesis

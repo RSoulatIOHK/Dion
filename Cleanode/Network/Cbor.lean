@@ -94,6 +94,26 @@ def encodeBool (b : Bool) : ByteArray :=
   if b then ByteArray.mk #[UInt8.ofNat (32 * 7 + 21)]  -- simple value 21 (true)
        else ByteArray.mk #[UInt8.ofNat (32 * 7 + 20)]  -- simple value 20 (false)
 
+/-- Encode CBOR break byte (0xFF) - terminates indefinite-length items -/
+def encodeBreak : ByteArray :=
+  ByteArray.mk #[0xff]
+
+/-- Encode indefinite-length array header (major type 4, additional 31) -/
+def encodeIndefiniteArrayHeader : ByteArray :=
+  ByteArray.mk #[0x9f]
+
+/-- Encode indefinite-length map header (major type 5, additional 31) -/
+def encodeIndefiniteMapHeader : ByteArray :=
+  ByteArray.mk #[0xbf]
+
+/-- Encode indefinite-length byte string header (major type 2, additional 31) -/
+def encodeIndefiniteBytesHeader : ByteArray :=
+  ByteArray.mk #[0x5f]
+
+/-- Encode indefinite-length text string header (major type 3, additional 31) -/
+def encodeIndefiniteTextHeader : ByteArray :=
+  ByteArray.mk #[0x7f]
+
 /-- Encode tagged value (major type 6)
 
 CBOR tags provide semantic annotations for data items. The tag is encoded
@@ -260,40 +280,66 @@ mutual
     let major := bs[0]! >>> 5
     let additional := bs[0]! &&& 0x1f
 
-    -- Determine argument size and decode the argument if needed
-    let (argSize, argValue) :=
-      if additional < 24 then (0, additional.toNat)
-      else if additional == 24 then
-        if bs.size < 2 then (0, 0) else (1, bs[1]!.toNat)
-      else if additional == 25 then
-        if bs.size < 3 then (0, 0) else (2, bs[1]!.toNat * 256 + bs[2]!.toNat)
-      else if additional == 26 then
-        if bs.size < 5 then (0, 0) else
-          (4, bs[1]!.toNat * 256^3 + bs[2]!.toNat * 256^2 + bs[3]!.toNat * 256 + bs[4]!.toNat)
-      else if additional == 27 then
-        if bs.size < 9 then (0, 0) else
-          (8, bs[1]!.toNat * 256^7 + bs[2]!.toNat * 256^6 + bs[3]!.toNat * 256^5 + bs[4]!.toNat * 256^4 +
-              bs[5]!.toNat * 256^3 + bs[6]!.toNat * 256^2 + bs[7]!.toNat * 256 + bs[8]!.toNat)
-      else (0, 0)
+    -- Handle indefinite-length items (additional == 31)
+    if additional == 31 then
+      let afterHead := bs.extract 1 bs.size
+      match major with
+      | 2 | 3 => skipIndefiniteChunks afterHead  -- indefinite bytes/text
+      | 4 => skipIndefiniteItems afterHead         -- indefinite array
+      | 5 => skipIndefiniteItems afterHead         -- indefinite map (pairs)
+      | 7 => some afterHead                        -- break byte (0xFF) handled by caller
+      | _ => none
+    else
+      -- Determine argument size and decode the argument if needed
+      let (argSize, argValue) :=
+        if additional < 24 then (0, additional.toNat)
+        else if additional == 24 then
+          if bs.size < 2 then (0, 0) else (1, bs[1]!.toNat)
+        else if additional == 25 then
+          if bs.size < 3 then (0, 0) else (2, bs[1]!.toNat * 256 + bs[2]!.toNat)
+        else if additional == 26 then
+          if bs.size < 5 then (0, 0) else
+            (4, bs[1]!.toNat * 256^3 + bs[2]!.toNat * 256^2 + bs[3]!.toNat * 256 + bs[4]!.toNat)
+        else if additional == 27 then
+          if bs.size < 9 then (0, 0) else
+            (8, bs[1]!.toNat * 256^7 + bs[2]!.toNat * 256^6 + bs[3]!.toNat * 256^5 + bs[4]!.toNat * 256^4 +
+                bs[5]!.toNat * 256^3 + bs[6]!.toNat * 256^2 + bs[7]!.toNat * 256 + bs[8]!.toNat)
+        else (0, 0)
 
-    let afterHead := bs.extract (1 + argSize) bs.size
+      let afterHead := bs.extract (1 + argSize) bs.size
 
-    match major with
-    | 0 | 1 | 7 => some afterHead  -- uint, nint, simple
-    | 2 | 3 => do  -- bytes, text - skip length bytes
-        if afterHead.size < argValue then none
-        else some (afterHead.extract argValue afterHead.size)
-    | 4 | 5 => do  -- array, map - skip items
-        let itemCount := if major == 5 then argValue * 2 else argValue
-        skipCborValues itemCount afterHead
-    | 6 => skipCborValue afterHead  -- tag - skip the tagged value
-    | _ => none
+      match major with
+      | 0 | 1 | 7 => some afterHead  -- uint, nint, simple
+      | 2 | 3 => do  -- bytes, text - skip length bytes
+          if afterHead.size < argValue then none
+          else some (afterHead.extract argValue afterHead.size)
+      | 4 | 5 => do  -- array, map - skip items
+          let itemCount := if major == 5 then argValue * 2 else argValue
+          skipCborValues itemCount afterHead
+      | 6 => skipCborValue afterHead  -- tag - skip the tagged value
+      | _ => none
 
   /-- Helper to skip multiple CBOR values -/
   partial def skipCborValues (n : Nat) (bs : ByteArray) : Option ByteArray :=
     if n == 0 then some bs
     else match skipCborValue bs with
       | some next => skipCborValues (n - 1) next
+      | none => none
+
+  /-- Skip indefinite-length chunks (byte strings or text strings) until break -/
+  partial def skipIndefiniteChunks (bs : ByteArray) : Option ByteArray :=
+    if bs.size == 0 then none
+    else if bs[0]! == 0xff then some (bs.extract 1 bs.size)  -- break byte
+    else match skipCborValue bs with
+      | some next => skipIndefiniteChunks next
+      | none => none
+
+  /-- Skip indefinite-length items (array elements or map key-value pairs) until break -/
+  partial def skipIndefiniteItems (bs : ByteArray) : Option ByteArray :=
+    if bs.size == 0 then none
+    else if bs[0]! == 0xff then some (bs.extract 1 bs.size)  -- break byte
+    else match skipCborValue bs with
+      | some next => skipIndefiniteItems next
       | none => none
 end
 

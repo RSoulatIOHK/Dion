@@ -1,18 +1,46 @@
 /*
  * TCP Socket FFI for Cleanode
  *
- * Provides POSIX socket functionality to Lean 4 via FFI
+ * Provides socket functionality to Lean 4 via FFI
+ * Supports both POSIX (Linux/macOS) and WinSock2 (Windows)
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netdb.h>
 #include <errno.h>
+
+#ifdef _WIN32
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #pragma comment(lib, "ws2_32.lib")
+  typedef int ssize_t;
+  #define CLOSESOCKET closesocket
+  static int wsa_initialized = 0;
+  static void ensure_wsa_init(void) {
+      if (!wsa_initialized) {
+          WSADATA wsaData;
+          WSAStartup(MAKEWORD(2, 2), &wsaData);
+          wsa_initialized = 1;
+      }
+  }
+  static const char* sock_strerror(void) {
+      static char buf[128];
+      int err = WSAGetLastError();
+      snprintf(buf, sizeof(buf), "WinSock error %d", err);
+      return buf;
+  }
+#else
+  #include <unistd.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <netdb.h>
+  #define CLOSESOCKET close
+  static void ensure_wsa_init(void) {}
+  static const char* sock_strerror(void) { return strerror(errno); }
+#endif
+
 #include <lean/lean.h>
 
 // Socket error constructors
@@ -79,6 +107,7 @@ static inline uint32_t socket_get_fd(lean_obj_arg sock) {
  * cleanode_socket_connect : String -> UInt16 -> IO (Except SocketError Socket)
  */
 lean_obj_res cleanode_socket_connect(lean_obj_arg host_obj, uint16_t port, lean_obj_arg world) {
+    ensure_wsa_init();
     const char* host = lean_string_cstr(host_obj);
 
     // Resolve hostname
@@ -112,7 +141,7 @@ lean_obj_res cleanode_socket_connect(lean_obj_arg host_obj, uint16_t port, lean_
             break; // Success
         }
 
-        close(sockfd);
+        CLOSESOCKET(sockfd);
         sockfd = -1;
     }
 
@@ -121,7 +150,7 @@ lean_obj_res cleanode_socket_connect(lean_obj_arg host_obj, uint16_t port, lean_
     if (sockfd == -1) {
         char err_msg[256];
         snprintf(err_msg, sizeof(err_msg), "Could not connect to %s:%u: %s",
-                 host, port, strerror(errno));
+                 host, port, sock_strerror());
         lean_object* err = mk_socket_error_connection_failed(lean_mk_string(err_msg));
         lean_object* except_err = mk_except_error(err);
         return lean_io_result_mk_ok(except_err);
@@ -151,7 +180,7 @@ lean_obj_res cleanode_socket_send(lean_obj_arg sock_obj, lean_obj_arg data_obj, 
 
     if (sent < 0) {
         char err_msg[256];
-        snprintf(err_msg, sizeof(err_msg), "send: %s", strerror(errno));
+        snprintf(err_msg, sizeof(err_msg), "send: %s", sock_strerror());
         lean_object* err = mk_socket_error_send_failed(lean_mk_string(err_msg));
         lean_object* except_err = mk_except_error(err);
         return lean_io_result_mk_ok(except_err);
@@ -180,7 +209,7 @@ lean_obj_res cleanode_socket_receive(lean_obj_arg sock_obj, uint32_t max_bytes, 
     if (received < 0) {
         free(buffer);
         char err_msg[256];
-        snprintf(err_msg, sizeof(err_msg), "recv: %s (errno=%d)", strerror(errno), errno);
+        snprintf(err_msg, sizeof(err_msg), "recv: %s", sock_strerror());
         lean_object* err = mk_socket_error_receive_failed(lean_mk_string(err_msg));
         return lean_io_result_mk_ok(mk_except_error(err));
     }
@@ -217,7 +246,7 @@ lean_obj_res cleanode_socket_receive_exact(lean_obj_arg sock_obj, uint32_t num_b
         if (received < 0) {
             free(buffer);
             char err_msg[256];
-            snprintf(err_msg, sizeof(err_msg), "recv: %s (errno=%d)", strerror(errno), errno);
+            snprintf(err_msg, sizeof(err_msg), "recv: %s", sock_strerror());
             lean_object* err = mk_socket_error_receive_failed(lean_mk_string(err_msg));
             return lean_io_result_mk_ok(mk_except_error(err));
         }
@@ -243,6 +272,6 @@ lean_obj_res cleanode_socket_receive_exact(lean_obj_arg sock_obj, uint32_t num_b
  */
 lean_obj_res cleanode_socket_close(lean_obj_arg sock_obj, lean_obj_arg world) {
     int sockfd = (int)socket_get_fd(sock_obj);
-    close(sockfd);
+    CLOSESOCKET(sockfd);
     return lean_io_result_mk_ok(lean_box(0));
 }

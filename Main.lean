@@ -348,8 +348,369 @@ def testChainSync (host : String) (port : UInt16) (proposal : HandshakeMessage) 
 
                                       socket_close sock
 
+/-- Display a full block with colored transaction details -/
+def displayBlock (header : Header) (tip : Tip) (blockPoint : Point) (blockBytes : ByteArray) : IO Unit := run do
+  match ← parseConwayBlockBodyIO blockBytes with
+  | none =>
+      println (("⚠ Failed to parse block".style |> yellow))
+  | some blockBody => do
+      -- Calculate statistics
+      let totalInputs := blockBody.transactions.foldl (fun acc tx => acc + tx.body.inputs.length) 0
+      let totalOutputs := blockBody.transactions.foldl (fun acc tx => acc + tx.body.outputs.length) 0
+      let totalFees := blockBody.transactions.foldl (fun acc tx => acc + tx.body.fee) 0
+      let totalFeesAda := totalFees / 1000000
+      let totalFeesLovelace := totalFees % 1000000
+
+      -- Compute block hash
+      let blockHash ← computeBlockHash header.headerBytes
+
+      -- Display block header with granular colors
+      println ("".style)
+      println ((("╔" ++ String.join (List.replicate 100 "═") ++ "╗").style |> blue |> bold))
+
+      -- Block number and slot line
+      concat [
+        ("║ ".style |> blue |> bold),
+        ("Block ".style |> white),
+        (s!"#{tip.blockNo}".style |> yellow |> bold),
+        ("   Slot: ".style |> white),
+        (s!"{blockPoint.slot}".style |> cyan |> bold)
+      ]
+
+      -- Hash line (full)
+      concat [
+        ("║ ".style |> blue |> bold),
+        ("Hash: ".style |> white),
+        (s!"{blockHash}".style |> cyan |> dim)
+      ]
+
+      println ((("╟" ++ String.join (List.replicate 100 "─") ++ "╢").style |> blue |> bold))
+
+      -- Size and era line
+      concat [
+        ("║ ".style |> blue |> bold),
+        ("Size: ".style |> white),
+        (s!"{blockBytes.size}".style |> magenta),
+        (" bytes   Era: ".style |> white),
+        (s!"{header.era}".style |> magenta)
+      ]
+
+      -- Transactions, inputs, outputs line
+      concat [
+        ("║ ".style |> blue |> bold),
+        ("Transactions: ".style |> white),
+        (s!"{blockBody.transactions.length}".style |> yellow),
+        ("   Inputs: ".style |> white),
+        (s!"{totalInputs}".style |> cyan),
+        ("   Outputs: ".style |> white),
+        (s!"{totalOutputs}".style |> green)
+      ]
+
+      -- Total fees line
+      let paddedTotalFees :=
+        let s := toString totalFeesLovelace
+        String.join (List.replicate (6 - s.length) "0") ++ s
+      concat [
+        ("║ ".style |> blue |> bold),
+        ("Total Fees: ".style |> white),
+        (s!"{totalFeesAda}.{paddedTotalFees}".style |> green |> bold),
+        (" ₳".style |> green |> bold)
+      ]
+
+      println ((("╚" ++ String.join (List.replicate 100 "═") ++ "╝").style |> blue |> bold))
+      println ("".style)
+
+      -- Display transactions
+      if blockBody.transactions.length > 0 then do
+        let mut txNum := 1
+        for tx in blockBody.transactions do
+          let feeAda := tx.body.fee / 1000000
+          let feeLovelace := tx.body.fee % 1000000
+
+          -- Compute transaction ID
+          let txId ← computeTxId tx.body.rawBytes
+
+          -- Calculate total input and output amounts
+          let _totalOut := tx.body.outputs.foldl (fun acc out => acc + out.amount) 0
+          let paddedFee :=
+            let s := toString feeLovelace
+            String.join (List.replicate (6 - s.length) "0") ++ s
+
+          -- Transaction box header with granular colors
+          println ("".style)
+          println ((("┌" ++ String.join (List.replicate 100 "─") ++ "┐").style |> blue))
+
+          -- TX header line (full hash)
+          concat [
+            ("│ ".style |> blue),
+            ("TX ".style |> white),
+            (s!"#{txNum}".style |> yellow |> bold),
+            (": ".style |> white),
+            (s!"{txId}".style |> magenta),
+            ("  Fee: ".style |> white),
+            (s!"{feeAda}.{paddedFee}".style |> green |> bold),
+            (" ₳".style |> green |> bold)
+          ]
+
+          println ((("├" ++ String.join (List.replicate 100 "─") ++ "┤").style |> blue))
+
+          -- UTXO Graph visualization
+          let maxRows := max tx.body.inputs.length tx.body.outputs.length
+          let minRows := min tx.body.inputs.length tx.body.outputs.length
+          let midRow := minRows / 2
+
+          for i in [:maxRows] do
+            -- Input part (left side) - fixed width 25 chars
+            let inputPart := if h : i < tx.body.inputs.length then
+              let input := tx.body.inputs.get ⟨i, h⟩
+              let txHash := bytesToHex input.txId
+              let inputStr := s!"{txHash.take 16}...#{input.outputIndex}"
+              -- Pad to 25 chars
+              inputStr ++ String.join (List.replicate (25 - inputStr.length) " ")
+            else
+              String.join (List.replicate 25 " ")
+
+            -- Middle connector - fixed width 22 chars
+            let connector := if i == midRow then
+              s!"│───[{txId.take 8}...]───>│"
+            else
+              "│                    │"
+
+            -- Output part (right side) - build styled text list
+            let outputStyled : List StyledText := if h : i < tx.body.outputs.length then
+              let output := tx.body.outputs.get ⟨i, h⟩
+              let addr := encodeAddress output.address false
+              let amt := output.amount / 1000000
+              let amtLov := output.amount % 1000000
+              let padLov := let s := toString amtLov
+                            String.join (List.replicate (6 - s.length) "0") ++ s
+
+              -- Build colored output: cyan address + green amount
+              let addrPart := (s!"{addr.take 20}...".style |> cyan)
+              let amtPart := (s!" {amt}.{padLov}₳".style |> green |> bold)
+              let assetPart := if output.nativeAssets.length > 0 then
+                [(s!" +{output.nativeAssets.length}a".style |> yellow)]
+              else
+                []
+              [addrPart, amtPart] ++ assetPart
+            else
+              []
+
+            -- Print with individual colors using Pigment's list-based approach
+            let parts : List StyledText :=
+              [("│ ".style |> blue),
+               (inputPart.style |> dim),
+               (connector.style |> magenta),
+               (" ".style)] ++ outputStyled
+            concat parts
+
+            -- Display native assets on separate lines
+            if h : i < tx.body.outputs.length then
+              let output := tx.body.outputs.get ⟨i, h⟩
+              for asset in output.nativeAssets do
+                let policyHex := bytesToHex asset.policyId
+
+                -- Decode asset name if printable
+                let assetNameDisplay := if asset.assetName.size > 0 then
+                  match String.fromUTF8? asset.assetName with
+                  | some name =>
+                      let isPrintable := name.all fun c => c.toNat >= 32 && c.toNat <= 126
+                      if isPrintable && name.length > 0 then
+                        s!":{name}"
+                      else
+                        let nameHex := bytesToHex asset.assetName
+                        s!":{nameHex.take 8}..."
+                  | none =>
+                      let nameHex := bytesToHex asset.assetName
+                      s!":{nameHex.take 8}..."
+                else
+                  ""
+
+                let assetDisplay := s!"  +{asset.amount} {policyHex.take 8}...{assetNameDisplay}"
+
+                -- Empty input and connector for asset lines
+                let emptyInput := String.join (List.replicate 25 " ")
+                let emptyConnector := "│                    │"
+                let assetParts : List StyledText :=
+                  [("│ ".style |> blue),
+                   (emptyInput.style |> dim),
+                   (emptyConnector.style |> magenta),
+                   (" ".style),
+                   (assetDisplay.style |> yellow)]
+                concat assetParts
+
+          -- Display redeemers if present
+          let redeemers := tx.witnesses.redeemers
+          if redeemers.length > 0 then
+            redeemers.forM fun redeemer => do
+              let tagStr := match redeemer.tag with
+                | .Spend => "Spend"
+                | .Mint => "Mint"
+                | .Cert => "Cert"
+                | .Reward => "Reward"
+              let redeemerDisplay := s!"  Redeemer: {tagStr} #{redeemer.index} (mem={redeemer.exUnits.mem}, steps={redeemer.exUnits.steps})"
+
+              -- Empty input and connector for redeemer lines
+              let emptyInput := String.join (List.replicate 17 " ")
+              let emptyConnector := "│                  │"
+              let redeemerParts : List StyledText :=
+                [("│ ".style |> blue),
+                 (emptyInput.style |> dim),
+                 (emptyConnector.style |> magenta),
+                 (" ".style),
+                 (redeemerDisplay.style |> cyan)]
+              concat redeemerParts
+
+          println ((("└" ++ String.join (List.replicate 100 "─") ++ "┘").style |> blue))
+          txNum := txNum + 1
+
+/-- Fetch and display a block from a ChainSync RollForward header -/
+def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip) : IO Bool := do
+  -- Extract the actual block point from the header (not the tip)
+  -- The headerBytes is tag24-wrapped: d8 18 <bytestring>
+  -- Block hash in Cardano = blake2b_256(content inside tag24 bytestring)
+  let rawHeaderBytes :=
+    if header.headerBytes.size >= 2 &&
+       header.headerBytes[0]! == 0xd8 && header.headerBytes[1]! == 0x18 then
+      match Cleanode.Network.Cbor.decodeBytes (header.headerBytes.extract 2 header.headerBytes.size) with
+      | some result => result.value
+      | none => header.headerBytes  -- fallback
+    else
+      header.headerBytes
+  let blockHash ← blake2b_256 rawHeaderBytes
+  let blockSlot : UInt64 :=
+    if header.era == 0 then
+      match extractByronInfo header.headerBytes with
+      | some info => UInt64.ofNat info.slot
+      | none => tip.point.slot  -- fallback
+    else
+      match extractShelleyInfo header.headerBytes with
+      | some info => UInt64.ofNat info.slot
+      | none => tip.point.slot  -- fallback
+  let blockPoint : Point := { slot := blockSlot, hash := blockHash }
+  match ← fetchBlock sock blockPoint with
+  | .error e => do
+      IO.println s!"✗ Failed to fetch block: {e}"
+      return false
+  | .ok none => do
+      IO.println "✗ No block received"
+      return false
+  | .ok (some blockBytes) => do
+      displayBlock header tip blockPoint blockBytes
+      return true
+
+/-- Encode a KeepAlive response (MsgKeepAliveResponse) -/
+def encodeKeepAliveResponse (cookie : UInt16) : ByteArray :=
+  -- KeepAlive response: CBOR array [1, cookie] where 1 = MsgKeepAliveResponse
+  -- [1, cookie] in CBOR: 82 01 19 XXXX (for 2-byte cookie)
+  let cookieHi := UInt8.ofNat ((cookie >>> 8).toNat % 256)
+  let cookieLo := UInt8.ofNat (cookie.toNat % 256)
+  ⟨#[0x82, 0x01, 0x19, cookieHi, cookieLo]⟩
+
+/-- Send a KeepAlive response back over the multiplexer -/
+def sendKeepAliveResponse (sock : Socket) (cookie : UInt16) : IO Unit := do
+  let payload := encodeKeepAliveResponse cookie
+  let frame ← createFrame .KeepAlive .Initiator payload
+  let _ ← socket_send sock (encodeMuxFrame frame)
+  pure ()
+
+/-- Extract cookie from KeepAlive payload: CBOR [0, cookie] -/
+def extractKeepAliveCookie (payload : ByteArray) : Option UInt16 :=
+  -- MsgKeepAlive = [0, cookie] in CBOR
+  -- 82 00 19 HH LL  (cookie as 2-byte uint)
+  -- 82 00 0X        (cookie as small uint)
+  if payload.size >= 3 && payload[0]! == 0x82 && payload[1]! == 0x00 then
+    if payload.size >= 5 && payload[2]! == 0x19 then
+      some (UInt16.ofNat (payload[3]!.toNat * 256 + payload[4]!.toNat))
+    else
+      some (UInt16.ofNat payload[2]!.toNat)
+  else
+    none
+
+/-- Receive a ChainSync MUX frame, handling KeepAlive transparently.
+    Uses exact reads: 8 bytes for header, then payloadLength bytes for payload.
+    Loops until a ChainSync frame arrives or an error occurs. -/
+partial def receiveChainSyncFrame (sock : Socket) : IO (Except String MuxFrame) := do
+  -- Read MUX header (exactly 8 bytes)
+  match ← socket_receive_exact sock 8 with
+  | .error e => return .error s!"Failed to receive MUX header: {e}"
+  | .ok headerBytes => do
+      match decodeMuxHeader headerBytes with
+      | none => return .error "Failed to decode MUX header"
+      | some header => do
+          -- Read payload (exactly payloadLength bytes)
+          match ← socket_receive_exact sock header.payloadLength.toNat.toUInt32 with
+          | .error e => return .error s!"Failed to receive payload: {e}"
+          | .ok payload => do
+              if header.protocolId == .KeepAlive then
+                -- Respond to KeepAlive and keep waiting
+                match extractKeepAliveCookie payload with
+                | some cookie => do
+                    sendKeepAliveResponse sock cookie
+                | none => pure ()
+                receiveChainSyncFrame sock  -- keep waiting
+              else
+                return .ok { header := header, payload := payload }
+
+/-- Continuous sync loop: requests blocks via ChainSync + BlockFetch -/
+partial def syncLoop (sock : Socket) (blockCount : Nat) : IO Unit := do
+  -- Request next block header
+  match ← sendChainSync sock requestNext with
+  | .error e =>
+      IO.println s!"✗ Failed to send RequestNext: {e}"
+  | .ok _ => do
+      match ← receiveChainSyncFrame sock with
+      | .error e =>
+          IO.println s!"✗ {e}"
+      | .ok frame => do
+          match decodeChainSyncMessage frame.payload with
+          | none => do
+              IO.println "✗ Failed to decode ChainSync message"
+          | some (.MsgRollForward header tip) => do
+              let ok ← fetchAndDisplayBlock sock header tip
+              if ok then
+                syncLoop sock (blockCount + 1)
+          | some (.MsgRollBackward rollbackPoint _) => do
+              run do
+                concat [
+                  ("↩ Rollback to slot ".style |> yellow),
+                  (s!"{rollbackPoint.slot}".style |> yellow |> bold)
+                ]
+              syncLoop sock blockCount
+          | some (.MsgAwaitReply) => do
+              run do
+                concat [
+                  ("At tip -- waiting for new block...".style |> cyan |> dim)
+                ]
+              -- Server will push MsgRollForward when a new block arrives
+              -- Keep receiving, handling KeepAlive frames transparently
+              match ← receiveChainSyncFrame sock with
+              | .error e =>
+                  IO.println s!"✗ {e}"
+              | .ok frame => do
+                  match decodeChainSyncMessage frame.payload with
+                  | some (.MsgRollForward header tip) => do
+                      let ok ← fetchAndDisplayBlock sock header tip
+                      if ok then
+                        syncLoop sock (blockCount + 1)
+                  | some (.MsgRollBackward rollbackPoint _) => do
+                      run do
+                        concat [
+                          ("↩ Rollback to slot ".style |> yellow),
+                          (s!"{rollbackPoint.slot}".style |> yellow |> bold)
+                        ]
+                      syncLoop sock blockCount
+                  | some other => do
+                      IO.println s!"Unexpected message: {repr other}"
+                      syncLoop sock blockCount
+                  | none =>
+                      IO.println "✗ Failed to decode ChainSync message"
+          | some other => do
+              IO.println s!"Unexpected message: {repr other}"
+              syncLoop sock blockCount
+
 def testBlockFetch (host : String) (port : UInt16) (proposal : HandshakeMessage) (networkName : String) : IO Unit := run do
-  println ((s!"Connecting to {host}:{port}...".style))
+  -- println ((s!"Connecting to {host}:{port}...".style))
 
   match ← socket_connect host port with
   | .error e =>
@@ -386,23 +747,19 @@ def testBlockFetch (host : String) (port : UInt16) (proposal : HandshakeMessage)
                   | some msg => do
                       println (s!"✓ Handshake complete: {repr msg}".style |> green |> bold)
 
-                      -- Step 2: Use ChainSync to find a recent block
+                      -- Step 2: Query the chain tip, then intersect there
                       println ("".style)
-                      println (("=== ChainSync - Getting Block Header ===".style |> cyan |> bold))
-                      let recentCheckpoint := createCheckpoint 178067736 "7a3eed1504c7d04890a2806697e9d82009e9b140b7a51f0ab24e66bfec43d117"
-                      let intersectMsg := findIntersectFromCheckpoint recentCheckpoint
+                      println (("=== ChainSync - Finding Chain Tip ===".style |> cyan |> bold))
 
-                      match ← sendChainSync sock intersectMsg with
+                      -- First: send FindIntersect with empty list to discover the tip
+                      match ← sendChainSync sock findIntersectTip with
                       | .error e => do
                           println ((s!"✗ Failed to send FindIntersect: {e}".style |> red |> bold))
                           socket_close sock
                       | .ok _ => do
-                          println (("✓ FindIntersect sent".style |> green))
-
-                          -- Receive intersection response
                           match ← socket_receive sock 8192 with
                           | .error e => do
-                              IO.println s!"✗ Failed to receive intersection: {e}"
+                              IO.println s!"✗ Failed to receive tip query: {e}"
                               socket_close sock
                           | .ok rawData => do
                               match decodeMuxFrame rawData with
@@ -411,22 +768,18 @@ def testBlockFetch (host : String) (port : UInt16) (proposal : HandshakeMessage)
                                   socket_close sock
                               | some frame => do
                                   match decodeChainSyncMessage frame.payload with
-                                  | none => do
-                                      IO.println "✗ Failed to decode ChainSync message"
-                                      socket_close sock
-                                  | some (.MsgIntersectFound point tip) => do
-                                      println ((s!"✓ Intersection found at slot {point.slot}".style |> green |> bold))
+                                  | some (.MsgIntersectNotFound tip) => do
+                                      println ((s!"✓ Chain tip at slot {tip.point.slot}".style |> green |> bold))
 
-                                      -- Step 3: Request the next block header
-                                      IO.println "✓ Requesting next block header..."
-                                      match ← sendChainSync sock requestNext with
+                                      -- Second: intersect at the tip so we follow new blocks
+                                      match ← sendChainSync sock (findIntersectAt tip.point) with
                                       | .error e => do
-                                          IO.println s!"✗ Failed to send RequestNext: {e}"
+                                          println ((s!"✗ Failed to send FindIntersect at tip: {e}".style |> red |> bold))
                                           socket_close sock
                                       | .ok _ => do
-                                          match ← socket_receive sock 65535 with
+                                          match ← socket_receive sock 8192 with
                                           | .error e => do
-                                              IO.println s!"✗ Failed to receive block header: {e}"
+                                              IO.println s!"✗ Failed to receive intersection: {e}"
                                               socket_close sock
                                           | .ok rawData => do
                                               match decodeMuxFrame rawData with
@@ -435,315 +788,30 @@ def testBlockFetch (host : String) (port : UInt16) (proposal : HandshakeMessage)
                                                   socket_close sock
                                               | some frame => do
                                                   match decodeChainSyncMessage frame.payload with
-                                                  | some (.MsgRollBackward rollbackPoint _) => do
-                                                      IO.println s!"✓ Rollback to slot {rollbackPoint.slot}"
-                                                      IO.println "✓ Requesting next block after rollback..."
+                                                  | some (.MsgIntersectFound point _) => do
+                                                      println ((s!"✓ Intersected at tip slot {point.slot}".style |> green |> bold))
+                                                      println ("".style)
+                                                      println (("=== Following Chain Tip (Ctrl+C to stop) ===".style |> cyan |> bold))
 
-                                                      -- Request next block again
-                                                      match ← sendChainSync sock requestNext with
-                                                      | .error e => do
-                                                          IO.println s!"✗ Failed to send RequestNext: {e}"
-                                                          socket_close sock
-                                                      | .ok _ => do
-                                                          match ← socket_receive sock 65535 with
-                                                          | .error e => do
-                                                              IO.println s!"✗ Failed to receive: {e}"
-                                                              socket_close sock
-                                                          | .ok rawData2 => do
-                                                              match decodeMuxFrame rawData2 with
-                                                              | none => do
-                                                                  IO.println "✗ Failed to decode MUX frame"
-                                                                  socket_close sock
-                                                              | some frame2 => do
-                                                                  match decodeChainSyncMessage frame2.payload with
-                                                                  | some (.MsgRollForward header tip) => do
-                                                                      IO.println s!"✓ Got block header!"
-                                                                      IO.println s!"  Era: {header.era}, Slot: {tip.point.slot}, Block: {tip.blockNo}"
-
-                                                                      -- Step 4: Use BlockFetch to get full block body
-                                                                      IO.println ""
-                                                                      println (("=== BlockFetch - Requesting Full Block ===".style |> cyan |> bold))
-
-                                                                      -- Fetch the block
-                                                                      let blockPoint := tip.point
-                                                                      IO.println s!"✓ BlockFetch request sent for slot {blockPoint.slot}"
-
-                                                                      match ← fetchBlock sock blockPoint with
-                                                                      | .error e => do
-                                                                          IO.println s!"✗ Failed to fetch block: {e}"
-                                                                          socket_close sock
-                                                                      | .ok none => do
-                                                                          IO.println "✗ No block received"
-                                                                          socket_close sock
-                                                                      | .ok (some blockBytes) => do
-                                                                          -- Parse block body
-                                                                          match ← parseConwayBlockBodyIO blockBytes with
-                                                                          | none =>
-                                                                              IO.println "⚠ Failed to parse block"
-                                                                          | some blockBody => do
-                                                                              -- Calculate statistics
-                                                                              let totalInputs := blockBody.transactions.foldl (fun acc tx => acc + tx.body.inputs.length) 0
-                                                                              let totalOutputs := blockBody.transactions.foldl (fun acc tx => acc + tx.body.outputs.length) 0
-                                                                              let totalFees := blockBody.transactions.foldl (fun acc tx => acc + tx.body.fee) 0
-                                                                              let totalFeesAda := totalFees / 1000000
-                                                                              let totalFeesLovelace := totalFees % 1000000
-
-                                                                              -- Compute block hash
-                                                                              let blockHash ← computeBlockHash header.headerBytes
-
-                                                                              -- Display block header with granular colors
-                                                                              println ("".style)
-                                                                              println (("╔════════════════════════════════════════════════════════════╗".style |> blue |> bold))
-
-                                                                              -- Block number and slot line
-                                                                              concat [
-                                                                                ("║ ".style |> blue |> bold),
-                                                                                ("Block ".style |> white),
-                                                                                (s!"#{tip.blockNo}".style |> yellow |> bold),
-                                                                                ("   Slot: ".style |> white),
-                                                                                (s!"{blockPoint.slot}".style |> cyan |> bold)
-                                                                              ]
-
-                                                                              -- Hash line
-                                                                              concat [
-                                                                                ("║ ".style |> blue |> bold),
-                                                                                ("Hash: ".style |> white),
-                                                                                (s!"{blockHash.take 16}...{blockHash.drop (blockHash.length - 16)}".style |> cyan |> dim)
-                                                                              ]
-
-                                                                              println (("╟────────────────────────────────────────────────────────────╢".style |> blue |> bold))
-
-                                                                              -- Size and era line
-                                                                              concat [
-                                                                                ("║ ".style |> blue |> bold),
-                                                                                ("Size: ".style |> white),
-                                                                                (s!"{blockBytes.size}".style |> magenta),
-                                                                                (" bytes   Era: ".style |> white),
-                                                                                (s!"{header.era}".style |> magenta)
-                                                                              ]
-
-                                                                              -- Transactions, inputs, outputs line
-                                                                              concat [
-                                                                                ("║ ".style |> blue |> bold),
-                                                                                ("Transactions: ".style |> white),
-                                                                                (s!"{blockBody.transactions.length}".style |> yellow),
-                                                                                ("   Inputs: ".style |> white),
-                                                                                (s!"{totalInputs}".style |> cyan),
-                                                                                ("   Outputs: ".style |> white),
-                                                                                (s!"{totalOutputs}".style |> green)
-                                                                              ]
-
-                                                                              -- Total fees line
-                                                                              let paddedTotalFees :=
-                                                                                let s := toString totalFeesLovelace
-                                                                                String.join (List.replicate (6 - s.length) "0") ++ s
-                                                                              concat [
-                                                                                ("║ ".style |> blue |> bold),
-                                                                                ("Total Fees: ".style |> white),
-                                                                                (s!"{totalFeesAda}.{paddedTotalFees}".style |> green |> bold),
-                                                                                (" ₳".style |> green |> bold)
-                                                                              ]
-
-                                                                              println (("╚════════════════════════════════════════════════════════════╝".style |> blue |> bold))
-                                                                              println ("".style)
-
-                                                                              -- Display transactions
-                                                                              if blockBody.transactions.length > 0 then do
-                                                                                let mut txNum := 1
-                                                                                for tx in blockBody.transactions do
-                                                                                  let feeAda := tx.body.fee / 1000000
-                                                                                  let feeLovelace := tx.body.fee % 1000000
-
-                                                                                  -- Compute transaction ID
-                                                                                  let txId ← computeTxId tx.body.rawBytes
-
-                                                                                  -- Calculate total input and output amounts
-                                                                                  let totalOut := tx.body.outputs.foldl (fun acc out => acc + out.amount) 0
-                                                                                  let totalOutAda := totalOut / 1000000
-                                                                                  let totalOutLov := totalOut % 1000000
-                                                                                  let paddedFee :=
-                                                                                    let s := toString feeLovelace
-                                                                                    String.join (List.replicate (6 - s.length) "0") ++ s
-
-                                                                                  -- Transaction box header with granular colors
-                                                                                  println ("".style)
-                                                                                  println ((("┌" ++ String.join (List.replicate 69 "─") ++ "┐").style |> blue))
-
-                                                                                  -- TX header line
-                                                                                  concat [
-                                                                                    ("│ ".style |> blue),
-                                                                                    ("TX ".style |> white),
-                                                                                    (s!"#{txNum}".style |> yellow |> bold),
-                                                                                    (": ".style |> white),
-                                                                                    (s!"{txId.take 16}...{txId.drop (txId.length - 16)}".style |> magenta),
-                                                                                    ("     Fee: ".style |> white),
-                                                                                    (s!"{feeAda}.{paddedFee}".style |> green |> bold),
-                                                                                    (" ₳".style |> green |> bold)
-                                                                                  ]
-
-                                                                                  println ((("├" ++ String.join (List.replicate 69 "─") ++ "┤").style |> blue))
-
-                                                                                  -- UTXO Graph visualization
-                                                                                  let maxRows := max tx.body.inputs.length tx.body.outputs.length
-                                                                                  let minRows := min tx.body.inputs.length tx.body.outputs.length
-                                                                                  let midRow := minRows / 2
-
-                                                                                  for i in [:maxRows] do
-                                                                                    -- Input part (left side) - fixed width 17 chars
-                                                                                    let inputPart := if h : i < tx.body.inputs.length then
-                                                                                      let input := tx.body.inputs.get ⟨i, h⟩
-                                                                                      let txHash := bytesToHex input.txId
-                                                                                      let inputStr := s!"{txHash.take 8}...#{input.outputIndex}"
-                                                                                      -- Pad to 17 chars
-                                                                                      inputStr ++ String.join (List.replicate (17 - inputStr.length) " ")
-                                                                                    else
-                                                                                      String.join (List.replicate 17 " ")
-
-                                                                                    -- Middle connector - fixed width 22 chars
-                                                                                    let connector := if i == midRow then
-                                                                                      s!"│───[{txId.take 6}...]───>│"
-                                                                                    else
-                                                                                      "│                  │"
-
-                                                                                    -- Output part (right side) - build styled text list
-                                                                                    let outputStyled : List StyledText := if h : i < tx.body.outputs.length then
-                                                                                      let output := tx.body.outputs.get ⟨i, h⟩
-                                                                                      let addr := encodeAddress output.address false
-                                                                                      let amt := output.amount / 1000000
-                                                                                      let amtLov := output.amount % 1000000
-                                                                                      let padLov := let s := toString amtLov
-                                                                                                    String.join (List.replicate (6 - s.length) "0") ++ s
-
-                                                                                      -- Build colored output: cyan address + green amount
-                                                                                      let addrPart := (s!"{addr.take 12}...".style |> cyan)
-                                                                                      let amtPart := (s!" {amt}.{padLov}₳".style |> green |> bold)
-                                                                                      let assetPart := if output.nativeAssets.length > 0 then
-                                                                                        [(s!" +{output.nativeAssets.length}a".style |> yellow)]
-                                                                                      else
-                                                                                        []
-                                                                                      [addrPart, amtPart] ++ assetPart
-                                                                                    else
-                                                                                      []
-
-                                                                                    -- Print with individual colors using Pigment's list-based approach
-                                                                                    let parts : List StyledText :=
-                                                                                      [("│ ".style |> blue),
-                                                                                       (inputPart.style |> dim),
-                                                                                       (connector.style |> magenta),
-                                                                                       (" ".style)] ++ outputStyled
-                                                                                    concat parts
-
-                                                                                    -- Display native assets on separate lines
-                                                                                    if h : i < tx.body.outputs.length then
-                                                                                      let output := tx.body.outputs.get ⟨i, h⟩
-                                                                                      for asset in output.nativeAssets do
-                                                                                        let policyHex := bytesToHex asset.policyId
-
-                                                                                        -- Decode asset name if printable
-                                                                                        let assetNameDisplay := if asset.assetName.size > 0 then
-                                                                                          match String.fromUTF8? asset.assetName with
-                                                                                          | some name =>
-                                                                                              let isPrintable := name.all fun c => c.toNat >= 32 && c.toNat <= 126
-                                                                                              if isPrintable && name.length > 0 then
-                                                                                                s!":{name}"
-                                                                                              else
-                                                                                                let nameHex := bytesToHex asset.assetName
-                                                                                                s!":{nameHex.take 8}..."
-                                                                                          | none =>
-                                                                                              let nameHex := bytesToHex asset.assetName
-                                                                                              s!":{nameHex.take 8}..."
-                                                                                        else
-                                                                                          ""
-
-                                                                                        let assetDisplay := s!"  +{asset.amount} {policyHex.take 8}...{assetNameDisplay}"
-
-                                                                                        -- Empty input and connector for asset lines
-                                                                                        let emptyInput := String.join (List.replicate 17 " ")
-                                                                                        let emptyConnector := "│                  │"
-                                                                                        let assetParts : List StyledText :=
-                                                                                          [("│ ".style |> blue),
-                                                                                           (emptyInput.style |> dim),
-                                                                                           (emptyConnector.style |> magenta),
-                                                                                           (" ".style),
-                                                                                           (assetDisplay.style |> yellow)]
-                                                                                        concat assetParts
-
-                                                                                  -- Display redeemers if present
-                                                                                  let redeemers := tx.witnesses.redeemers
-                                                                                  if redeemers.length > 0 then
-                                                                                    redeemers.forM fun redeemer => do
-                                                                                      let tagStr := match redeemer.tag with
-                                                                                        | .Spend => "Spend"
-                                                                                        | .Mint => "Mint"
-                                                                                        | .Cert => "Cert"
-                                                                                        | .Reward => "Reward"
-                                                                                      let redeemerDisplay := s!"  Redeemer: {tagStr} #{redeemer.index} (mem={redeemer.exUnits.mem}, steps={redeemer.exUnits.steps})"
-
-                                                                                      -- Empty input and connector for redeemer lines
-                                                                                      let emptyInput := String.join (List.replicate 17 " ")
-                                                                                      let emptyConnector := "│                  │"
-                                                                                      let redeemerParts : List StyledText :=
-                                                                                        [("│ ".style |> blue),
-                                                                                         (emptyInput.style |> dim),
-                                                                                         (emptyConnector.style |> magenta),
-                                                                                         (" ".style),
-                                                                                         (redeemerDisplay.style |> cyan)]
-                                                                                      concat redeemerParts
-
-                                                                                  println ((("└" ++ String.join (List.replicate 69 "─") ++ "┘").style |> blue))
-                                                                                  txNum := txNum + 1
-
-                                                                          socket_close sock
-                                                                  | other => do
-                                                                      IO.println s!"✗ Unexpected message: {repr other}"
-                                                                      socket_close sock
-                                                  | some (.MsgRollForward header tip) => do
-                                                      IO.println s!"✓ Got block header!"
-                                                      IO.println s!"  Era: {header.era}, Slot: {tip.point.slot}, Block: {tip.blockNo}"
-
-                                                      -- Step 4: Use BlockFetch to get full block body
-                                                      IO.println ""
-                                                      IO.println "=== BlockFetch - Requesting Full Block ==="
-
-                                                      -- Fetch the block
-                                                      let blockPoint := tip.point
-                                                      IO.println s!"✓ BlockFetch request sent for slot {blockPoint.slot}"
-
-                                                      match ← fetchBlock sock blockPoint with
-                                                      | .error e => do
-                                                          IO.println s!"✗ Failed to fetch block: {e}"
-                                                          socket_close sock
-                                                      | .ok none => do
-                                                          IO.println "✗ No block received"
-                                                          socket_close sock
-                                                      | .ok (some blockBytes) => do
-                                                          IO.println s!"✓ Received full block! Size: {blockBytes.size} bytes"
-                                                          IO.println s!"  Header size: {header.headerBytes.size} bytes"
-                                                          IO.println s!"  Body size: {blockBytes.size} bytes"
-
-                                                          -- Parse block body to extract transactions
-                                                          IO.println ""
-                                                          IO.println "=== Parsing Block Transactions ==="
-                                                          match ← parseConwayBlockBodyIO blockBytes with
-                                                          | none =>
-                                                              IO.println "⚠ Failed to parse block body"
-                                                          | some blockBody => do
-                                                              IO.println s!"✓ Block contains {blockBody.transactions.length} transactions"
-
-                                                              if blockBody.transactions.length > 0 then
-                                                                IO.println s!"  (Transaction details: inputs, outputs, fees)"
-
-                                                          socket_close sock
-                                                  | other => do
-                                                      IO.println s!"✗ Unexpected ChainSync message: {repr other}"
+                                                      -- Enter continuous sync loop — will get MsgAwaitReply immediately
+                                                      syncLoop sock 0
                                                       socket_close sock
-                                  | other => do
-                                      IO.println s!"✗ Unexpected intersection response: {repr other}"
+                                                  | some other => do
+                                                      IO.println s!"✗ Unexpected response: {repr other}"
+                                                      socket_close sock
+                                                  | none => do
+                                                      IO.println "✗ Failed to decode ChainSync message"
+                                                      socket_close sock
+                                  | some other => do
+                                      IO.println s!"✗ Expected MsgIntersectNotFound, got: {repr other}"
+                                      socket_close sock
+                                  | none => do
+                                      IO.println "✗ Failed to decode tip query response"
                                       socket_close sock
 
 def main : IO Unit := run do
-  println (("Cleanode: Formally Verified Cardano Node".style |> cyan |> bold))
-  println (("===========================================".style |> cyan))
+  println (("Dion: a Cardano LEAN 4 node".style |> cyan |> bold))
+  println (("=============================".style |> cyan))
   println ("".style)
   println (("Testing Ouroboros BlockFetch Protocol...".style |> blue))
   println ("".style)

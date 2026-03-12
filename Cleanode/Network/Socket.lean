@@ -50,9 +50,13 @@ opaque socket_connect (host : @& String) (port : @& UInt16) : IO (Except SocketE
 @[extern "cleanode_socket_send"]
 opaque socket_send (sock : @& Socket) (data : @& ByteArray) : IO (Except SocketError Unit)
 
-/-- Receive bytes from socket (up to maxBytes) -/
+/-- Receive up to maxBytes from socket (single recv, may return fewer) -/
 @[extern "cleanode_socket_receive"]
 opaque socket_receive (sock : @& Socket) (maxBytes : @& UInt32) : IO (Except SocketError ByteArray)
+
+/-- Receive exactly numBytes from socket (loops until all received) -/
+@[extern "cleanode_socket_receive_exact"]
+opaque socket_receive_exact (sock : @& Socket) (numBytes : @& UInt32) : IO (Except SocketError ByteArray)
 
 /-- Close socket -/
 @[extern "cleanode_socket_close"]

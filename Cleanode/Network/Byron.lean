@@ -51,7 +51,7 @@ instance : Repr ByronHeaderInfo where
     | some h => s!"ByronHeaderInfo(slot={info.slot}, blockNo={info.blockNo}, prevHash={h.prevBlockHash.size}B, bodyProof={h.bodyProof.size}B)"
 
 /-- Parse the actual Byron block header CBOR structure -/
-partial def parseByronBlockHeader (bs : ByteArray) : Option ByronBlockHeader := do
+def parseByronBlockHeader (bs : ByteArray) : Option ByronBlockHeader := do
   -- Byron header is a CBOR array: [protocolMagic, prevHash, bodyProof, consensusData, extraData]
   let r1 ← decodeArrayHeader bs
   -- Byron blocks are size 5 (both epoch boundary and regular blocks)
@@ -119,7 +119,7 @@ partial def parseByronBlockHeader (bs : ByteArray) : Option ByronBlockHeader := 
       }
 
 /-- Parse Byron header wrapper: [[slot, blockNo], tag24(headerBytes)] -/
-partial def parseByronHeader (bs : ByteArray) : Option ByronHeaderInfo := do
+def parseByronHeader (bs : ByteArray) : Option ByronHeaderInfo := do
   -- Outer array: [slotInfo, headerBytes]
   let r1 ← decodeArrayHeader bs
   if r1.value != 2 then none

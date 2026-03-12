@@ -155,7 +155,7 @@ def encodeChainSyncMessage : ChainSyncMessage → ByteArray
 -- ==============
 
 /-- Decode Point from CBOR (handles both normal points and origin/genesis as []) -/
-partial def decodePoint (bs : ByteArray) : Option (DecodeResult Point) := do
+def decodePoint (bs : ByteArray) : Option (DecodeResult Point) := do
   let r1 ← decodeArrayHeader bs
 
   -- Origin/genesis is encoded as empty array []
@@ -179,7 +179,7 @@ partial def decodePoint (bs : ByteArray) : Option (DecodeResult Point) := do
     none
 
 /-- Decode Tip from CBOR -/
-partial def decodeTip (bs : ByteArray) : Option (DecodeResult Tip) := do
+def decodeTip (bs : ByteArray) : Option (DecodeResult Tip) := do
   let r1 ← decodeArrayHeader bs
   if r1.value != 2 then none
 
@@ -195,7 +195,7 @@ partial def decodeTip (bs : ByteArray) : Option (DecodeResult Tip) := do
   }
 
 /-- Decode Header from CBOR (era-wrapped format: [era, wrappedHeader]) -/
-partial def decodeHeader (bs : ByteArray) : Option (DecodeResult Header) := do
+def decodeHeader (bs : ByteArray) : Option (DecodeResult Header) := do
   let r1 ← decodeArrayHeader bs
   if r1.value != 2 then none
 
@@ -218,7 +218,7 @@ partial def decodeHeader (bs : ByteArray) : Option (DecodeResult Header) := do
   }
 
 /-- Decode ChainSync message -/
-partial def decodeChainSyncMessage (bs : ByteArray) : Option ChainSyncMessage := do
+def decodeChainSyncMessage (bs : ByteArray) : Option ChainSyncMessage := do
   let r1 ← decodeArrayHeader bs
   let r2 ← decodeUInt r1.remaining
 
@@ -306,6 +306,14 @@ def createCheckpoint (slot : UInt64) (hashHex : String) : Point :=
 /-- Find intersection from a known checkpoint (with genesis fallback) -/
 def findIntersectFromCheckpoint (checkpoint : Point) : ChainSyncMessage :=
   .MsgFindIntersect [checkpoint, Point.genesis]
+
+/-- Find intersection at a specific point (e.g. the tip) -/
+def findIntersectAt (point : Point) : ChainSyncMessage :=
+  .MsgFindIntersect [point]
+
+/-- Query tip by sending FindIntersect with empty points (server responds with MsgIntersectNotFound + tip) -/
+def findIntersectTip : ChainSyncMessage :=
+  .MsgFindIntersect []
 
 /-- Request next block -/
 def requestNext : ChainSyncMessage :=

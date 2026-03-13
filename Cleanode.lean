@@ -25,6 +25,15 @@ import Cleanode.Network.EraTx
 import Cleanode.Network.Logging
 import Cleanode.Network.Reconnection
 import Cleanode.Network.Pipelining
+import Cleanode.Network.TxSubmission2
+import Cleanode.Network.TxSubmission2State
+import Cleanode.Network.Mempool
+import Cleanode.Network.PeerSharing
+import Cleanode.Network.PeerSharingState
+import Cleanode.Network.PeerDb
+import Cleanode.Network.MuxDispatcher
+import Cleanode.Network.PeerConnection
+import Cleanode.Network.ConnectionManager
 
 -- Configuration
 import Cleanode.Config
@@ -53,3 +62,4 @@ import Cleanode.Proofs.CborProofs
 import Cleanode.Proofs.SocketProofs
 import Cleanode.Proofs.MuxProofs
 import Cleanode.Proofs.Phase2Proofs
+import Cleanode.Proofs.Phase3Proofs

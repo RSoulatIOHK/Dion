@@ -10,6 +10,14 @@ import Cleanode.Network.BlockFetchClient
 import Cleanode.Network.ConwayBlock
 import Cleanode.Network.Crypto
 import Cleanode.Network.Bech32
+import Cleanode.Network.TxSubmission2
+import Cleanode.Network.Mempool
+import Cleanode.Network.PeerSharing
+import Cleanode.Network.PeerDb
+import Cleanode.Network.PeerConnection
+import Cleanode.Network.ConnectionManager
+import Cleanode.Network.MuxDispatcher
+import Cleanode.Config.Topology
 import Cleanode.Storage.BlockStore
 import Cleanode.Storage.ChainDB
 import Cleanode.Storage.Database
@@ -27,6 +35,13 @@ open Cleanode.Network.Crypto
 open Cleanode.Network.Bech32
 open Cleanode.Network.BlockFetchClient
 open Cleanode.Network.ConwayBlock
+open Cleanode.Network.TxSubmission2
+open Cleanode.Network.Mempool
+open Cleanode.Network.PeerDb
+open Cleanode.Network.PeerConnection
+open Cleanode.Network.ConnectionManager
+open Cleanode.Network.MuxDispatcher
+open Cleanode.Config.Topology
 open Cleanode.Storage.BlockStore
 open Cleanode.Storage.ChainDB
 open Cleanode.Storage.Database
@@ -658,7 +673,7 @@ partial def receiveChainSyncFrame (sock : Socket) : IO (Except String MuxFrame) 
                 -- Respond to KeepAlive and keep waiting
                 match extractKeepAliveCookie payload with
                 | some cookie => do
-                    sendKeepAliveResponse sock cookie
+                    _root_.sendKeepAliveResponse sock cookie
                 | none => pure ()
                 receiveChainSyncFrame sock  -- keep waiting
               else
@@ -838,38 +853,160 @@ def testBlockFetch (host : String) (port : UInt16) (proposal : HandshakeMessage)
   reconnectLoop host port proposal networkName chainDb
   chainDb.close
 
-def main : IO Unit := run do
-  println (("Dion: a Cardano LEAN 4 node".style |> cyan |> bold))
-  println (("=============================".style |> cyan))
-  println ("".style)
-  println (("Testing Ouroboros BlockFetch Protocol...".style |> blue))
-  println ("".style)
+/-- Receive a MUX frame using exact reads (8-byte header + payload) -/
+def receiveMuxFrameExact (sock : Socket) : IO (Except String MuxFrame) := do
+  match ← socket_receive_exact sock 8 with
+  | .error e => return .error s!"Failed to receive MUX header: {e}"
+  | .ok headerBytes =>
+      match decodeMuxHeader headerBytes with
+      | none => return .error "Failed to decode MUX header"
+      | some header => do
+          match ← socket_receive_exact sock header.payloadLength.toNat.toUInt32 with
+          | .error e => return .error s!"Failed to receive payload: {e}"
+          | .ok payload =>
+              return .ok { header := header, payload := payload }
 
+/-- Receive a ChainSync frame, skipping KeepAlive and TxSubmission2 frames -/
+partial def receiveChainSyncFrameSkipping (sock : Socket) : IO (Except String MuxFrame) := do
+  match ← receiveMuxFrameExact sock with
+  | .error e => return .error e
+  | .ok frame =>
+      if frame.header.protocolId == .KeepAlive then
+        -- Auto-respond to KeepAlive
+        match extractKeepAliveCookie frame.payload with
+        | some cookie => _root_.sendKeepAliveResponse sock cookie
+        | none => pure ()
+        receiveChainSyncFrameSkipping sock
+      else if frame.header.protocolId == .TxSubmission2 then
+        -- Skip TxSubmission2 frames (server may send MsgRequestTxIds)
+        receiveChainSyncFrameSkipping sock
+      else
+        return .ok frame
+
+/-- Per-peer sync loop: runs ChainSync + BlockFetch for one peer.
+    Self-contained — only needs the socket and ChainDB, no shared IO.Ref. -/
+partial def peerSyncLoop (sock : Socket) (addrStr : String)
+    (chainDb : ChainDB) : IO Unit := do
+  -- Find chain tip and intersect (using exact MUX frame reads)
+  match ← sendChainSync sock findIntersectTip with
+  | .error e => IO.println s!"  ✗ Peer {addrStr}: failed to query tip: {e}"
+  | .ok _ => do
+      match ← receiveChainSyncFrameSkipping sock with
+      | .error e => IO.println s!"  ✗ Peer {addrStr}: failed to receive tip: {e}"
+      | .ok frame => do
+          match decodeChainSyncMessage frame.payload with
+          | some (.MsgIntersectNotFound tip) => do
+              IO.println s!"  ✓ Peer {addrStr}: tip at slot {tip.point.slot}"
+
+              -- Intersect at tip
+              match ← sendChainSync sock (findIntersectAt tip.point) with
+              | .error _ => return
+              | .ok _ => do
+                  match ← receiveChainSyncFrameSkipping sock with
+                  | .error _ => return
+                  | .ok frame2 => do
+                      match decodeChainSyncMessage frame2.payload with
+                      | some (.MsgIntersectFound point _) => do
+                          IO.println s!"  ✓ Peer {addrStr}: intersected at slot {point.slot}"
+
+                          -- Enter sync loop for this peer
+                          let result ← syncLoop sock 0 (some chainDb)
+                          match result with
+                          | .connectionLost reason =>
+                              IO.println s!"  ⚡ Peer {addrStr}: {reason}"
+                          | .protocolError reason =>
+                              IO.println s!"  ✗ Peer {addrStr}: {reason}"
+                          | .done => pure ()
+                      | _ => IO.println s!"  ✗ Peer {addrStr}: failed to intersect"
+          | _ => IO.println s!"  ✗ Peer {addrStr}: failed to find tip"
+
+  socket_close sock
+
+/-- Multi-peer relay node mode -/
+def relayNode (proposal : HandshakeMessage) (networkName : String) : IO Unit := do
+  run do
+    println (("Dion: a Cardano LEAN 4 Relay Node".style |> cyan |> bold))
+    println (("====================================".style |> cyan))
+    println ("".style)
+    println ((s!"Network: {networkName}".style |> blue))
+    println ("".style)
+
+  -- Open ChainDB
+  let chainDb ← ChainDB.open {}
+  IO.println "  💾 Chain database opened (data/chain.db)"
+
+  -- Build topology from bootstrap peers
+  let bootstrapPeers := match networkName with
+    | "Mainnet" => mainnetBootstrapPeers
+    | "Preprod" => preprodBootstrapPeers
+    | "Preview" => previewBootstrapPeers
+    | _ => mainnetBootstrapPeers
+  let peerAddrs := bootstrapPeers
+
+  IO.println s!"  📡 Peer database: {peerAddrs.length} peers"
+
+  run do
+    println ("".style)
+    println (("=== Relay Node Active (Ctrl+C to stop) ===".style |> cyan |> bold))
+
+  let mut tasks : List (Task (Except IO.Error Unit)) := []
+  for (host, port) in peerAddrs do
+    let addrStr := s!"{host}:{port}"
+    let task ← IO.asTask (do
+      try
+        -- Connect from within the task thread
+        match ← socket_connect host port with
+        | .error e => IO.println s!"  ✗ Peer {addrStr}: connection failed: {e}"
+        | .ok sock => do
+            -- Handshake
+            match ← sendHandshake sock proposal with
+            | .error e =>
+                socket_close sock
+                IO.println s!"  ✗ Peer {addrStr}: handshake failed: {e}"
+            | .ok _ => do
+                match ← socket_receive sock 1024 with
+                | .error e =>
+                    socket_close sock
+                    IO.println s!"  ✗ Peer {addrStr}: handshake recv failed: {e}"
+                | .ok rawData => do
+                    match decodeMuxFrame rawData >>= fun f => decodeHandshakeMessage f.payload with
+                    | none =>
+                        socket_close sock
+                        IO.println s!"  ✗ Peer {addrStr}: handshake decode failed"
+                    | some _ => do
+                        IO.println s!"  ▶ Peer {addrStr}: syncing..."
+                        peerSyncLoop sock addrStr chainDb
+      catch e =>
+        IO.println s!"  ✗ Peer {addrStr}: {e}")
+    tasks := tasks ++ [task]
+
+  IO.println s!"\n  Syncing from {tasks.length} peers...\n"
+
+  -- Wait for all tasks (they run until connection lost)
+  for task in tasks do
+    let _ ← IO.wait task
+
+  chainDb.close
+
+def main : IO Unit := do
   -- ============================================
   -- Network Configuration
   -- ============================================
   -- Uncomment ONE of the following network configurations:
 
   -- MAINNET (12.8M+ blocks - slow to sync)
-  let (host, port) := mainnetBootstrapPeers.head!
   let proposal := createMainnetProposal
   let networkName := "Mainnet"
 
   -- PREPROD (smaller testnet - faster to sync)
-  -- let (host, port) := preprodBootstrapPeers.head!
   -- let proposal := createPreprodProposal
   -- let networkName := "Preprod"
 
   -- PREVIEW (smallest testnet - fastest to sync)
-  -- let (host, port) := previewBootstrapPeers.head!
   -- let proposal := createPreviewProposal
   -- let networkName := "Preview"
 
   -- ============================================
 
-  -- Choose test to run:
-  testBlockFetch host port proposal networkName  -- Fetch full block with transactions
-  -- testChainSync host port proposal networkName  -- Just sync headers
-
-  println ("".style)
-  println (("✓ Test complete!".style |> green |> bold))
+  -- Run as multi-peer relay node
+  relayNode proposal networkName

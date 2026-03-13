@@ -664,24 +664,33 @@ partial def receiveChainSyncFrame (sock : Socket) : IO (Except String MuxFrame) 
               else
                 return .ok { header := header, payload := payload }
 
-/-- Continuous sync loop: requests blocks via ChainSync + BlockFetch -/
-partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainDB := none) : IO Unit := do
+/-- Result of the sync loop: why did it exit? -/
+inductive SyncExit where
+  | connectionLost (reason : String)  -- Recoverable: relay dropped us
+  | protocolError (reason : String)   -- Not recoverable without reconnect
+  | done                              -- Clean exit
+
+/-- Continuous sync loop: requests blocks via ChainSync + BlockFetch.
+    Returns a SyncExit indicating why it stopped. -/
+partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainDB := none) : IO SyncExit := do
   -- Request next block header
   match ← sendChainSync sock requestNext with
   | .error e =>
-      IO.println s!"✗ Failed to send RequestNext: {e}"
+      return .connectionLost s!"Failed to send RequestNext: {e}"
   | .ok _ => do
       match ← receiveChainSyncFrame sock with
       | .error e =>
-          IO.println s!"✗ {e}"
+          return .connectionLost e
       | .ok frame => do
           match decodeChainSyncMessage frame.payload with
           | none => do
-              IO.println "✗ Failed to decode ChainSync message"
+              return .protocolError "Failed to decode ChainSync message"
           | some (.MsgRollForward header tip) => do
               let ok ← fetchAndDisplayBlock sock header tip chainDb
               if ok then
                 syncLoop sock (blockCount + 1) chainDb
+              else
+                return .protocolError "Failed to fetch block"
           | some (.MsgRollBackward rollbackPoint _) => do
               run do
                 concat [
@@ -698,13 +707,15 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
               -- Keep receiving, handling KeepAlive frames transparently
               match ← receiveChainSyncFrame sock with
               | .error e =>
-                  IO.println s!"✗ {e}"
+                  return .connectionLost e
               | .ok frame => do
                   match decodeChainSyncMessage frame.payload with
                   | some (.MsgRollForward header tip) => do
                       let ok ← fetchAndDisplayBlock sock header tip chainDb
                       if ok then
                         syncLoop sock (blockCount + 1) chainDb
+                      else
+                        return .protocolError "Failed to fetch block"
                   | some (.MsgRollBackward rollbackPoint _) => do
                       run do
                         concat [
@@ -716,115 +727,116 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
                       IO.println s!"Unexpected message: {repr other}"
                       syncLoop sock blockCount chainDb
                   | none =>
-                      IO.println "✗ Failed to decode ChainSync message"
+                      return .protocolError "Failed to decode ChainSync message"
           | some other => do
               IO.println s!"Unexpected message: {repr other}"
               syncLoop sock blockCount chainDb
 
-def testBlockFetch (host : String) (port : UInt16) (proposal : HandshakeMessage) (networkName : String) : IO Unit := run do
-  -- println ((s!"Connecting to {host}:{port}...".style))
-
+/-- Connect, handshake, find tip, intersect, and enter sync loop.
+    Returns a SyncExit indicating why the session ended. -/
+def connectAndSync (host : String) (port : UInt16) (proposal : HandshakeMessage)
+    (chainDb : ChainDB) : IO SyncExit := do
   match ← socket_connect host port with
   | .error e =>
-      println (s!"✗ Connection failed: {e}".style |> red |> bold)
+      return .connectionLost s!"Connection failed: {e}"
   | .ok sock => do
-      println ("✓ Connected!".style |> green |> bold)
-
-      -- Step 1: Perform handshake
-      println ("".style)
-      println (("=== Handshake ===".style |> cyan |> bold))
+      -- Handshake
       match ← sendHandshake sock proposal with
-      | .error e => do
-          println (s!"✗ Failed to send handshake: {e}".style |> red |> bold)
+      | .error e =>
           socket_close sock
+          return .connectionLost s!"Failed to send handshake: {e}"
       | .ok _ => do
-          println ("✓ Handshake proposal sent".style |> green)
-
-          -- Receive handshake response
           match ← socket_receive sock 1024 with
-          | .error e => do
-              println (s!"✗ Failed to receive handshake: {e}".style |> red |> bold)
+          | .error e =>
               socket_close sock
+              return .connectionLost s!"Failed to receive handshake: {e}"
           | .ok rawData => do
-              println (s!"✓ Received {rawData.size} bytes".style |> green)
-              match decodeMuxFrame rawData with
-              | none => do
-                  println ("✗ Failed to decode handshake MUX frame".style |> red |> bold)
+              match decodeMuxFrame rawData >>= fun f => decodeHandshakeMessage f.payload with
+              | none =>
                   socket_close sock
-              | some frame => do
-                  match decodeHandshakeMessage frame.payload with
-                  | none => do
-                      println ("✗ Failed to decode handshake message".style |> red |> bold)
+                  return .protocolError "Failed to decode handshake response"
+              | some msg => do
+                  IO.println s!"  ✓ Handshake: {repr msg}"
+
+                  -- Find chain tip
+                  match ← sendChainSync sock findIntersectTip with
+                  | .error e =>
                       socket_close sock
-                  | some msg => do
-                      println (s!"✓ Handshake complete: {repr msg}".style |> green |> bold)
-
-                      -- Step 2: Query the chain tip, then intersect there
-                      println ("".style)
-                      println (("=== ChainSync - Finding Chain Tip ===".style |> cyan |> bold))
-
-                      -- First: send FindIntersect with empty list to discover the tip
-                      match ← sendChainSync sock findIntersectTip with
-                      | .error e => do
-                          println ((s!"✗ Failed to send FindIntersect: {e}".style |> red |> bold))
+                      return .connectionLost s!"Failed to send FindIntersect: {e}"
+                  | .ok _ => do
+                      match ← socket_receive sock 8192 with
+                      | .error e =>
                           socket_close sock
-                      | .ok _ => do
-                          match ← socket_receive sock 8192 with
-                          | .error e => do
-                              IO.println s!"✗ Failed to receive tip query: {e}"
-                              socket_close sock
-                          | .ok rawData => do
-                              match decodeMuxFrame rawData with
-                              | none => do
-                                  IO.println "✗ Failed to decode MUX frame"
+                          return .connectionLost s!"Failed to receive tip: {e}"
+                      | .ok rawData => do
+                          match decodeMuxFrame rawData >>= fun f => decodeChainSyncMessage f.payload with
+                          | some (.MsgIntersectNotFound tip) => do
+                              IO.println s!"  ✓ Chain tip at slot {tip.point.slot}"
+
+                              -- Intersect at tip
+                              match ← sendChainSync sock (findIntersectAt tip.point) with
+                              | .error e =>
                                   socket_close sock
-                              | some frame => do
-                                  match decodeChainSyncMessage frame.payload with
-                                  | some (.MsgIntersectNotFound tip) => do
-                                      println ((s!"✓ Chain tip at slot {tip.point.slot}".style |> green |> bold))
-
-                                      -- Second: intersect at the tip so we follow new blocks
-                                      match ← sendChainSync sock (findIntersectAt tip.point) with
-                                      | .error e => do
-                                          println ((s!"✗ Failed to send FindIntersect at tip: {e}".style |> red |> bold))
+                                  return .connectionLost s!"Failed to intersect: {e}"
+                              | .ok _ => do
+                                  match ← socket_receive sock 8192 with
+                                  | .error e =>
+                                      socket_close sock
+                                      return .connectionLost s!"Failed to receive intersection: {e}"
+                                  | .ok rawData => do
+                                      match decodeMuxFrame rawData >>= fun f => decodeChainSyncMessage f.payload with
+                                      | some (.MsgIntersectFound point _) => do
+                                          IO.println s!"  ✓ Intersected at slot {point.slot}"
+                                          let result ← syncLoop sock 0 (some chainDb)
                                           socket_close sock
-                                      | .ok _ => do
-                                          match ← socket_receive sock 8192 with
-                                          | .error e => do
-                                              IO.println s!"✗ Failed to receive intersection: {e}"
-                                              socket_close sock
-                                          | .ok rawData => do
-                                              match decodeMuxFrame rawData with
-                                              | none => do
-                                                  IO.println "✗ Failed to decode MUX frame"
-                                                  socket_close sock
-                                              | some frame => do
-                                                  match decodeChainSyncMessage frame.payload with
-                                                  | some (.MsgIntersectFound point _) => do
-                                                      println ((s!"✓ Intersected at tip slot {point.slot}".style |> green |> bold))
-                                                      println ("".style)
-                                                      println (("=== Following Chain Tip (Ctrl+C to stop) ===".style |> cyan |> bold))
+                                          return result
+                                      | _ =>
+                                          socket_close sock
+                                          return .protocolError "Failed to intersect at tip"
+                          | _ =>
+                              socket_close sock
+                              return .protocolError "Failed to find chain tip"
 
-                                                      -- Open ChainDB for block storage
-                                                      let chainDb ← ChainDB.open {}
-                                                      IO.println "  💾 Chain database opened (data/chain.db)"
+/-- Reconnection loop: keeps reconnecting on connection loss with backoff -/
+partial def reconnectLoop (host : String) (port : UInt16) (proposal : HandshakeMessage)
+    (networkName : String) (chainDb : ChainDB) (attempt : Nat := 0) : IO Unit := do
+  if attempt > 0 then
+    let delaySec := min (attempt * 5) 30  -- 5s, 10s, 15s, ... capped at 30s
+    run do
+      concat [
+        ("⟳ Reconnecting in ".style |> yellow),
+        (s!"{delaySec}s".style |> yellow |> bold),
+        (s!" (attempt {attempt + 1})...".style |> yellow |> dim)
+      ]
+    IO.sleep (UInt32.ofNat (delaySec * 1000))
+  else
+    run do
+      println (("=== Following Chain Tip (Ctrl+C to stop) ===".style |> cyan |> bold))
 
-                                                      -- Enter continuous sync loop — will get MsgAwaitReply immediately
-                                                      syncLoop sock 0 (some chainDb)
-                                                      chainDb.close
-                                                      socket_close sock
-                                                  | some other => do
-                                                      IO.println s!"✗ Unexpected response: {repr other}"
-                                                      socket_close sock
-                                                  | none => do
-                                                      IO.println "✗ Failed to decode ChainSync message"
-                                                      socket_close sock
-                                  | some other => do
-                                      IO.println s!"✗ Expected MsgIntersectNotFound, got: {repr other}"
-                                      socket_close sock
-                                  | none => do
-                                      IO.println "✗ Failed to decode tip query response"
-                                      socket_close sock
+  match ← connectAndSync host port proposal chainDb with
+  | .connectionLost reason => do
+      run do
+        concat [
+          ("⚡ Connection lost: ".style |> yellow),
+          (reason.style |> yellow |> dim)
+        ]
+      reconnectLoop host port proposal networkName chainDb (attempt + 1)
+  | .protocolError reason => do
+      run do
+        concat [
+          ("✗ Protocol error: ".style |> red |> bold),
+          (reason.style |> red)
+        ]
+      -- Protocol errors are also worth retrying — the relay might behave differently
+      reconnectLoop host port proposal networkName chainDb (attempt + 1)
+  | .done => pure ()
+
+def testBlockFetch (host : String) (port : UInt16) (proposal : HandshakeMessage) (networkName : String) : IO Unit := do
+  -- Open ChainDB once — persists across reconnections
+  let chainDb ← ChainDB.open {}
+  IO.println "  💾 Chain database opened (data/chain.db)"
+  reconnectLoop host port proposal networkName chainDb
+  chainDb.close
 
 def main : IO Unit := run do
   println (("Dion: a Cardano LEAN 4 node".style |> cyan |> bold))

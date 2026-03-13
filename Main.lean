@@ -715,7 +715,18 @@ partial def receiveChainSyncFrame (sock : Socket)
                 | none => pure ()
                 receiveChainSyncFrame sock discoveryRef
               else if header.protocolId == .TxSubmission2 then
-                -- Skip TxSubmission2 frames (server sends MsgRequestTxIds)
+                -- Respond to TxSubmission2 server requests (we have no txs to offer)
+                match decodeTxSubmission2Message payload with
+                | some (.MsgRequestTxIds blocking _ack _req) =>
+                    -- Non-blocking: reply immediately with empty list (spec-compliant)
+                    -- Blocking: don't reply — hold the request open (normal for empty mempool)
+                    if !blocking then
+                      let _ ← sendTxSubmission2 sock (.MsgReplyTxIds [])
+                      pure ()
+                | some (.MsgRequestTxs _) =>
+                    let _ ← sendTxSubmission2 sock (.MsgReplyTxs [])
+                    pure ()
+                | _ => pure ()  -- MsgDone or decode failure
                 receiveChainSyncFrame sock discoveryRef
               else if header.protocolId == .PeerSharing then
                 -- Handle PeerSharing responses inline (non-blocking)

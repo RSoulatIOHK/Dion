@@ -36,7 +36,6 @@ def fetchBlock (sock : Socket) (point : Point) : IO (Except SocketError (Option 
       | .ok (some result) =>
           match result.message with
           | .MsgStartBatch => do
-              IO.println "[OK] Got MsgStartBatch, receiving block..."
               -- Receive block
               match ← receiveBlockFetch sock result.leftoverBytes 2000000 with
               | .error e => return .error e

@@ -267,6 +267,53 @@ lean_obj_res cleanode_socket_receive_exact(lean_obj_arg sock_obj, uint32_t num_b
 }
 
 /*
+ * Resolve hostname to all IP addresses (DNS discovery)
+ * cleanode_dns_resolve : String -> IO (Array String)
+ */
+lean_obj_res cleanode_dns_resolve(lean_obj_arg host_obj, lean_obj_arg world) {
+    ensure_wsa_init();
+    const char* host = lean_string_cstr(host_obj);
+
+    struct addrinfo hints, *result, *rp;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;       // IPv4 only for simplicity
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    int status = getaddrinfo(host, NULL, &hints, &result);
+    if (status != 0) {
+        // Return empty array on failure
+        lean_object* arr = lean_alloc_array(0, 0);
+        return lean_io_result_mk_ok(arr);
+    }
+
+    // Count unique addresses
+    char addrs[64][INET_ADDRSTRLEN];
+    int count = 0;
+    for (rp = result; rp != NULL && count < 64; rp = rp->ai_next) {
+        struct sockaddr_in* addr = (struct sockaddr_in*)rp->ai_addr;
+        const char* ip = inet_ntoa(addr->sin_addr);
+        // Check for duplicates
+        int dup = 0;
+        for (int i = 0; i < count; i++) {
+            if (strcmp(addrs[i], ip) == 0) { dup = 1; break; }
+        }
+        if (!dup) {
+            strncpy(addrs[count], ip, INET_ADDRSTRLEN);
+            count++;
+        }
+    }
+    freeaddrinfo(result);
+
+    lean_object* arr = lean_alloc_array(count, count);
+    for (int i = 0; i < count; i++) {
+        lean_array_set_core(arr, i, lean_mk_string(addrs[i]));
+    }
+    return lean_io_result_mk_ok(arr);
+}
+
+
+/*
  * Close socket
  * cleanode_socket_close : Socket -> IO Unit
  */

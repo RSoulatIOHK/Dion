@@ -87,27 +87,81 @@ def encodePeerSharingMessage : PeerSharingMessage → ByteArray
 -- = Decoding   =
 -- ==============
 
-/-- Decode a PeerAddress from CBOR -/
+/-- Convert a 32-bit integer to an IPv4 dotted-decimal string -/
+def uint32ToIPv4 (n : Nat) : String :=
+  let a := (n / (256 * 256 * 256)) % 256
+  let b := (n / (256 * 256)) % 256
+  let c := (n / 256) % 256
+  let d := n % 256
+  s!"{a}.{b}.{c}.{d}"
+
+/-- Convert four 32-bit integers to an IPv6 colon-hex string -/
+def uint32x4ToIPv6 (a b c d : Nat) : String :=
+  let fmt (n : Nat) : String :=
+    let hi := (n / 65536) % 65536
+    let lo := n % 65536
+    s!"{Nat.toDigits 16 hi |>.asString}:{Nat.toDigits 16 lo |>.asString}"
+  s!"{fmt a}:{fmt b}:{fmt c}:{fmt d}"
+
+/-- Decode a PeerAddress from CBOR in Cardano wire format.
+    IPv4: [0, uint32_ip, port]  (array of 3)
+    IPv6: [1, uint32_a, uint32_b, uint32_c, uint32_d, port]  (array of 6) -/
 def decodePeerAddress (bs : ByteArray) : Option (DecodeResult PeerAddress) := do
   let r1 ← decodeArrayHeader bs
-  if r1.value != 2 then none
-  let r2 ← decodeUInt r1.remaining
-  let port := UInt16.ofNat r2.value
-  let r3 ← decodeBytes r2.remaining
-  let host := String.fromUTF8! r3.value
-  some { value := { host := host, port := port }, remaining := r3.remaining }
+  let r2 ← decodeUInt r1.remaining  -- address type: 0=IPv4, 1=IPv6
+  match r2.value with
+  | 0 => do  -- IPv4: [0, uint32, port]
+      if r1.value != 3 then none
+      let r3 ← decodeUInt r2.remaining  -- IP as uint32
+      let r4 ← decodeUInt r3.remaining  -- port
+      let host := uint32ToIPv4 r3.value
+      let port := UInt16.ofNat r4.value
+      some { value := { host := host, port := port }, remaining := r4.remaining }
+  | 1 => do  -- IPv6: [1, u32, u32, u32, u32, port]
+      if r1.value != 6 then none
+      let ra ← decodeUInt r2.remaining
+      let rb ← decodeUInt ra.remaining
+      let rc ← decodeUInt rb.remaining
+      let rd ← decodeUInt rc.remaining
+      let rPort ← decodeUInt rd.remaining
+      let host := uint32x4ToIPv6 ra.value rb.value rc.value rd.value
+      let port := UInt16.ofNat rPort.value
+      some { value := { host := host, port := port }, remaining := rPort.remaining }
+  | _ => none
 
-/-- Decode a list of PeerAddresses -/
+/-- Decode a list of PeerAddresses from either a fixed or indefinite-length CBOR array.
+    Cardano uses indefinite-length arrays (0x9F ... 0xFF) for peer lists. -/
 def decodePeerAddressList (bs : ByteArray) : Option (DecodeResult (List PeerAddress)) := do
-  let r1 ← decodeArrayHeader bs
-  let count := r1.value
-  let mut remaining := r1.remaining
-  let mut peers : List PeerAddress := []
-  for _ in List.range count do
-    let r ← decodePeerAddress remaining
-    peers := peers ++ [r.value]
-    remaining := r.remaining
-  some { value := peers, remaining := remaining }
+  if bs.size == 0 then none
+  if bs[0]! == 0x9F then
+    -- Indefinite-length array: read until 0xFF break code
+    let mut remaining := bs.extract 1 bs.size
+    let mut peers : List PeerAddress := []
+    let mut done := false
+    while !done do
+      if remaining.size == 0 then
+        done := true
+      else if remaining[0]! == 0xFF then
+        remaining := remaining.extract 1 remaining.size
+        done := true
+      else
+        match decodePeerAddress remaining with
+        | some r =>
+            peers := peers ++ [r.value]
+            remaining := r.remaining
+        | none => done := true  -- skip unparseable entries
+    some { value := peers, remaining := remaining }
+  else
+    -- Fixed-length array
+    let r1 ← decodeArrayHeader bs
+    let count := r1.value
+    let mut remaining := r1.remaining
+    let mut peers : List PeerAddress := []
+    for _ in List.range count do
+      let r ← decodePeerAddress remaining
+      peers := peers ++ [r.value]
+      remaining := r.remaining
+    some { value := peers, remaining := remaining }
 
 /-- Decode PeerSharing message -/
 def decodePeerSharingMessage (bs : ByteArray) : Option PeerSharingMessage := do

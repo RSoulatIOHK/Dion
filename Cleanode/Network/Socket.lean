@@ -62,6 +62,10 @@ opaque socket_receive_exact (sock : @& Socket) (numBytes : @& UInt32) : IO (Exce
 @[extern "cleanode_socket_close"]
 opaque socket_close (sock : @& Socket) : IO Unit
 
+/-- Resolve hostname to all IP addresses via DNS -/
+@[extern "cleanode_dns_resolve"]
+opaque dns_resolve (host : @& String) : IO (Array String)
+
 /-- High-level connection helper -/
 def connect (host : String) (port : UInt16) : IO (Except SocketError Socket) := do
   IO.println s!"Connecting to {host}:{port}..."

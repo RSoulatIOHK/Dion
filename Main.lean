@@ -41,11 +41,29 @@ open Cleanode.Network.PeerDb
 open Cleanode.Network.PeerConnection
 open Cleanode.Network.ConnectionManager
 open Cleanode.Network.MuxDispatcher
+open Cleanode.Network.PeerSharing
 open Cleanode.Config.Topology
 open Cleanode.Storage.BlockStore
 open Cleanode.Storage.ChainDB
 open Cleanode.Storage.Database
 open Pigment
+
+/-- Atomically check if a key is in the set; if not, add it.
+    Returns true if the key was already present (= duplicate).
+    Uses swap-based spinlock: `none` means locked, `some list` means unlocked.
+    Thread takes ownership by swapping in `none`, then puts the list back. -/
+partial def atomicCheckAndMark (ref : IO.Ref (Option (List Nat))) (key : Nat) : IO Bool := do
+  -- Acquire: spin until we swap out a `some`
+  let rec acquire : IO (List Nat) := do
+    match ← ref.swap none with
+    | some list => return list
+    | none => acquire  -- Another thread holds it, retry
+  let list ← acquire
+  let alreadySeen := list.contains key
+  let newList := if alreadySeen then list else key :: list
+  -- Release: put the list back
+  ref.set (some newList)
+  return alreadySeen
 
 def testHandshake (host : String) (port : UInt16) : IO Unit := do
   IO.println s!"Connecting to {host}:{port}..."
@@ -584,7 +602,9 @@ def displayBlock (header : Header) (tip : Tip) (blockPoint : Point) (blockBytes 
           txNum := txNum + 1
 
 /-- Fetch and display a block from a ChainSync RollForward header -/
-def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip) (chainDb : Option ChainDB := none) : IO Bool := do
+def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
+    (chainDb : Option ChainDB := none)
+    (seenBlocks : Option (IO.Ref (Option (List Nat))) := none) : IO Bool := do
   -- Extract the actual block point from the header (not the tip)
   -- The headerBytes is tag24-wrapped: d8 18 <bytestring>
   -- Block hash in Cardano = blake2b_256(content inside tag24 bytestring)
@@ -607,24 +627,36 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip) (chainDb 
       | some info => UInt64.ofNat info.slot
       | none => tip.point.slot  -- fallback
   let blockPoint : Point := { slot := blockSlot, hash := blockHash }
-  match ← fetchBlock sock blockPoint with
-  | .error e => do
-      IO.println s!"✗ Failed to fetch block: {e}"
-      return false
-  | .ok none => do
-      IO.println "✗ No block received"
-      return false
-  | .ok (some blockBytes) => do
-      displayBlock header tip blockPoint blockBytes
-      -- Store block in SQLite if ChainDB is available
-      if let some cdb := chainDb then
-        let slot := blockPoint.slot.toNat
-        let blockNo := tip.blockNo.toNat
-        cdb.addBlock blockNo slot header.era blockHash blockPoint.hash header.headerBytes
-        cdb.addBlockBody blockNo blockBytes
-        cdb.saveSyncState slot blockNo blockHash
-        IO.println s!"  💾 Block #{blockNo} stored in chain.db"
-      return true
+  -- Deduplicate: atomically check-and-mark block as seen
+  let blockNo := tip.blockNo.toNat
+  let alreadySeen ← do
+    if let some ref := seenBlocks then
+      atomicCheckAndMark ref blockNo
+    else
+      pure false
+  if alreadySeen then
+    -- Block already claimed by another peer — still fetch to satisfy BlockFetch protocol
+    match ← fetchBlock sock blockPoint with
+    | .error _ => return false
+    | _ => return true
+  else
+    match ← fetchBlock sock blockPoint with
+    | .error e => do
+        IO.println s!"✗ Failed to fetch block: {e}"
+        return false
+    | .ok none => do
+        IO.println "✗ No block received"
+        return false
+    | .ok (some blockBytes) => do
+        displayBlock header tip blockPoint blockBytes
+        -- Store block in SQLite if ChainDB is available
+        if let some cdb := chainDb then
+          let slot := blockPoint.slot.toNat
+          cdb.addBlock blockNo slot header.era blockHash blockPoint.hash header.headerBytes
+          cdb.addBlockBody blockNo blockBytes
+          cdb.saveSyncState slot blockNo blockHash
+          IO.println s!"  💾 Block #{blockNo} stored in chain.db"
+        return true
 
 /-- Encode a KeepAlive response (MsgKeepAliveResponse) -/
 def encodeKeepAliveResponse (cookie : UInt16) : ByteArray :=
@@ -654,10 +686,18 @@ def extractKeepAliveCookie (payload : ByteArray) : Option UInt16 :=
   else
     none
 
+/-- Shared peer discovery state (plain data only — safe across threads) -/
+structure DiscoveryState where
+  discovered : List (String × UInt16)  -- Queue of newly found peers
+  known      : List (String × UInt16)  -- All peers we've seen
+
 /-- Receive a ChainSync MUX frame, handling KeepAlive transparently.
     Uses exact reads: 8 bytes for header, then payloadLength bytes for payload.
+    Skips TxSubmission2 frames and handles PeerSharing responses inline.
     Loops until a ChainSync frame arrives or an error occurs. -/
-partial def receiveChainSyncFrame (sock : Socket) : IO (Except String MuxFrame) := do
+partial def receiveChainSyncFrame (sock : Socket)
+    (discoveryRef : Option (IO.Ref DiscoveryState) := none)
+    : IO (Except String MuxFrame) := do
   -- Read MUX header (exactly 8 bytes)
   match ← socket_receive_exact sock 8 with
   | .error e => return .error s!"Failed to receive MUX header: {e}"
@@ -665,17 +705,37 @@ partial def receiveChainSyncFrame (sock : Socket) : IO (Except String MuxFrame) 
       match decodeMuxHeader headerBytes with
       | none => return .error "Failed to decode MUX header"
       | some header => do
-          -- Read payload (exactly payloadLength bytes)
           match ← socket_receive_exact sock header.payloadLength.toNat.toUInt32 with
           | .error e => return .error s!"Failed to receive payload: {e}"
           | .ok payload => do
               if header.protocolId == .KeepAlive then
-                -- Respond to KeepAlive and keep waiting
+                -- Auto-respond to KeepAlive
                 match extractKeepAliveCookie payload with
-                | some cookie => do
-                    _root_.sendKeepAliveResponse sock cookie
+                | some cookie => _root_.sendKeepAliveResponse sock cookie
                 | none => pure ()
-                receiveChainSyncFrame sock  -- keep waiting
+                receiveChainSyncFrame sock discoveryRef
+              else if header.protocolId == .TxSubmission2 then
+                -- Skip TxSubmission2 frames (server sends MsgRequestTxIds)
+                receiveChainSyncFrame sock discoveryRef
+              else if header.protocolId == .PeerSharing then
+                -- Handle PeerSharing responses inline (non-blocking)
+                match discoveryRef with
+                | some dRef =>
+                    match decodePeerSharingMessage payload with
+                    | some (.MsgSharePeers peers) => do
+                        let peerAddrs := peers.map fun p => (p.host, p.port)
+                        if peerAddrs.length > 0 then
+                          IO.println s!"  📡 Discovered {peerAddrs.length} peers via PeerSharing"
+                          for (h, p) in peerAddrs do
+                            IO.println s!"      → {h}:{p}"
+                          dRef.modify fun ds =>
+                            let newPeers := peerAddrs.filter fun p => !ds.known.any (· == p)
+                            { ds with discovered := ds.discovered ++ newPeers }
+                        -- Send MsgDone to cleanly close PeerSharing
+                        let _ ← sendPeerSharing sock .MsgDone
+                    | _ => pure ()  -- Ignore decode failures silently
+                | none => pure ()
+                receiveChainSyncFrame sock discoveryRef
               else
                 return .ok { header := header, payload := payload }
 
@@ -687,13 +747,15 @@ inductive SyncExit where
 
 /-- Continuous sync loop: requests blocks via ChainSync + BlockFetch.
     Returns a SyncExit indicating why it stopped. -/
-partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainDB := none) : IO SyncExit := do
+partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainDB := none)
+    (discoveryRef : Option (IO.Ref DiscoveryState) := none)
+    (seenBlocks : Option (IO.Ref (Option (List Nat))) := none) : IO SyncExit := do
   -- Request next block header
   match ← sendChainSync sock requestNext with
   | .error e =>
       return .connectionLost s!"Failed to send RequestNext: {e}"
   | .ok _ => do
-      match ← receiveChainSyncFrame sock with
+      match ← receiveChainSyncFrame sock discoveryRef with
       | .error e =>
           return .connectionLost e
       | .ok frame => do
@@ -701,46 +763,66 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
           | none => do
               return .protocolError "Failed to decode ChainSync message"
           | some (.MsgRollForward header tip) => do
-              let ok ← fetchAndDisplayBlock sock header tip chainDb
+              let ok ← fetchAndDisplayBlock sock header tip chainDb seenBlocks
               if ok then
-                syncLoop sock (blockCount + 1) chainDb
+                syncLoop sock (blockCount + 1) chainDb discoveryRef seenBlocks
               else
                 return .protocolError "Failed to fetch block"
           | some (.MsgRollBackward rollbackPoint _) => do
-              run do
-                concat [
-                  ("↩ Rollback to slot ".style |> yellow),
-                  (s!"{rollbackPoint.slot}".style |> yellow |> bold)
-                ]
-              syncLoop sock blockCount chainDb
+              -- Dedup: only print once across peers (encode as slot + 1B offset)
+              let shouldPrint ← do
+                if let some ref := seenBlocks then
+                  let dup ← atomicCheckAndMark ref (rollbackPoint.slot.toNat + 1_000_000_000)
+                  pure (!dup)
+                else pure true
+              if shouldPrint then
+                run do
+                  concat [
+                    ("↩ Rollback to slot ".style |> yellow),
+                    (s!"{rollbackPoint.slot}".style |> yellow |> bold)
+                  ]
+              syncLoop sock blockCount chainDb discoveryRef seenBlocks
           | some (.MsgAwaitReply) => do
-              run do
-                concat [
-                  ("At tip -- waiting for new block...".style |> cyan |> dim)
-                ]
+              -- Dedup: only print once across peers (encode as blockCount + 2B offset)
+              let shouldPrint ← do
+                if let some ref := seenBlocks then
+                  let dup ← atomicCheckAndMark ref (blockCount + 2_000_000_000)
+                  pure (!dup)
+                else pure true
+              if shouldPrint then
+                run do
+                  concat [
+                    ("At tip -- waiting for new block...".style |> cyan |> dim)
+                  ]
               -- Server will push MsgRollForward when a new block arrives
               -- Keep receiving, handling KeepAlive frames transparently
-              match ← receiveChainSyncFrame sock with
+              match ← receiveChainSyncFrame sock discoveryRef with
               | .error e =>
                   return .connectionLost e
               | .ok frame => do
                   match decodeChainSyncMessage frame.payload with
                   | some (.MsgRollForward header tip) => do
-                      let ok ← fetchAndDisplayBlock sock header tip chainDb
+                      let ok ← fetchAndDisplayBlock sock header tip chainDb seenBlocks
                       if ok then
-                        syncLoop sock (blockCount + 1) chainDb
+                        syncLoop sock (blockCount + 1) chainDb discoveryRef seenBlocks
                       else
                         return .protocolError "Failed to fetch block"
-                  | some (.MsgRollBackward rollbackPoint _) => do
-                      run do
-                        concat [
-                          ("↩ Rollback to slot ".style |> yellow),
-                          (s!"{rollbackPoint.slot}".style |> yellow |> bold)
-                        ]
-                      syncLoop sock blockCount chainDb
+                  | some (.MsgRollBackward rollbackPoint2 _) => do
+                      let shouldPrint2 ← do
+                        if let some ref := seenBlocks then
+                          let dup ← atomicCheckAndMark ref (rollbackPoint2.slot.toNat + 1_000_000_000)
+                          pure (!dup)
+                        else pure true
+                      if shouldPrint2 then
+                        run do
+                          concat [
+                            ("↩ Rollback to slot ".style |> yellow),
+                            (s!"{rollbackPoint2.slot}".style |> yellow |> bold)
+                          ]
+                      syncLoop sock blockCount chainDb discoveryRef seenBlocks
                   | some other => do
                       IO.println s!"Unexpected message: {repr other}"
-                      syncLoop sock blockCount chainDb
+                      syncLoop sock blockCount chainDb discoveryRef seenBlocks
                   | none =>
                       return .protocolError "Failed to decode ChainSync message"
           | some other => do
@@ -866,61 +948,120 @@ def receiveMuxFrameExact (sock : Socket) : IO (Except String MuxFrame) := do
           | .ok payload =>
               return .ok { header := header, payload := payload }
 
-/-- Receive a ChainSync frame, skipping KeepAlive and TxSubmission2 frames -/
-partial def receiveChainSyncFrameSkipping (sock : Socket) : IO (Except String MuxFrame) := do
-  match ← receiveMuxFrameExact sock with
-  | .error e => return .error e
-  | .ok frame =>
-      if frame.header.protocolId == .KeepAlive then
-        -- Auto-respond to KeepAlive
-        match extractKeepAliveCookie frame.payload with
-        | some cookie => _root_.sendKeepAliveResponse sock cookie
-        | none => pure ()
-        receiveChainSyncFrameSkipping sock
-      else if frame.header.protocolId == .TxSubmission2 then
-        -- Skip TxSubmission2 frames (server may send MsgRequestTxIds)
-        receiveChainSyncFrameSkipping sock
-      else
-        return .ok frame
 
-/-- Per-peer sync loop: runs ChainSync + BlockFetch for one peer.
-    Self-contained — only needs the socket and ChainDB, no shared IO.Ref. -/
-partial def peerSyncLoop (sock : Socket) (addrStr : String)
-    (chainDb : ChainDB) : IO Unit := do
-  -- Find chain tip and intersect (using exact MUX frame reads)
+/-- After handshake succeeds: find tip, intersect, and sync.
+    Separated to reduce nesting depth (avoids LLVM optimizer crash). -/
+def peerFindTipAndSync (sock : Socket) (addrStr : String) (chainDb : ChainDB)
+    (discoveryRef : Option (IO.Ref DiscoveryState))
+    (seenBlocks : Option (IO.Ref (Option (List Nat)))) : IO SyncExit := do
+  -- Find chain tip
   match ← sendChainSync sock findIntersectTip with
-  | .error e => IO.println s!"  ✗ Peer {addrStr}: failed to query tip: {e}"
+  | .error e => return .connectionLost s!"Failed to query tip: {e}"
   | .ok _ => do
-      match ← receiveChainSyncFrameSkipping sock with
-      | .error e => IO.println s!"  ✗ Peer {addrStr}: failed to receive tip: {e}"
+      match ← receiveChainSyncFrame sock discoveryRef with
+      | .error e => return .connectionLost e
       | .ok frame => do
           match decodeChainSyncMessage frame.payload with
           | some (.MsgIntersectNotFound tip) => do
               IO.println s!"  ✓ Peer {addrStr}: tip at slot {tip.point.slot}"
-
               -- Intersect at tip
               match ← sendChainSync sock (findIntersectAt tip.point) with
-              | .error _ => return
+              | .error e => return .connectionLost s!"Failed to intersect: {e}"
               | .ok _ => do
-                  match ← receiveChainSyncFrameSkipping sock with
-                  | .error _ => return
+                  match ← receiveChainSyncFrame sock discoveryRef with
+                  | .error e => return .connectionLost e
                   | .ok frame2 => do
                       match decodeChainSyncMessage frame2.payload with
                       | some (.MsgIntersectFound point _) => do
                           IO.println s!"  ✓ Peer {addrStr}: intersected at slot {point.slot}"
+                          syncLoop sock 0 (some chainDb) discoveryRef seenBlocks
+                      | _ => return .protocolError "Failed to intersect"
+          | _ => return .protocolError "Failed to find tip"
 
-                          -- Enter sync loop for this peer
-                          let result ← syncLoop sock 0 (some chainDb)
-                          match result with
-                          | .connectionLost reason =>
-                              IO.println s!"  ⚡ Peer {addrStr}: {reason}"
-                          | .protocolError reason =>
-                              IO.println s!"  ✗ Peer {addrStr}: {reason}"
-                          | .done => pure ()
-                      | _ => IO.println s!"  ✗ Peer {addrStr}: failed to intersect"
-          | _ => IO.println s!"  ✗ Peer {addrStr}: failed to find tip"
+/-- Connect to a peer, handshake, find tip, intersect, and sync.
+    Returns a SyncExit indicating why it stopped. -/
+def peerConnectAndSync (host : String) (port : UInt16) (addrStr : String)
+    (proposal : HandshakeMessage) (chainDb : ChainDB)
+    (discoveryRef : Option (IO.Ref DiscoveryState) := none)
+    (seenBlocks : Option (IO.Ref (Option (List Nat))) := none) : IO SyncExit := do
+  match ← socket_connect host port with
+  | .error e => return .connectionLost s!"Connection failed: {e}"
+  | .ok sock => do
+      -- Handshake
+      match ← sendHandshake sock proposal with
+      | .error e =>
+          socket_close sock
+          return .connectionLost s!"Handshake send failed: {e}"
+      | .ok _ => do
+          match ← socket_receive sock 1024 with
+          | .error e =>
+              socket_close sock
+              return .connectionLost s!"Handshake recv failed: {e}"
+          | .ok rawData => do
+              match decodeMuxFrame rawData >>= fun f => decodeHandshakeMessage f.payload with
+              | none =>
+                  socket_close sock
+                  return .protocolError "Handshake decode failed"
+              | some hsMsg => do
+                  let peerSharingEnabled := match hsMsg with
+                    | .AcceptVersion _ vd => vd.peerSharing == 1
+                    | _ => false
+                  match hsMsg with
+                  | .AcceptVersion vn vd =>
+                      IO.println s!"  🤝 Peer {addrStr}: version {vn.value}, peerSharing={vd.peerSharing}, diffusion={vd.initiatorAndResponderDiffusionMode}"
+                  | _ =>
+                      IO.println s!"  🤝 Peer {addrStr}: handshake response: {repr hsMsg}"
+                  let _ ← sendTxSubmission2 sock .MsgInit
+                  if peerSharingEnabled && discoveryRef.isSome then
+                    IO.println s!"  📡 Peer {addrStr}: PeerSharing enabled, requesting peers..."
+                    let _ ← sendPeerSharing sock (.MsgShareRequest 10)
+                  let result ← peerFindTipAndSync sock addrStr chainDb discoveryRef seenBlocks
+                  socket_close sock
+                  return result
 
-  socket_close sock
+/-- Per-peer reconnection loop: connects, syncs, and reconnects on failure with backoff. -/
+partial def peerReconnectLoop (host : String) (port : UInt16)
+    (proposal : HandshakeMessage) (chainDb : ChainDB)
+    (discoveryRef : Option (IO.Ref DiscoveryState) := none)
+    (seenBlocks : Option (IO.Ref (Option (List Nat))) := none)
+    (attempt : Nat := 0) : IO Unit := do
+  let addrStr := s!"{host}:{port}"
+  if attempt > 0 then
+    let delaySec := min (attempt * 5) 30
+    IO.println s!"  ⟳ Peer {addrStr}: reconnecting in {delaySec}s (attempt {attempt + 1})..."
+    IO.sleep (UInt32.ofNat (delaySec * 1000))
+
+  match ← peerConnectAndSync host port addrStr proposal chainDb discoveryRef seenBlocks with
+  | .connectionLost reason => do
+      IO.println s!"  ⚡ Peer {addrStr}: {reason}"
+      peerReconnectLoop host port proposal chainDb discoveryRef seenBlocks (attempt + 1)
+  | .protocolError reason => do
+      IO.println s!"  ✗ Peer {addrStr}: {reason}"
+      peerReconnectLoop host port proposal chainDb discoveryRef seenBlocks (attempt + 1)
+  | .done => pure ()
+
+/-- Peer spawner loop: drains discovered peers and spawns new connection tasks -/
+partial def peerSpawnerLoop (discoveryRef : IO.Ref DiscoveryState)
+    (proposal : HandshakeMessage) (chainDb : ChainDB)
+    (seenBlocks : Option (IO.Ref (Option (List Nat))) := none)
+    (maxPeers : Nat := 20) : IO Unit := do
+  IO.sleep 30000  -- Check every 30 seconds
+  let newPeers ← discoveryRef.modifyGet fun ds =>
+    (ds.discovered, { ds with discovered := [], known := ds.known ++ ds.discovered })
+  if newPeers.isEmpty then
+    peerSpawnerLoop discoveryRef proposal chainDb seenBlocks maxPeers
+  else do
+    let knownCount := (← discoveryRef.get).known.length
+    let budget := if knownCount >= maxPeers then 0 else maxPeers - knownCount
+    let toSpawn := newPeers.take budget
+    for (host, port) in toSpawn do
+      IO.println s!"  🔗 Connecting to discovered peer {host}:{port}"
+      let _ ← IO.asTask (do
+        try
+          peerReconnectLoop host port proposal chainDb (some discoveryRef) seenBlocks
+        catch e =>
+          IO.println s!"  ✗ Discovered peer {host}:{port}: {e}")
+    peerSpawnerLoop discoveryRef proposal chainDb seenBlocks maxPeers
 
 /-- Multi-peer relay node mode -/
 def relayNode (proposal : HandshakeMessage) (networkName : String) : IO Unit := do
@@ -941,48 +1082,53 @@ def relayNode (proposal : HandshakeMessage) (networkName : String) : IO Unit := 
     | "Preprod" => preprodBootstrapPeers
     | "Preview" => previewBootstrapPeers
     | _ => mainnetBootstrapPeers
-  let peerAddrs := bootstrapPeers
 
-  IO.println s!"  📡 Peer database: {peerAddrs.length} peers"
+  -- Add curated relay peers (from Cardano peer snapshot — real SPO relays)
+  let relayPeers := match networkName with
+    | "Mainnet" => mainnetRelayPeers
+    | _ => []  -- Only mainnet has curated relays for now
+  -- Merge: bootstrap peers + relay peers
+  let peerAddrs := bootstrapPeers ++ relayPeers
+
+  IO.println s!"  📡 Bootstrap peers: {bootstrapPeers.length}"
+  if relayPeers.length > 0 then
+    IO.println s!"  🌐 Relay peers (from peer snapshot): {relayPeers.length}"
+  IO.println s!"  📡 Total initial peers: {peerAddrs.length}"
+
+  -- Shared peer discovery state (plain data, safe across threads)
+  let discoveryRef ← IO.mkRef ({
+    discovered := []
+    known := peerAddrs
+  } : DiscoveryState)
+
+  -- Shared dedup: tracks block numbers already displayed, prevents duplicate output
+  let seenBlocksRef ← IO.mkRef (some ([] : List Nat))
 
   run do
     println ("".style)
     println (("=== Relay Node Active (Ctrl+C to stop) ===".style |> cyan |> bold))
 
+  -- Launch per-peer reconnect loops — each task owns its connection lifecycle
   let mut tasks : List (Task (Except IO.Error Unit)) := []
   for (host, port) in peerAddrs do
-    let addrStr := s!"{host}:{port}"
     let task ← IO.asTask (do
       try
-        -- Connect from within the task thread
-        match ← socket_connect host port with
-        | .error e => IO.println s!"  ✗ Peer {addrStr}: connection failed: {e}"
-        | .ok sock => do
-            -- Handshake
-            match ← sendHandshake sock proposal with
-            | .error e =>
-                socket_close sock
-                IO.println s!"  ✗ Peer {addrStr}: handshake failed: {e}"
-            | .ok _ => do
-                match ← socket_receive sock 1024 with
-                | .error e =>
-                    socket_close sock
-                    IO.println s!"  ✗ Peer {addrStr}: handshake recv failed: {e}"
-                | .ok rawData => do
-                    match decodeMuxFrame rawData >>= fun f => decodeHandshakeMessage f.payload with
-                    | none =>
-                        socket_close sock
-                        IO.println s!"  ✗ Peer {addrStr}: handshake decode failed"
-                    | some _ => do
-                        IO.println s!"  ▶ Peer {addrStr}: syncing..."
-                        peerSyncLoop sock addrStr chainDb
+        peerReconnectLoop host port proposal chainDb (some discoveryRef) (some seenBlocksRef)
       catch e =>
-        IO.println s!"  ✗ Peer {addrStr}: {e}")
+        IO.println s!"  ✗ Peer {host}:{port}: {e}")
     tasks := tasks ++ [task]
 
-  IO.println s!"\n  Syncing from {tasks.length} peers...\n"
+  -- Launch peer discovery spawner
+  let spawnerTask ← IO.asTask (do
+    try
+      peerSpawnerLoop discoveryRef proposal chainDb (some seenBlocksRef)
+    catch e =>
+      IO.println s!"  ✗ Peer spawner: {e}")
+  tasks := tasks ++ [spawnerTask]
 
-  -- Wait for all tasks (they run until connection lost)
+  IO.println s!"  Syncing from {peerAddrs.length} bootstrap peers (discovering more)...\n"
+
+  -- Wait for all tasks (they reconnect indefinitely until Ctrl+C)
   for task in tasks do
     let _ ← IO.wait task
 

@@ -35,6 +35,8 @@ import Cleanode.Config.Genesis
 import Cleanode.Storage.BlockStore
 import Cleanode.Storage.ImmutableDB
 import Cleanode.Storage.VolatileDB
+import Cleanode.Storage.Database
+import Cleanode.Storage.ChainDB
 
 -- Ledger
 import Cleanode.Ledger.UTxO

@@ -11,6 +11,8 @@ import Cleanode.Network.ConwayBlock
 import Cleanode.Network.Crypto
 import Cleanode.Network.Bech32
 import Cleanode.Storage.BlockStore
+import Cleanode.Storage.ChainDB
+import Cleanode.Storage.Database
 import Pigment
 
 open Cleanode.Network
@@ -26,6 +28,8 @@ open Cleanode.Network.Bech32
 open Cleanode.Network.BlockFetchClient
 open Cleanode.Network.ConwayBlock
 open Cleanode.Storage.BlockStore
+open Cleanode.Storage.ChainDB
+open Cleanode.Storage.Database
 open Pigment
 
 def testHandshake (host : String) (port : UInt16) : IO Unit := do
@@ -565,7 +569,7 @@ def displayBlock (header : Header) (tip : Tip) (blockPoint : Point) (blockBytes 
           txNum := txNum + 1
 
 /-- Fetch and display a block from a ChainSync RollForward header -/
-def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip) : IO Bool := do
+def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip) (chainDb : Option ChainDB := none) : IO Bool := do
   -- Extract the actual block point from the header (not the tip)
   -- The headerBytes is tag24-wrapped: d8 18 <bytestring>
   -- Block hash in Cardano = blake2b_256(content inside tag24 bytestring)
@@ -597,6 +601,14 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip) : IO Bool
       return false
   | .ok (some blockBytes) => do
       displayBlock header tip blockPoint blockBytes
+      -- Store block in SQLite if ChainDB is available
+      if let some cdb := chainDb then
+        let slot := blockPoint.slot.toNat
+        let blockNo := tip.blockNo.toNat
+        cdb.addBlock blockNo slot header.era blockHash blockPoint.hash header.headerBytes
+        cdb.addBlockBody blockNo blockBytes
+        cdb.saveSyncState slot blockNo blockHash
+        IO.println s!"  💾 Block #{blockNo} stored in chain.db"
       return true
 
 /-- Encode a KeepAlive response (MsgKeepAliveResponse) -/
@@ -653,7 +665,7 @@ partial def receiveChainSyncFrame (sock : Socket) : IO (Except String MuxFrame) 
                 return .ok { header := header, payload := payload }
 
 /-- Continuous sync loop: requests blocks via ChainSync + BlockFetch -/
-partial def syncLoop (sock : Socket) (blockCount : Nat) : IO Unit := do
+partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainDB := none) : IO Unit := do
   -- Request next block header
   match ← sendChainSync sock requestNext with
   | .error e =>
@@ -667,16 +679,16 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) : IO Unit := do
           | none => do
               IO.println "✗ Failed to decode ChainSync message"
           | some (.MsgRollForward header tip) => do
-              let ok ← fetchAndDisplayBlock sock header tip
+              let ok ← fetchAndDisplayBlock sock header tip chainDb
               if ok then
-                syncLoop sock (blockCount + 1)
+                syncLoop sock (blockCount + 1) chainDb
           | some (.MsgRollBackward rollbackPoint _) => do
               run do
                 concat [
                   ("↩ Rollback to slot ".style |> yellow),
                   (s!"{rollbackPoint.slot}".style |> yellow |> bold)
                 ]
-              syncLoop sock blockCount
+              syncLoop sock blockCount chainDb
           | some (.MsgAwaitReply) => do
               run do
                 concat [
@@ -690,24 +702,24 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) : IO Unit := do
               | .ok frame => do
                   match decodeChainSyncMessage frame.payload with
                   | some (.MsgRollForward header tip) => do
-                      let ok ← fetchAndDisplayBlock sock header tip
+                      let ok ← fetchAndDisplayBlock sock header tip chainDb
                       if ok then
-                        syncLoop sock (blockCount + 1)
+                        syncLoop sock (blockCount + 1) chainDb
                   | some (.MsgRollBackward rollbackPoint _) => do
                       run do
                         concat [
                           ("↩ Rollback to slot ".style |> yellow),
                           (s!"{rollbackPoint.slot}".style |> yellow |> bold)
                         ]
-                      syncLoop sock blockCount
+                      syncLoop sock blockCount chainDb
                   | some other => do
                       IO.println s!"Unexpected message: {repr other}"
-                      syncLoop sock blockCount
+                      syncLoop sock blockCount chainDb
                   | none =>
                       IO.println "✗ Failed to decode ChainSync message"
           | some other => do
               IO.println s!"Unexpected message: {repr other}"
-              syncLoop sock blockCount
+              syncLoop sock blockCount chainDb
 
 def testBlockFetch (host : String) (port : UInt16) (proposal : HandshakeMessage) (networkName : String) : IO Unit := run do
   -- println ((s!"Connecting to {host}:{port}...".style))
@@ -793,8 +805,13 @@ def testBlockFetch (host : String) (port : UInt16) (proposal : HandshakeMessage)
                                                       println ("".style)
                                                       println (("=== Following Chain Tip (Ctrl+C to stop) ===".style |> cyan |> bold))
 
+                                                      -- Open ChainDB for block storage
+                                                      let chainDb ← ChainDB.open {}
+                                                      IO.println "  💾 Chain database opened (data/chain.db)"
+
                                                       -- Enter continuous sync loop — will get MsgAwaitReply immediately
-                                                      syncLoop sock 0
+                                                      syncLoop sock 0 (some chainDb)
+                                                      chainDb.close
                                                       socket_close sock
                                                   | some other => do
                                                       IO.println s!"✗ Unexpected response: {repr other}"

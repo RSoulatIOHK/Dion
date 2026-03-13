@@ -726,7 +726,7 @@ partial def receiveChainSyncFrame (sock : Socket)
                 | some (.MsgRequestTxs _) =>
                     let _ ← sendTxSubmission2 sock (.MsgReplyTxs [])
                     pure ()
-                | _ => pure ()  -- MsgDone or decode failure
+                | _ => pure ()
                 receiveChainSyncFrame sock discoveryRef
               else if header.protocolId == .PeerSharing then
                 -- Handle PeerSharing responses inline (non-blocking)

@@ -95,23 +95,23 @@ def encodeTxSubmission2Message : TxSubmission2Message → ByteArray
       let reqEnc := encodeUInt req.toNat
       arr ++ msgId ++ blockingEnc ++ ackEnc ++ reqEnc
   | .MsgReplyTxIds txIds =>
+      -- Spec requires indefinite-length list for txIdsAndSizes
       let arr := encodeArrayHeader 2
       let msgId := encodeUInt 1
-      let idsArr := encodeArrayHeader txIds.length
       let idsEnc := txIds.foldl (fun acc id => acc ++ encodeTxId id) ⟨#[]⟩
-      arr ++ msgId ++ idsArr ++ idsEnc
+      arr ++ msgId ++ encodeIndefiniteArrayHeader ++ idsEnc ++ encodeBreak
   | .MsgRequestTxs txIds =>
+      -- Spec requires indefinite-length list for txIdList
       let arr := encodeArrayHeader 2
       let msgId := encodeUInt 2
-      let idsArr := encodeArrayHeader txIds.length
       let idsEnc := txIds.foldl (fun acc id => acc ++ encodeBytes id) ⟨#[]⟩
-      arr ++ msgId ++ idsArr ++ idsEnc
+      arr ++ msgId ++ encodeIndefiniteArrayHeader ++ idsEnc ++ encodeBreak
   | .MsgReplyTxs txs =>
+      -- Spec requires indefinite-length list for txList
       let arr := encodeArrayHeader 2
       let msgId := encodeUInt 3
-      let txsArr := encodeArrayHeader txs.length
       let txsEnc := txs.foldl (fun acc tx => acc ++ encodeBytes tx) ⟨#[]⟩
-      arr ++ msgId ++ txsArr ++ txsEnc
+      arr ++ msgId ++ encodeIndefiniteArrayHeader ++ txsEnc ++ encodeBreak
   | .MsgDone =>
       let arr := encodeArrayHeader 1
       let msgId := encodeUInt 4
@@ -164,9 +164,13 @@ def decodeTxSubmission2Message (bs : ByteArray) : Option TxSubmission2Message :=
   | 6 => if r1.value == 1 then some .MsgInit else none
   | 0 => do  -- MsgRequestTxIds
       if r1.value != 4 then none
-      let r3 ← decodeBool r2.remaining
-      let blocking := r3.value
-      let r4 ← decodeUInt r3.remaining
+      -- blocking field: try CBOR bool first, fall back to uint (0=false, 1=true)
+      let (blocking, afterBlocking) ← match decodeBool r2.remaining with
+        | some r3 => some (r3.value, r3.remaining)
+        | none => do
+            let r3 ← decodeUInt r2.remaining
+            some (r3.value != 0, r3.remaining)
+      let r4 ← decodeUInt afterBlocking
       let ack := UInt16.ofNat r4.value
       let r5 ← decodeUInt r4.remaining
       let req := UInt16.ofNat r5.value

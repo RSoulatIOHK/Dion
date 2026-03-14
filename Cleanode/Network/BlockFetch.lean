@@ -107,7 +107,7 @@ def encodeBlockFetchMessage : BlockFetchMessage → ByteArray
 -- ==============
 
 /-- Decode BlockFetch message -/
-partial def decodeBlockFetchMessage (bs : ByteArray) : Option (DecodeResult BlockFetchMessage) := do
+def decodeBlockFetchMessage (bs : ByteArray) : Option (DecodeResult BlockFetchMessage) := do
   let r1 ← decodeArrayHeader bs
   let r2 ← decodeUInt r1.remaining
 
@@ -151,7 +151,38 @@ structure BlockFetchReceiveResult where
   message : BlockFetchMessage
   leftoverBytes : ByteArray
 
-/-- Receive BlockFetch message from socket, handling multi-frame messages.
+/-- Encode a KeepAlive response and send it -/
+private def handleKeepAlive (sock : Socket) (payload : ByteArray) : IO Unit := do
+  -- MsgKeepAlive = [0, cookie], respond with MsgKeepAliveResponse = [1, cookie]
+  if payload.size >= 3 && payload[0]! == 0x82 && payload[1]! == 0x00 then
+    -- Replace the 0x00 (MsgKeepAlive tag) with 0x01 (MsgKeepAliveResponse tag)
+    let responsePayload := payload.set! 1 0x01
+    let frame ← createFrame .KeepAlive .Initiator responsePayload
+    let _ ← socket_send sock (encodeMuxFrame frame)
+    pure ()
+  else
+    pure ()
+
+/-- Read a single MUX frame from the socket, responding to KeepAlive transparently.
+    Returns the header and payload of the first non-KeepAlive frame. -/
+private partial def receiveMuxFrame (sock : Socket) : IO (Except SocketError (MuxHeader × ByteArray)) := do
+  match ← socket_receive_exact sock 8 with
+  | .error e => return .error e
+  | .ok headerBytes => do
+      match decodeMuxHeader headerBytes with
+      | none => return .error (SocketError.ReceiveFailed "Bad MUX header")
+      | some header => do
+          let payloadSize := header.payloadLength.toNat.toUInt32
+          match ← socket_receive_exact sock payloadSize with
+          | .error e => return .error e
+          | .ok payload =>
+              if header.protocolId == .KeepAlive then
+                handleKeepAlive sock payload
+                receiveMuxFrame sock
+              else
+                return .ok (header, payload)
+
+/-- Receive BlockFetch message from socket, handling multi-frame messages and KeepAlive.
     If leftoverBytes is provided, starts decoding from those bytes. -/
 def receiveBlockFetch (sock : Socket) (leftoverBytes : ByteArray := ⟨#[]⟩) (maxSize : UInt32 := 65535) : IO (Except SocketError (Option BlockFetchReceiveResult)) := do
   -- Start with leftover bytes from previous decode (if any)
@@ -163,54 +194,37 @@ def receiveBlockFetch (sock : Socket) (leftoverBytes : ByteArray := ⟨#[]⟩) (
     | some result => return .ok (some { message := result.value, leftoverBytes := result.remaining })
     | none => pure ()  -- Fall through to read more frames
 
-  -- Read first frame
-  match ← socket_receive sock 8 with
+  -- Read first frame (KeepAlive handled transparently)
+  match ← receiveMuxFrame sock with
   | .error e => return .error e
-  | .ok headerBytes => do
-      match decodeMuxHeader headerBytes with
-      | none => return .ok none
-      | some firstHeader => do
-          let payloadSize := firstHeader.payloadLength.toNat.toUInt32
-          if payloadSize > maxSize then return .ok none
+  | .ok (firstHeader, firstPayload) => do
+      let payloadSize := firstHeader.payloadLength.toNat.toUInt32
+      if payloadSize > maxSize then return .ok none
 
-          match ← socket_receive sock payloadSize with
-          | .error e => return .error e
-          | .ok firstPayload => do
-              completePayload := completePayload ++ firstPayload
+      completePayload := completePayload ++ firstPayload
 
-              -- Try to decode - if it succeeds, return it with leftover bytes
-              match decodeBlockFetchMessage completePayload with
-              | some result => return .ok (some { message := result.value, leftoverBytes := result.remaining })
-              | none => do
-                  -- Message incomplete - likely a multi-frame MsgBlock
-                  -- Keep reading frames from the same protocol and append payloads
-                  let targetProtocol := firstHeader.protocolId
+      -- Try to decode - if it succeeds, return it with leftover bytes
+      match decodeBlockFetchMessage completePayload with
+      | some result => return .ok (some { message := result.value, leftoverBytes := result.remaining })
+      | none => do
+          -- Message incomplete - likely a multi-frame MsgBlock
+          -- Keep reading frames until we can decode or hit limit
+          for _ in [0:100] do  -- Max 100 additional frames (blocks can be large)
+            match ← receiveMuxFrame sock with
+            | .error _ => break
+            | .ok (nextHeader, nextPayload) => do
+                if nextHeader.protocolId != .BlockFetch then break
 
-                  -- Read additional frames until we can decode or hit limit
-                  for _ in [0:10] do  -- Max 10 additional frames
-                    match ← socket_receive sock 8 with
-                    | .error _ => break
-                    | .ok nextHeaderBytes => do
-                        match decodeMuxHeader nextHeaderBytes with
-                        | none => break
-                        | some nextHeader => do
-                            if nextHeader.protocolId != targetProtocol then break
+                completePayload := completePayload ++ nextPayload
+                match decodeBlockFetchMessage completePayload with
+                | some result =>
+                    return .ok (some { message := result.value, leftoverBytes := result.remaining })
+                | none => continue
 
-                            let nextPayloadSize := nextHeader.payloadLength.toNat.toUInt32
-                            match ← socket_receive sock nextPayloadSize with
-                            | .error _ => break
-                            | .ok nextPayload => do
-                                completePayload := completePayload ++ nextPayload
-                                -- Try to decode again
-                                match decodeBlockFetchMessage completePayload with
-                                | some result =>
-                                    return .ok (some { message := result.value, leftoverBytes := result.remaining })
-                                | none => continue  -- Keep reading
-
-                  -- Final attempt to decode
-                  match decodeBlockFetchMessage completePayload with
-                  | some result => return .ok (some { message := result.value, leftoverBytes := result.remaining })
-                  | none => return .ok none
+          -- Final attempt to decode
+          match decodeBlockFetchMessage completePayload with
+          | some result => return .ok (some { message := result.value, leftoverBytes := result.remaining })
+          | none => return .ok none
 
 /-- Request a range of blocks (typically just one block at a time) -/
 def requestBlockRange (fromPoint : Point) (toPoint : Point) : BlockFetchMessage :=

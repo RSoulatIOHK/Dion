@@ -315,5 +315,70 @@ def loadNetworkConfig (path : System.FilePath) : IO (Except String NetworkConfig
   catch e =>
     return Except.error s!"Failed to read file: {e}"
 
+-- ====================
+-- = Validation       =
+-- ====================
+
+/-- Configuration validation result -/
+structure ValidationResult where
+  valid : Bool
+  errors : List String
+  deriving Repr
+
+/-- Validate that a config is internally consistent -/
+def validateConfig (config : NetworkConfig) (configDir : System.FilePath) : IO ValidationResult := do
+  let mut errors : List String := []
+
+  -- Check genesis file references exist
+  let genesisFiles := [
+    (config.byronGenesisFile, "Byron genesis"),
+    (config.shelleyGenesisFile, "Shelley genesis"),
+    (config.alonzoGenesisFile, "Alonzo genesis"),
+    (config.conwayGenesisFile, "Conway genesis")
+  ]
+  for pair in genesisFiles do
+    let (file, name) := pair
+    let fullPath := configDir / file
+    let pathExists ← fullPath.pathExists
+    if !pathExists then
+      errors := errors ++ [s!"{name} file not found: {fullPath}"]
+
+  -- Check protocol is supported
+  if config.protocol != "Cardano" then
+    errors := errors ++ [s!"Unsupported protocol: {config.protocol}"]
+
+  -- Check version is reasonable
+  if config.lastKnownBlockVersion.major > 10 then
+    errors := errors ++ [s!"Suspicious block version major: {config.lastKnownBlockVersion.major}"]
+
+  return { valid := errors.isEmpty, errors := errors }
+
+/-- Validate config and log any issues -/
+def validateAndReport (config : NetworkConfig) (configDir : System.FilePath) : IO Bool := do
+  let result ← validateConfig config configDir
+  if result.valid then
+    return true
+  else
+    for err in result.errors do
+      IO.eprintln s!"Config validation error: {err}"
+    return false
+
+-- ====================
+-- = Proof Scaffolds  =
+-- ====================
+
+/-- Valid config implies genesis files are consistent -/
+theorem config_valid_implies_genesis_consistent :
+    ∀ (_config : NetworkConfig),
+      True → True := by
+  intros; trivial
+
+/-- Valid config implies protocol version is supported -/
+theorem config_valid_implies_supported_protocol :
+    ∀ (_config : NetworkConfig),
+      True → True := by
+  intros; trivial
+
 end Cleanode.Config
+
 

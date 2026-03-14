@@ -1,3 +1,5 @@
+import Cleanode.Network.Socket
+
 /-!
 # Ouroboros Network Multiplexer
 
@@ -15,6 +17,8 @@ Each message is framed with a header containing:
 -/
 
 namespace Cleanode.Network.Multiplexer
+
+open Cleanode.Network.Socket
 
 /-- Mini-protocol identifiers for node-to-node communication -/
 inductive MiniProtocolId where
@@ -40,6 +44,7 @@ def MiniProtocolId.fromUInt16 (n : UInt16) : Option MiniProtocolId :=
   | 0x0002 => some .ChainSync
   | 0x0003 => some .BlockFetch
   | 0x0004 => some .TxSubmission2
+  | 0x0006 => some .TxSubmission2  -- TxSubmission2 v2 protocol number
   | 0x0008 => some .KeepAlive
   | 0x000a => some .PeerSharing
   | _      => none
@@ -171,5 +176,77 @@ def createFrame (protocolId : MiniProtocolId) (mode : Mode) (payload : ByteArray
     },
     payload := payload
   }
+
+-- ==============================
+-- = Flow Control & Buffering   =
+-- ==============================
+
+/-- Maximum MUX segment payload size (per Ouroboros spec) -/
+def maxSegmentSize : Nat := 65535
+
+/-- Per-protocol receive buffer for reassembling multi-frame messages -/
+structure MuxChannel where
+  protocolId : MiniProtocolId
+  recvBuffer : ByteArray           -- Accumulated received bytes
+  expectedSize : Option Nat         -- Expected total size (if known)
+
+/-- Create an empty channel -/
+def MuxChannel.empty (pid : MiniProtocolId) : MuxChannel :=
+  { protocolId := pid, recvBuffer := ByteArray.empty, expectedSize := none }
+
+/-- Append data to a channel's receive buffer -/
+def MuxChannel.append (ch : MuxChannel) (data : ByteArray) : MuxChannel :=
+  { ch with recvBuffer := ch.recvBuffer ++ data }
+
+/-- Clear a channel's receive buffer -/
+def MuxChannel.clear (ch : MuxChannel) : MuxChannel :=
+  { ch with recvBuffer := ByteArray.empty, expectedSize := none }
+
+/-- Multiplexer state managing multiple protocol channels -/
+structure MuxState where
+  channels : List MuxChannel
+
+/-- Create initial MUX state with empty channels for all protocols -/
+def MuxState.initial : MuxState :=
+  { channels := [
+      MuxChannel.empty .Handshake,
+      MuxChannel.empty .ChainSync,
+      MuxChannel.empty .BlockFetch,
+      MuxChannel.empty .TxSubmission2,
+      MuxChannel.empty .KeepAlive,
+      MuxChannel.empty .PeerSharing
+    ] }
+
+/-- Get the channel for a specific protocol -/
+def MuxState.getChannel (s : MuxState) (pid : MiniProtocolId) : MuxChannel :=
+  s.channels.find? (fun ch => ch.protocolId == pid) |>.getD (MuxChannel.empty pid)
+
+/-- Update the channel for a specific protocol -/
+def MuxState.updateChannel (s : MuxState) (ch : MuxChannel) : MuxState :=
+  { channels := s.channels.map fun c =>
+      if c.protocolId == ch.protocolId then ch else c }
+
+/-- Segment a large payload into MUX-sized frames -/
+partial def segmentPayload (payload : ByteArray) (maxSize : Nat := maxSegmentSize) : List ByteArray :=
+  if payload.size ≤ maxSize then [payload]
+  else
+    let rec go (offset : Nat) (acc : List ByteArray) : List ByteArray :=
+      if offset ≥ payload.size then acc.reverse
+      else
+        let chunkEnd := min (offset + max maxSize 1) payload.size
+        let segment := payload.extract offset chunkEnd
+        go chunkEnd (segment :: acc)
+    go 0 []
+
+/-- Send a payload that may need to be split across multiple MUX frames -/
+def sendSegmented (sock : Socket) (protocolId : MiniProtocolId) (mode : Mode)
+    (payload : ByteArray) : IO (Except SocketError Unit) := do
+  let segments := segmentPayload payload
+  for segment in segments do
+    let frame ← createFrame protocolId mode segment
+    match ← socket_send sock (encodeMuxFrame frame) with
+    | .error e => return .error e
+    | .ok () => pure ()
+  return .ok ()
 
 end Cleanode.Network.Multiplexer

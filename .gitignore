@@ -2,5 +2,7 @@
 /data/
 *.o
 *.a
+native/sqlite3.c
+native/sqlite3.h
 /PlutusCore/
 /test_except.lean

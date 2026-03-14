@@ -25,11 +25,28 @@ It provides a typed interface for communicating with Cardano peers.
 
 namespace Cleanode.Network
 
-/-- Known Cardano mainnet bootstrap peers -/
+/-- Known Cardano mainnet bootstrap peers (backbone infrastructure) -/
 def mainnetBootstrapPeers : List (String × UInt16) := [
   ("backbone.cardano.iog.io", 3001),
   ("backbone.mainnet.cardanofoundation.org", 3001),
   ("backbone.mainnet.emurgornd.com", 3001)
+]
+
+/-- Curated mainnet relay peers from Cardano peer snapshot.
+    These are real SPO relays sorted by stake, more likely to support PeerSharing.
+    Source: https://book.world.dev.cardano.org/environments/mainnet/peer-snapshot.json -/
+def mainnetRelayPeers : List (String × UInt16) := [
+  -- Top stake pool relays (from official Cardano peer snapshot)
+  ("relay-trustwallet-5-0.cardano.mainnet.kiln.fi", 3001),
+  ("relay-kiln-7-0.cardano.mainnet.kiln.fi", 3001),
+  ("relays.bladepool.com", 3001),
+  ("47.cardano.staked.cloud", 3001),
+  ("44.cardano.staked.cloud", 3001),
+  ("cf1r1.mainnet.pool.cardanofoundation.org", 3001),
+  ("cf1r2.mainnet.pool.cardanofoundation.org", 3001),
+  ("cf4r1.mainnet.pool.cardanofoundation.org", 3001),
+  ("gateway.adavault.com", 4021),
+  ("cardanosuisse.com", 170)
 ]
 
 /-- Known Cardano preprod bootstrap peers -/

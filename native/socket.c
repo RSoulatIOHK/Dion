@@ -1,18 +1,46 @@
 /*
  * TCP Socket FFI for Cleanode
  *
- * Provides POSIX socket functionality to Lean 4 via FFI
+ * Provides socket functionality to Lean 4 via FFI
+ * Supports both POSIX (Linux/macOS) and WinSock2 (Windows)
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netdb.h>
 #include <errno.h>
+
+#ifdef _WIN32
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #pragma comment(lib, "ws2_32.lib")
+  typedef int ssize_t;
+  #define CLOSESOCKET closesocket
+  static int wsa_initialized = 0;
+  static void ensure_wsa_init(void) {
+      if (!wsa_initialized) {
+          WSADATA wsaData;
+          WSAStartup(MAKEWORD(2, 2), &wsaData);
+          wsa_initialized = 1;
+      }
+  }
+  static const char* sock_strerror(void) {
+      static char buf[128];
+      int err = WSAGetLastError();
+      snprintf(buf, sizeof(buf), "WinSock error %d", err);
+      return buf;
+  }
+#else
+  #include <unistd.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <netdb.h>
+  #define CLOSESOCKET close
+  static void ensure_wsa_init(void) {}
+  static const char* sock_strerror(void) { return strerror(errno); }
+#endif
+
 #include <lean/lean.h>
 
 // Socket error constructors
@@ -79,6 +107,7 @@ static inline uint32_t socket_get_fd(lean_obj_arg sock) {
  * cleanode_socket_connect : String -> UInt16 -> IO (Except SocketError Socket)
  */
 lean_obj_res cleanode_socket_connect(lean_obj_arg host_obj, uint16_t port, lean_obj_arg world) {
+    ensure_wsa_init();
     const char* host = lean_string_cstr(host_obj);
 
     // Resolve hostname
@@ -112,7 +141,7 @@ lean_obj_res cleanode_socket_connect(lean_obj_arg host_obj, uint16_t port, lean_
             break; // Success
         }
 
-        close(sockfd);
+        CLOSESOCKET(sockfd);
         sockfd = -1;
     }
 
@@ -121,20 +150,15 @@ lean_obj_res cleanode_socket_connect(lean_obj_arg host_obj, uint16_t port, lean_
     if (sockfd == -1) {
         char err_msg[256];
         snprintf(err_msg, sizeof(err_msg), "Could not connect to %s:%u: %s",
-                 host, port, strerror(errno));
+                 host, port, sock_strerror());
         lean_object* err = mk_socket_error_connection_failed(lean_mk_string(err_msg));
         lean_object* except_err = mk_except_error(err);
         return lean_io_result_mk_ok(except_err);
     }
 
-    // Set default receive timeout (5 seconds)
-    struct timeval timeout;
-    timeout.tv_sec = 5;
-    timeout.tv_usec = 0;
-    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
-        // Non-fatal, just log
-        fprintf(stderr, "Warning: Failed to set socket timeout: %s\n", strerror(errno));
-    }
+    // No receive timeout — block indefinitely waiting for data.
+    // Cardano blocks arrive ~20s apart, and KeepAlive pings keep the connection alive.
+    // The user can Ctrl+C to stop.
 
     // Success!
     lean_object* socket = mk_socket((uint32_t)sockfd);
@@ -156,7 +180,7 @@ lean_obj_res cleanode_socket_send(lean_obj_arg sock_obj, lean_obj_arg data_obj, 
 
     if (sent < 0) {
         char err_msg[256];
-        snprintf(err_msg, sizeof(err_msg), "send: %s", strerror(errno));
+        snprintf(err_msg, sizeof(err_msg), "send: %s", sock_strerror());
         lean_object* err = mk_socket_error_send_failed(lean_mk_string(err_msg));
         lean_object* except_err = mk_except_error(err);
         return lean_io_result_mk_ok(except_err);
@@ -168,52 +192,195 @@ lean_obj_res cleanode_socket_send(lean_obj_arg sock_obj, lean_obj_arg data_obj, 
 }
 
 /*
- * Receive data from socket
+ * Receive UP TO max_bytes from socket (single recv call)
  * cleanode_socket_receive : Socket -> UInt32 -> IO (Except SocketError ByteArray)
  */
 lean_obj_res cleanode_socket_receive(lean_obj_arg sock_obj, uint32_t max_bytes, lean_obj_arg world) {
     int sockfd = (int)socket_get_fd(sock_obj);
 
-    // Allocate buffer
     uint8_t* buffer = malloc(max_bytes);
     if (!buffer) {
         lean_object* err = mk_socket_error_receive_failed(lean_mk_string("malloc failed"));
-        lean_object* except_err = mk_except_error(err);
-        return lean_io_result_mk_ok(except_err);
+        return lean_io_result_mk_ok(mk_except_error(err));
     }
 
-    // Receive up to max_bytes (return after first successful recv)
     ssize_t received = recv(sockfd, buffer, max_bytes, 0);
 
     if (received < 0) {
         free(buffer);
         char err_msg[256];
-        // Check if it's a timeout (EAGAIN or EWOULDBLOCK)
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            snprintf(err_msg, sizeof(err_msg), "recv timeout");
-        } else {
-            snprintf(err_msg, sizeof(err_msg), "recv: %s", strerror(errno));
-        }
+        snprintf(err_msg, sizeof(err_msg), "recv: %s", sock_strerror());
         lean_object* err = mk_socket_error_receive_failed(lean_mk_string(err_msg));
-        lean_object* except_err = mk_except_error(err);
-        return lean_io_result_mk_ok(except_err);
+        return lean_io_result_mk_ok(mk_except_error(err));
     }
 
     if (received == 0) {
-        // Connection closed by peer
         free(buffer);
         lean_object* err = mk_socket_error_receive_failed(lean_mk_string("connection closed by peer"));
-        lean_object* except_err = mk_except_error(err);
-        return lean_io_result_mk_ok(except_err);
+        return lean_io_result_mk_ok(mk_except_error(err));
     }
 
-    // Create ByteArray from received data
     lean_object* byte_array = lean_alloc_sarray(sizeof(uint8_t), received, received);
     memcpy(lean_sarray_cptr(byte_array), buffer, received);
     free(buffer);
+    return lean_io_result_mk_ok(mk_except_ok(byte_array));
+}
 
-    lean_object* except_ok = mk_except_ok(byte_array);
-    return lean_io_result_mk_ok(except_ok);
+/*
+ * Receive EXACTLY num_bytes from socket (loops until all received)
+ * cleanode_socket_receive_exact : Socket -> UInt32 -> IO (Except SocketError ByteArray)
+ */
+lean_obj_res cleanode_socket_receive_exact(lean_obj_arg sock_obj, uint32_t num_bytes, lean_obj_arg world) {
+    int sockfd = (int)socket_get_fd(sock_obj);
+
+    uint8_t* buffer = malloc(num_bytes);
+    if (!buffer) {
+        lean_object* err = mk_socket_error_receive_failed(lean_mk_string("malloc failed"));
+        return lean_io_result_mk_ok(mk_except_error(err));
+    }
+
+    size_t total_received = 0;
+    while (total_received < num_bytes) {
+        ssize_t received = recv(sockfd, buffer + total_received, num_bytes - total_received, 0);
+
+        if (received < 0) {
+            free(buffer);
+            char err_msg[256];
+            snprintf(err_msg, sizeof(err_msg), "recv: %s", sock_strerror());
+            lean_object* err = mk_socket_error_receive_failed(lean_mk_string(err_msg));
+            return lean_io_result_mk_ok(mk_except_error(err));
+        }
+
+        if (received == 0) {
+            free(buffer);
+            lean_object* err = mk_socket_error_receive_failed(lean_mk_string("connection closed by peer"));
+            return lean_io_result_mk_ok(mk_except_error(err));
+        }
+
+        total_received += received;
+    }
+
+    lean_object* byte_array = lean_alloc_sarray(sizeof(uint8_t), total_received, total_received);
+    memcpy(lean_sarray_cptr(byte_array), buffer, total_received);
+    free(buffer);
+    return lean_io_result_mk_ok(mk_except_ok(byte_array));
+}
+
+/*
+ * Resolve hostname to all IP addresses (DNS discovery)
+ * cleanode_dns_resolve : String -> IO (Array String)
+ */
+lean_obj_res cleanode_dns_resolve(lean_obj_arg host_obj, lean_obj_arg world) {
+    ensure_wsa_init();
+    const char* host = lean_string_cstr(host_obj);
+
+    struct addrinfo hints, *result, *rp;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;       // IPv4 only for simplicity
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    int status = getaddrinfo(host, NULL, &hints, &result);
+    if (status != 0) {
+        // Return empty array on failure
+        lean_object* arr = lean_alloc_array(0, 0);
+        return lean_io_result_mk_ok(arr);
+    }
+
+    // Count unique addresses
+    char addrs[64][INET_ADDRSTRLEN];
+    int count = 0;
+    for (rp = result; rp != NULL && count < 64; rp = rp->ai_next) {
+        struct sockaddr_in* addr = (struct sockaddr_in*)rp->ai_addr;
+        const char* ip = inet_ntoa(addr->sin_addr);
+        // Check for duplicates
+        int dup = 0;
+        for (int i = 0; i < count; i++) {
+            if (strcmp(addrs[i], ip) == 0) { dup = 1; break; }
+        }
+        if (!dup) {
+            strncpy(addrs[count], ip, INET_ADDRSTRLEN);
+            count++;
+        }
+    }
+    freeaddrinfo(result);
+
+    lean_object* arr = lean_alloc_array(count, count);
+    for (int i = 0; i < count; i++) {
+        lean_array_set_core(arr, i, lean_mk_string(addrs[i]));
+    }
+    return lean_io_result_mk_ok(arr);
+}
+
+
+/*
+ * Create a listening socket on the given port (dual-stack IPv4+IPv6)
+ * cleanode_socket_listen : UInt16 -> IO (Except SocketError Socket)
+ */
+lean_obj_res cleanode_socket_listen(uint16_t port, lean_obj_arg world) {
+    ensure_wsa_init();
+
+    int sockfd = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+    if (sockfd == -1) {
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg), "socket: %s", sock_strerror());
+        lean_object* err = mk_socket_error_connection_failed(lean_mk_string(err_msg));
+        return lean_io_result_mk_ok(mk_except_error(err));
+    }
+
+    // Allow port reuse
+    int optval = 1;
+    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&optval, sizeof(optval));
+
+    // Accept both IPv4 and IPv6 connections
+    int v6only = 0;
+    setsockopt(sockfd, IPPROTO_IPV6, IPV6_V6ONLY, (const char*)&v6only, sizeof(v6only));
+
+    struct sockaddr_in6 addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin6_family = AF_INET6;
+    addr.sin6_port = htons(port);
+    addr.sin6_addr = in6addr_any;
+
+    if (bind(sockfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg), "bind port %u: %s", port, sock_strerror());
+        CLOSESOCKET(sockfd);
+        lean_object* err = mk_socket_error_connection_failed(lean_mk_string(err_msg));
+        return lean_io_result_mk_ok(mk_except_error(err));
+    }
+
+    if (listen(sockfd, 128) != 0) {
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg), "listen: %s", sock_strerror());
+        CLOSESOCKET(sockfd);
+        lean_object* err = mk_socket_error_connection_failed(lean_mk_string(err_msg));
+        return lean_io_result_mk_ok(mk_except_error(err));
+    }
+
+    lean_object* socket = mk_socket((uint32_t)sockfd);
+    return lean_io_result_mk_ok(mk_except_ok(socket));
+}
+
+/*
+ * Accept one connection from a listening socket
+ * cleanode_socket_accept : Socket -> IO (Except SocketError Socket)
+ */
+lean_obj_res cleanode_socket_accept(lean_obj_arg sock_obj, lean_obj_arg world) {
+    int listenfd = (int)socket_get_fd(sock_obj);
+
+    struct sockaddr_in6 client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+    int clientfd = accept(listenfd, (struct sockaddr*)&client_addr, &addr_len);
+    if (clientfd == -1) {
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg), "accept: %s", sock_strerror());
+        lean_object* err = mk_socket_error_connection_failed(lean_mk_string(err_msg));
+        return lean_io_result_mk_ok(mk_except_error(err));
+    }
+
+    lean_object* socket = mk_socket((uint32_t)clientfd);
+    return lean_io_result_mk_ok(mk_except_ok(socket));
 }
 
 /*
@@ -222,6 +389,6 @@ lean_obj_res cleanode_socket_receive(lean_obj_arg sock_obj, uint32_t max_bytes, 
  */
 lean_obj_res cleanode_socket_close(lean_obj_arg sock_obj, lean_obj_arg world) {
     int sockfd = (int)socket_get_fd(sock_obj);
-    close(sockfd);
+    CLOSESOCKET(sockfd);
     return lean_io_result_mk_ok(lean_box(0));
 }

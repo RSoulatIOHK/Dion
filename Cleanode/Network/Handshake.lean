@@ -229,7 +229,7 @@ partial def decodeHandshakeMessage (bs : ByteArray) : Option HandshakeMessage :=
 def createProposal (network : NetworkMagic) : HandshakeMessage :=
   let versionData : VersionData := {
     networkMagic := network,
-    initiatorAndResponderDiffusionMode := false,  -- False = full duplex (both initiator and responder)
+    initiatorAndResponderDiffusionMode := true,  -- True = InitiatorAndResponder (both directions)
     peerSharing := 1,  -- 1 = engage in peer sharing
     query := false
   }

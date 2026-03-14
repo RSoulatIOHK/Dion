@@ -44,6 +44,7 @@ def MiniProtocolId.fromUInt16 (n : UInt16) : Option MiniProtocolId :=
   | 0x0002 => some .ChainSync
   | 0x0003 => some .BlockFetch
   | 0x0004 => some .TxSubmission2
+  | 0x0006 => some .TxSubmission2  -- TxSubmission2 v2 protocol number
   | 0x0008 => some .KeepAlive
   | 0x000a => some .PeerSharing
   | _      => none

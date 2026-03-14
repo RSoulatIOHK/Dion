@@ -186,4 +186,40 @@ def Mempool.stats (pool : Mempool) (currentTimeMs : Nat) : MempoolStats :=
     totalBytes := pool.totalBytes
     oldestAge := oldestAge }
 
+/-- Add a raw transaction to mempool from peer relay (skip ledger validation).
+    Peers already validated — we just dedup and check capacity. -/
+def Mempool.addTxRaw (pool : Mempool) (rawBytes : ByteArray) (nowMs : Nat)
+    : IO (Except String Mempool) := do
+  let txHash ← blake2b_256 rawBytes
+  if pool.contains txHash then return .ok pool  -- Already have it
+  if pool.entries.length >= pool.config.maxSize then return .error "mempool full"
+  if pool.totalBytes + rawBytes.size > pool.config.maxBytes then return .error "mempool byte limit"
+  let entry : MempoolEntry := {
+    txHash := txHash
+    transaction := { body := { inputs := [], outputs := [], fee := 0, rawBytes := rawBytes }, witnesses := { redeemers := [] } }
+    rawBytes := rawBytes
+    addedAt := nowMs
+    size := rawBytes.size
+  }
+  return .ok {
+    entries := pool.entries ++ [entry]
+    totalBytes := pool.totalBytes + rawBytes.size
+    config := pool.config
+  }
+
+/-- Per-peer TxSubmission2 sliding window state.
+    Tracks which txs have been announced to this peer. -/
+structure TxSubmPeerState where
+  announcedTxIds : List ByteArray
+
+def TxSubmPeerState.empty : TxSubmPeerState :=
+  { announcedTxIds := [] }
+
+/-- Get tx IDs not yet announced to a specific peer, up to `count` -/
+def Mempool.getNewTxIds (pool : Mempool) (announced : List ByteArray) (count : Nat) : List TxId :=
+  let fresh := pool.entries.filter fun e =>
+    !announced.any (· == e.txHash)
+  (fresh.take count).map fun e =>
+    { hash := e.txHash, size := UInt32.ofNat e.size }
+
 end Cleanode.Network.Mempool

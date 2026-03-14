@@ -57,6 +57,13 @@ import Cleanode.Ledger.Snapshot
 -- Tests
 import Cleanode.Test.CryptoTest
 
+-- TUI
+import Cleanode.TUI.Ansi
+import Cleanode.TUI.State
+import Cleanode.TUI.Art
+import Cleanode.TUI.Layout
+import Cleanode.TUI.Render
+
 -- Proofs
 import Cleanode.Proofs.CborProofs
 import Cleanode.Proofs.SocketProofs

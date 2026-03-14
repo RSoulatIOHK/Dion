@@ -314,6 +314,76 @@ lean_obj_res cleanode_dns_resolve(lean_obj_arg host_obj, lean_obj_arg world) {
 
 
 /*
+ * Create a listening socket on the given port (dual-stack IPv4+IPv6)
+ * cleanode_socket_listen : UInt16 -> IO (Except SocketError Socket)
+ */
+lean_obj_res cleanode_socket_listen(uint16_t port, lean_obj_arg world) {
+    ensure_wsa_init();
+
+    int sockfd = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+    if (sockfd == -1) {
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg), "socket: %s", sock_strerror());
+        lean_object* err = mk_socket_error_connection_failed(lean_mk_string(err_msg));
+        return lean_io_result_mk_ok(mk_except_error(err));
+    }
+
+    // Allow port reuse
+    int optval = 1;
+    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&optval, sizeof(optval));
+
+    // Accept both IPv4 and IPv6 connections
+    int v6only = 0;
+    setsockopt(sockfd, IPPROTO_IPV6, IPV6_V6ONLY, (const char*)&v6only, sizeof(v6only));
+
+    struct sockaddr_in6 addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin6_family = AF_INET6;
+    addr.sin6_port = htons(port);
+    addr.sin6_addr = in6addr_any;
+
+    if (bind(sockfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg), "bind port %u: %s", port, sock_strerror());
+        CLOSESOCKET(sockfd);
+        lean_object* err = mk_socket_error_connection_failed(lean_mk_string(err_msg));
+        return lean_io_result_mk_ok(mk_except_error(err));
+    }
+
+    if (listen(sockfd, 128) != 0) {
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg), "listen: %s", sock_strerror());
+        CLOSESOCKET(sockfd);
+        lean_object* err = mk_socket_error_connection_failed(lean_mk_string(err_msg));
+        return lean_io_result_mk_ok(mk_except_error(err));
+    }
+
+    lean_object* socket = mk_socket((uint32_t)sockfd);
+    return lean_io_result_mk_ok(mk_except_ok(socket));
+}
+
+/*
+ * Accept one connection from a listening socket
+ * cleanode_socket_accept : Socket -> IO (Except SocketError Socket)
+ */
+lean_obj_res cleanode_socket_accept(lean_obj_arg sock_obj, lean_obj_arg world) {
+    int listenfd = (int)socket_get_fd(sock_obj);
+
+    struct sockaddr_in6 client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+    int clientfd = accept(listenfd, (struct sockaddr*)&client_addr, &addr_len);
+    if (clientfd == -1) {
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg), "accept: %s", sock_strerror());
+        lean_object* err = mk_socket_error_connection_failed(lean_mk_string(err_msg));
+        return lean_io_result_mk_ok(mk_except_error(err));
+    }
+
+    lean_object* socket = mk_socket((uint32_t)clientfd);
+    return lean_io_result_mk_ok(mk_except_ok(socket));
+}
+
+/*
  * Close socket
  * cleanode_socket_close : Socket -> IO Unit
  */

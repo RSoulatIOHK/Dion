@@ -62,6 +62,14 @@ opaque socket_receive_exact (sock : @& Socket) (numBytes : @& UInt32) : IO (Exce
 @[extern "cleanode_socket_close"]
 opaque socket_close (sock : @& Socket) : IO Unit
 
+/-- Create a listening socket on the given port (dual-stack IPv4+IPv6) -/
+@[extern "cleanode_socket_listen"]
+opaque socket_listen (port : @& UInt16) : IO (Except SocketError Socket)
+
+/-- Accept one connection from a listening socket -/
+@[extern "cleanode_socket_accept"]
+opaque socket_accept (listenSock : @& Socket) : IO (Except SocketError Socket)
+
 /-- Resolve hostname to all IP addresses via DNS -/
 @[extern "cleanode_dns_resolve"]
 opaque dns_resolve (host : @& String) : IO (Array String)

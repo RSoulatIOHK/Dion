@@ -194,10 +194,17 @@ def decodeTxSubmission2Message (bs : ByteArray) : Option TxSubmission2Message :=
 -- = Client API =
 -- ==============
 
-/-- Send TxSubmission2 message over socket -/
+/-- Send TxSubmission2 message as initiator (client role — responding to peer requests) -/
 def sendTxSubmission2 (sock : Socket) (msg : TxSubmission2Message) : IO (Except SocketError Unit) := do
   let payload := encodeTxSubmission2Message msg
   let frame ← createFrame .TxSubmission2 .Initiator payload
+  let frameBytes := encodeMuxFrame frame
+  socket_send sock frameBytes
+
+/-- Send TxSubmission2 message as responder (server role — we request txs from peer) -/
+def sendTxSubmission2Responder (sock : Socket) (msg : TxSubmission2Message) : IO (Except SocketError Unit) := do
+  let payload := encodeTxSubmission2Message msg
+  let frame ← createFrame .TxSubmission2 .Responder payload
   let frameBytes := encodeMuxFrame frame
   socket_send sock frameBytes
 

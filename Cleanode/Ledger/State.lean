@@ -112,12 +112,27 @@ def DelegationState.delegate (s : DelegationState) (stakeKeyHash poolId : ByteAr
   let filtered := s.delegations.filter (fun d => d.stakeKeyHash != stakeKeyHash)
   { s with delegations := { stakeKeyHash := stakeKeyHash, poolId := poolId } :: filtered }
 
-/-- Get total stake delegated to a pool -/
+/-- Extract stake key hash from a Shelley base address (types 0x00-0x1F).
+    Returns the 28-byte stake credential hash, or none for non-base addresses. -/
+private def extractStakeKeyHash (address : ByteArray) : Option ByteArray :=
+  if address.size < 57 then none
+  else
+    -- Base addresses have header type 0x0_ or 0x1_ (bits 4-7 of first byte = 0 or 1)
+    let headerType := address[0]! >>> 4
+    if headerType == 0 || headerType == 1 then
+      -- 1-byte header + 28-byte payment credential + 28-byte stake credential
+      some (address.extract 29 57)
+    else none
+
+/-- Get total stake delegated to a pool by summing UTxO values
+    for addresses whose stake credential is delegated to this pool -/
 def DelegationState.poolStake (s : DelegationState) (poolId : ByteArray) (utxo : UTxOSet) : Nat :=
   let delegators := s.delegations.filter (fun d => d.poolId == poolId) |>.map (·.stakeKeyHash)
-  -- Simplified: count UTxO value for delegator addresses
-  -- In reality, this maps stake key hashes to addresses via reward accounts
-  utxo.entries.foldl (fun acc _ => acc) 0  -- Placeholder
+  utxo.entries.foldl (fun acc entry =>
+    match extractStakeKeyHash entry.output.address with
+    | some stakeHash => if delegators.any (· == stakeHash) then acc + entry.output.amount else acc
+    | none => acc
+  ) 0
 
 -- ====================
 -- = Protocol Params  =

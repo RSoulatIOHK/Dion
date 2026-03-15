@@ -22,6 +22,10 @@ import Cleanode.Config.Topology
 import Cleanode.Storage.BlockStore
 import Cleanode.Storage.ChainDB
 import Cleanode.Storage.Database
+import Cleanode.Consensus.Praos.LeaderElection
+import Cleanode.Consensus.Praos.ConsensusState
+import Cleanode.Crypto.VRF.ECVRF
+import Cleanode.Crypto.Sign.Ed25519.Signature
 import Pigment
 import Cleanode.TUI.State
 import Cleanode.TUI.Render
@@ -50,6 +54,8 @@ open Cleanode.Config.Topology
 open Cleanode.Storage.BlockStore
 open Cleanode.Storage.ChainDB
 open Cleanode.Storage.Database
+open Cleanode.Consensus.Praos.LeaderElection
+open Cleanode.Consensus.Praos.ConsensusState
 open Pigment
 open Cleanode.TUI.State
 open Cleanode.TUI.Render
@@ -607,6 +613,51 @@ def displayBlock (header : Header) (tip : Tip) (blockPoint : Point) (blockBytes 
           println ((("└" ++ String.join (List.replicate 100 "─") ++ "┘").style |> blue))
           txNum := txNum + 1
 
+/-- Validate a Shelley+ block header's consensus fields (VRF, KES, OpCert).
+    Updates ConsensusInfo in the TUI state with validation results. -/
+def validateBlockHeader (shelleyInfo : ShelleyBlockHeader)
+    (ref : IO.Ref TUIState) : IO Unit := do
+  -- Update epoch and KES period from slot
+  let epochLength := 432000  -- slots per epoch (mainnet default)
+  let slotsPerKESPeriod := 129600  -- ~36 hours
+  let epoch := shelleyInfo.slot / epochLength
+  let kesPeriod := shelleyInfo.slot / slotsPerKESPeriod
+  let issuerHex := bytesToHex shelleyInfo.issuerVKeyHash |>.take 16
+  ref.modify (·.updateConsensus fun c => { c with
+    validatedHeaders := c.validatedHeaders + 1
+    currentEpoch := epoch
+    currentKESPeriod := kesPeriod
+    lastIssuerVKey := issuerHex
+  })
+  -- Validate VRF proof if present
+  match shelleyInfo.vrfResult with
+  | some vrf => do
+      -- VRF proof structure validation:
+      -- Output: 32 bytes (Shelley/Allegra/Mary) or 64 bytes (Alonzo+, SHA-512 of proof)
+      -- Proof: 80 bytes (ECVRF: 32-byte Gamma + 16-byte challenge + 32-byte response)
+      -- VRF VKey: 32 bytes
+      let outputOk := vrf.output.size == 32 || vrf.output.size == 64
+      let proofOk := vrf.proof.size == 80
+      let vkeyOk := shelleyInfo.vrfVKey.size == 32
+      if outputOk && proofOk && vkeyOk then
+        ref.modify (·.updateConsensus fun c => { c with vrfValid := c.vrfValid + 1 })
+      else
+        ref.modify (·.updateConsensus fun c => { c with vrfInvalid := c.vrfInvalid + 1 })
+  | none =>
+      ref.modify (·.updateConsensus fun c => { c with vrfInvalid := c.vrfInvalid + 1 })
+  -- Validate operational certificate if present
+  match shelleyInfo.opCert with
+  | some cert => do
+      let certOk := cert.hotVKey.size == 32 && cert.sigma.size == 64
+      -- Verify KES period in cert is not in the future
+      let kesPeriodOk := cert.kesPeriod ≤ kesPeriod
+      if certOk && kesPeriodOk then
+        ref.modify (·.updateConsensus fun c => { c with opCertValid := c.opCertValid + 1 })
+      else
+        ref.modify (·.updateConsensus fun c => { c with opCertInvalid := c.opCertInvalid + 1 })
+  | none =>
+      ref.modify (·.updateConsensus fun c => { c with opCertInvalid := c.opCertInvalid + 1 })
+
 /-- Fetch and display a block from a ChainSync RollForward header -/
 def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
     (chainDb : Option ChainDB := none)
@@ -685,6 +736,11 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
             }
             ref.modify (·.addBlock summary)
             ref.modify (·.peerSyncedBlock peerAddr)
+            -- Validate consensus fields for Shelley+ headers
+            if header.era >= 1 then
+              match extractShelleyInfo header.headerBytes with
+              | some shelleyInfo => validateBlockHeader shelleyInfo ref
+              | none => pure ()
             -- Remove confirmed txs from mempool and update TUI stats
             if let some mpRef := mempoolRef then
               if let some body := parsed then

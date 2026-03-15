@@ -143,7 +143,7 @@ def renderBlockPanel (blocks : List BlockSummary) (width : Nat) (height : Nat) :
 -- = Mempool Panel        =
 -- ========================
 
-/-- Render the mempool panel (right side) -/
+/-- Render the mempool + consensus panel (right side) -/
 def renderMempoolPanel (state : TUIState) (width : Nat) (height : Nat) : List String :=
   let title := s!"{Ansi.brightCyan}{Ansi.bold}  MEMPOOL{Ansi.reset}"
   let divider := s!"{Ansi.dim}  {hline '─' (width - 6)}{Ansi.reset}"
@@ -162,9 +162,23 @@ def renderMempoolPanel (state : TUIState) (width : Nat) (height : Nat) : List St
   let emptyMsg := if state.mempoolTxCount == 0 then
     s!"{Ansi.dim}  (empty mempool — no txs to relay){Ansi.reset}"
   else ""
-  let lines := [title, divider, statsLine, bar, emptyMsg]
+  -- Consensus section
+  let c : ConsensusInfo := state.consensus
+  let consTitle := s!"{Ansi.brightCyan}{Ansi.bold}  CONSENSUS{Ansi.reset}"
+  let consDivider := s!"{Ansi.dim}  {hline '─' (width - 6)}{Ansi.reset}"
+  let epochLine := s!"{Ansi.white}  Epoch: {Ansi.brightYellow}{c.currentEpoch}{Ansi.reset}" ++
+    s!"{Ansi.dim}  KES Period: {Ansi.reset}{Ansi.cyan}{c.currentKESPeriod}{Ansi.reset}"
+  let vrfLine := s!"{Ansi.white}  VRF: {Ansi.brightGreen}{c.vrfValid}{Ansi.reset}{Ansi.dim} valid{Ansi.reset}" ++
+    (if c.vrfInvalid > 0 then s!"{Ansi.dim} / {Ansi.reset}{Ansi.red}{c.vrfInvalid} invalid{Ansi.reset}" else "")
+  let opCertLine := s!"{Ansi.white}  OpCert: {Ansi.brightGreen}{c.opCertValid}{Ansi.reset}{Ansi.dim} valid{Ansi.reset}" ++
+    (if c.opCertInvalid > 0 then s!"{Ansi.dim} / {Ansi.reset}{Ansi.red}{c.opCertInvalid} invalid{Ansi.reset}" else "")
+  let issuerLine := if c.lastIssuerVKey.length > 0 then
+    s!"{Ansi.dim}  Issuer: {c.lastIssuerVKey}...{Ansi.reset}"
+  else ""
+  let lines := [title, divider, statsLine, bar, emptyMsg, "",
+                consTitle, consDivider, epochLine, vrfLine, opCertLine, issuerLine]
   -- Pad to fill height
-  lines ++ List.replicate (height - lines.length) ""
+  lines ++ List.replicate (max 0 (height - lines.length)) ""
 
 -- ========================
 -- = Peers Panel          =

@@ -1,4 +1,5 @@
 import Cleanode.Network.Crypto
+import Cleanode.Crypto.Sign.Ed25519.Signature
 
 /-!
 # Cryptographic Primitives Interfaces
@@ -9,6 +10,7 @@ primitives required by the Cardano node: Ed25519, VRF, and KES.
 ## Ed25519
 Digital signature scheme used for transaction signing and verification.
 Ed25519 provides 128-bit security with 32-byte public keys and 64-byte signatures.
+Verification uses a pure Lean implementation (from Cryptograph library).
 
 ## VRF (Verifiable Random Function)
 Used in Ouroboros Praos for slot leader election. A VRF produces a
@@ -64,10 +66,11 @@ structure Ed25519Signature where
   bytes : ByteArray       -- 64 bytes
   deriving BEq
 
-/-- Verify an Ed25519 signature -/
-@[extern "cleanode_ed25519_verify"]
-opaque ed25519_verify (publicKey : @& ByteArray) (message : @& ByteArray)
-    (signature : @& ByteArray) : IO Bool
+/-- Verify an Ed25519 signature (pure Lean implementation) -/
+def ed25519_verify (publicKey : ByteArray) (message : ByteArray)
+    (signature : ByteArray) : IO Bool :=
+  return Cleanode.Crypto.Sign.Ed25519.Signature.verify
+    publicKey.toList message.toList signature.toList
 
 /-- Sign a message with Ed25519 (for testing) -/
 @[extern "cleanode_ed25519_sign"]

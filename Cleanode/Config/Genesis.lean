@@ -80,11 +80,17 @@ structure ShelleyProtocolParams where
   decentralisationParam : Float     -- Decentralisation parameter (0.0 = fully decentralised)
   deriving Repr
 
+/-- Rational number for deterministic arithmetic (numerator / denominator) -/
+structure Rational where
+  numerator : Nat
+  denominator : Nat
+  deriving Repr
+
 /-- Shelley genesis essential parameters -/
 structure ShelleyGenesis where
   epochLength : Nat                 -- Slots per epoch
   slotLength : Nat                  -- Slot duration in seconds (typically 1)
-  activeSlotsCoeff : Float          -- Active slots coefficient (typically 0.05)
+  activeSlotsCoeff : Rational       -- Active slots coefficient (typically 1/20 = 0.05)
   securityParam : Nat               -- k: security parameter
   maxLovelaceSupply : Nat           -- Maximum ADA supply in lovelace
   networkMagic : Nat                -- Network identifier
@@ -118,8 +124,21 @@ def parseShelleyGenesis (j : Json) : Option ShelleyGenesis := do
   let networkMagic ← (j.getObjValAs? Nat "networkMagic").toOption
   let networkId ← (j.getObjValAs? String "networkId").toOption
 
-  -- activeSlotsCoeff is a fraction, parse as float
-  let activeSlotsCoeff : Float := 0.05  -- Default, TODO: parse from JSON
+  -- activeSlotsCoeff: parse as rational from JSON number (e.g. 0.05 = 5/100 = 1/20)
+  let activeSlotsCoeff : Rational := match j.getObjVal? "activeSlotsCoeff" with
+    | .ok (Json.num n) =>
+      -- Scientific notation: n is a JsonNumber with mantissa and exponent
+      -- Convert to rational: for 0.05 we get mantissa=5, exponent=-2 → 5/100 = 1/20
+      let s := toString n
+      match s.splitOn "." with
+      | [whole, frac] =>
+        let denom := 10 ^ frac.length
+        let num := (whole ++ frac).toNat!
+        let g := Nat.gcd num denom
+        { numerator := num / g, denominator := denom / g }
+      | [whole] => { numerator := whole.toNat!, denominator := 1 }
+      | _ => { numerator := 1, denominator := 20 }  -- default 0.05
+    | _ => { numerator := 1, denominator := 20 }  -- default 0.05
 
   let protocolParams := match j.getObjVal? "protocolParams" with
     | .ok pp => parseShelleyProtocolParams pp

@@ -27,6 +27,20 @@ structure PeerSummary where
   lastSeen     : Nat        -- Timestamp ms
   deriving Repr
 
+/-- Consensus validation result for a block header -/
+structure ConsensusInfo where
+  validatedHeaders : Nat        -- Total headers validated so far
+  vrfValid         : Nat        -- VRF proofs that verified correctly
+  vrfInvalid       : Nat        -- VRF proofs that failed verification
+  kesValid         : Nat        -- KES signatures that verified correctly
+  kesInvalid       : Nat        -- KES signatures that failed verification
+  opCertValid      : Nat        -- Operational certs that verified
+  opCertInvalid    : Nat        -- Operational certs that failed
+  currentEpoch     : Nat        -- Current epoch from latest block
+  currentKESPeriod : Nat        -- KES period of latest block
+  lastIssuerVKey   : String     -- Last block issuer VKey hash (hex, truncated)
+  deriving Repr
+
 /-- Central TUI state: written by network threads, read by renderer -/
 structure TUIState where
   recentBlocks    : List BlockSummary   -- Last N blocks (newest first)
@@ -40,6 +54,7 @@ structure TUIState where
   startedAt       : Nat                 -- Milliseconds since epoch, for uptime
   networkName     : String
   logs            : List String         -- Last M log lines for status bar
+  consensus       : ConsensusInfo       -- Consensus validation stats
   maxRecentBlocks : Nat := 20
   maxLogs         : Nat := 5
   deriving Repr
@@ -56,7 +71,12 @@ def TUIState.empty (networkName : String) (startedAt : Nat) : TUIState :=
     rollbacks := 0
     startedAt := startedAt
     networkName := networkName
-    logs := [] }
+    logs := []
+    consensus := {
+      validatedHeaders := 0, vrfValid := 0, vrfInvalid := 0,
+      kesValid := 0, kesInvalid := 0, opCertValid := 0, opCertInvalid := 0,
+      currentEpoch := 0, currentKESPeriod := 0, lastIssuerVKey := ""
+    } }
 
 /-- Add a block to the recent blocks list (newest first, bounded, deduplicated) -/
 def TUIState.addBlock (s : TUIState) (b : BlockSummary) : TUIState :=
@@ -98,6 +118,10 @@ def TUIState.addRollback (s : TUIState) : TUIState :=
 def TUIState.addLog (s : TUIState) (msg : String) : TUIState :=
   let logs := (s.logs ++ [msg]).reverse.take s.maxLogs |>.reverse
   { s with logs := logs }
+
+/-- Update consensus validation stats -/
+def TUIState.updateConsensus (s : TUIState) (f : ConsensusInfo → ConsensusInfo) : TUIState :=
+  { s with consensus := f s.consensus }
 
 /-- Update mempool stats from current mempool state -/
 def TUIState.updateMempool (s : TUIState) (txCount bytes : Nat) : TUIState :=

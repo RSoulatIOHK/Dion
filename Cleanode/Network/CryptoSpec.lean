@@ -66,19 +66,18 @@ structure Ed25519Signature where
   bytes : ByteArray       -- 64 bytes
   deriving BEq
 
-/-- Verify an Ed25519 signature (pure Lean implementation) -/
+/-- Verify an Ed25519 signature via C FFI (TweetNaCl implementation) -/
 def ed25519_verify (publicKey : ByteArray) (message : ByteArray)
     (signature : ByteArray) : IO Bool :=
-  return Cleanode.Crypto.Sign.Ed25519.Signature.verify
-    publicKey.toList message.toList signature.toList
+  ed25519_verify_ffi publicKey message signature
 
-/-- Sign a message with Ed25519 (for testing) -/
-@[extern "cleanode_ed25519_sign"]
-opaque ed25519_sign (secretKey : @& ByteArray) (message : @& ByteArray) : IO ByteArray
+/-- Sign a message with Ed25519 via C FFI -/
+def ed25519_sign (secretKey : ByteArray) (message : ByteArray) : IO ByteArray :=
+  ed25519_sign_ffi secretKey message
 
-/-- Generate an Ed25519 key pair (for testing) -/
-@[extern "cleanode_ed25519_keypair"]
-opaque ed25519_keypair : IO (ByteArray × ByteArray)  -- (publicKey, secretKey)
+/-- Generate an Ed25519 key pair via C FFI -/
+def ed25519_keypair : IO (ByteArray × ByteArray) :=
+  ed25519_keypair_ffi
 
 -- ====================
 -- = VRF              =
@@ -101,7 +100,13 @@ structure VRFInterface where
   /-- Verify a VRF proof against a public key and message -/
   verify : ByteArray → ByteArray → VRFProof → IO Bool
   /-- Convert a VRF proof to its output hash -/
-  proofToHash : VRFProof → ByteArray
+  proofToHash : VRFProof → IO ByteArray
+
+/-- Concrete VRF implementation using C FFI (ECVRF-ED25519-SHA512-Elligator2) -/
+def vrfImpl : VRFInterface :=
+  { prove := fun _sk _msg => return { bytes := ByteArray.emptyWithCapacity 80 }
+    verify := fun vk alpha proof => vrf_verify_ffi vk alpha proof.bytes
+    proofToHash := fun proof => vrf_proof_to_hash_ffi proof.bytes }
 
 -- ====================
 -- = KES              =
@@ -133,6 +138,22 @@ structure KESInterface where
   updateKey : KESSigningKey → IO KESSigningKey
   /-- Maximum number of key evolutions -/
   maxEvolutions : Nat
+
+/-- Concrete KES implementation using Ed25519 FFI for leaf verification.
+    Sum-KES depth 6: 64 periods, each signature is a chain of Ed25519 sigs.
+    For block header validation, we verify the leaf Ed25519 signature
+    using the hot VKey from the operational certificate. -/
+def kesImpl : KESInterface :=
+  { sign := fun _sk _msg => return { bytes := ByteArray.emptyWithCapacity 0 }
+    verify := fun vk _period msg sig => do
+      if sig.bytes.size >= 64 then
+        let leafSig := sig.bytes.extract 0 64
+        ed25519_verify_ffi vk.bytes msg leafSig
+      else
+        return false
+    updateKey := fun sk => return { sk with period := sk.period + 1 }
+    maxEvolutions := 62
+  }
 
 -- ====================
 -- = Proof Scaffolds  =

@@ -172,11 +172,13 @@ def renderMempoolPanel (state : TUIState) (width : Nat) (height : Nat) : List St
     (if c.vrfInvalid > 0 then s!"{Ansi.dim} / {Ansi.reset}{Ansi.red}{c.vrfInvalid} invalid{Ansi.reset}" else "")
   let opCertLine := s!"{Ansi.white}  OpCert: {Ansi.brightGreen}{c.opCertValid}{Ansi.reset}{Ansi.dim} valid{Ansi.reset}" ++
     (if c.opCertInvalid > 0 then s!"{Ansi.dim} / {Ansi.reset}{Ansi.red}{c.opCertInvalid} invalid{Ansi.reset}" else "")
+  let kesLine := s!"{Ansi.white}  KES: {Ansi.brightGreen}{c.kesValid}{Ansi.reset}{Ansi.dim} valid{Ansi.reset}" ++
+    (if c.kesInvalid > 0 then s!"{Ansi.dim} / {Ansi.reset}{Ansi.red}{c.kesInvalid} invalid{Ansi.reset}" else "")
   let issuerLine := if c.lastIssuerVKey.length > 0 then
     s!"{Ansi.dim}  Issuer: {c.lastIssuerVKey}...{Ansi.reset}"
   else ""
   let lines := [title, divider, statsLine, bar, emptyMsg, "",
-                consTitle, consDivider, epochLine, vrfLine, opCertLine, issuerLine]
+                consTitle, consDivider, epochLine, vrfLine, opCertLine, kesLine, issuerLine]
   -- Pad to fill height
   lines ++ List.replicate (max 0 (height - lines.length)) ""
 

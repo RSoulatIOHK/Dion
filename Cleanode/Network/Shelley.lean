@@ -78,16 +78,18 @@ structure ShelleyBlockHeader where
   blockNo : Nat              -- Block number (height)
   slot : Nat                 -- Absolute slot number
   prevBlockHash : ByteArray  -- 32 bytes
-  issuerVKeyHash : ByteArray -- Block producer's VKey hash
+  issuerVKey : ByteArray     -- Block producer's raw VKey (32 bytes, NOT the hash)
   vrfVKey : ByteArray        -- VRF verification key
   vrfResult : Option VRFResult       -- VRF output and proof
   blockBodySize : Nat        -- Block body size in bytes
   blockBodyHash : ByteArray  -- Hash of block body
   opCert : Option OperationalCert    -- Operational certificate
   protocolVersion : Option ProtocolVersion  -- Protocol version
+  kesSig : Option ByteArray  -- KES signature over header body (448 bytes for depth 6)
+  headerBodyBytes : ByteArray -- Raw CBOR of header body (for KES sig verification)
 
 instance : Repr ShelleyBlockHeader where
-  reprPrec h _ := s!"ShelleyBlockHeader(slot={h.slot}, blockNo={h.blockNo}, prevHash={h.prevBlockHash.size}B, bodySize={h.blockBodySize}B)"
+  reprPrec h _ := s!"ShelleyBlockHeader(slot={h.slot}, blockNo={h.blockNo}, prevHash={h.prevBlockHash.size}B, bodySize={h.blockBodySize}B, kesSig={h.kesSig.isSome})"
 
 -- ====================
 -- = Parsing Helpers  =
@@ -192,13 +194,15 @@ partial def parseShelleyHeaderBody (bs : ByteArray) : Option ShelleyBlockHeader 
     blockNo := blockNo,
     slot := slot,
     prevBlockHash := prevBlockHash,
-    issuerVKeyHash := issuerVKeyHash,
+    issuerVKey := issuerVKeyHash,
     vrfVKey := vrfVKey,
     vrfResult := vrfResult.map (·.value),
     blockBodySize := blockBodySize,
     blockBodyHash := blockBodyHash,
     opCert := opCert.map (·.value),
-    protocolVersion := protocolVersion.map (·.value)
+    protocolVersion := protocolVersion.map (·.value),
+    kesSig := none,         -- filled in by parseShelleyHeader
+    headerBodyBytes := bs   -- raw CBOR of header body (includes array header)
   }
 
 /-- Parse Shelley+ block header wrapper for ChainSync -/
@@ -207,8 +211,25 @@ partial def parseShelleyHeader (bs : ByteArray) : Option ShelleyBlockHeader := d
   let r1 ← decodeArrayHeader bs
   if r1.value != 2 then none
 
+  -- We need the raw header body CBOR for KES signature verification.
+  -- The header body starts at r1.remaining and we need to measure its extent.
+  let headerBodyStart := r1.remaining
+
   -- Element 0: Header body (the actual header array with 10 fields)
-  parseShelleyHeaderBody r1.remaining
+  let mut header ← parseShelleyHeaderBody headerBodyStart
+
+  -- Compute raw header body bytes by finding where element 1 starts
+  let afterBody := match skipCborValue headerBodyStart with
+    | some rest => rest
+    | none => headerBodyStart
+  let bodyLen := headerBodyStart.size - afterBody.size
+  let rawBody := headerBodyStart.extract 0 bodyLen
+  header := { header with headerBodyBytes := rawBody }
+
+  -- Element 1: KES signature (bytestring)
+  match decodeBytes afterBody with
+  | some r => return { header with kesSig := some r.value }
+  | none => return header
 
 /-- Extract Shelley+ header info from era-wrapped header bytes -/
 def extractShelleyInfo (eraHeaderBytes : ByteArray) : Option ShelleyBlockHeader := do

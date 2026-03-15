@@ -30,6 +30,11 @@ import Cleanode.Crypto.Sign.Ed25519.Signature
 import Pigment
 import Cleanode.TUI.State
 import Cleanode.TUI.Render
+import Cleanode.Mithril.Types
+import Cleanode.Mithril.Client
+import Cleanode.CLI.Args
+import Cleanode.CLI.Query
+import Cleanode.Monitoring.Server
 
 open Cleanode.Network
 open Cleanode.Network.Socket
@@ -1017,76 +1022,77 @@ partial def receiveChainSyncFrame (sock : Socket)
                 | none => pure ()
                 receiveChainSyncFrame sock discoveryRef mempoolRef txSubmPeerRef txSubmResponderQueue
               else if header.protocolId == .TxSubmission2 then
-                -- Dispatch by message type (mode bit = sender role, not instance)
+                let modeStr := if header.mode == .Initiator then "Init" else "Resp"
+                let msgDesc := match decodeTxSubmission2Message payload with
+                  | some .MsgInit => "MsgInit"
+                  | some (.MsgRequestTxIds b a r) => s!"MsgRequestTxIds(blk={b},ack={a},req={r})"
+                  | some (.MsgRequestTxs h) => s!"MsgRequestTxs(n={h.length})"
+                  | some (.MsgReplyTxIds t) => s!"MsgReplyTxIds(n={t.length})"
+                  | some (.MsgReplyTxs t) => s!"MsgReplyTxs(n={t.length})"
+                  | some .MsgDone => "MsgDone"
+                  | none => s!"DECODE_FAILED(size={payload.size})"
+                IO.eprintln s!"[TxSub] mode={modeStr} {msgDesc}"
                 match decodeTxSubmission2Message payload with
                   | some .MsgInit => do
-                      -- Peer sent MsgInit. We receive two:
-                      -- 1st: Instance 0 server MsgInit (response to our client MsgInit) — no action
-                      -- 2nd: Instance 1 client MsgInit (peer wants to relay txs) — respond + request txs
-                      match txSubmResponderQueue with
-                      | some q => do
-                          let state ← q.get
-                          if state.isEmpty then
-                            -- First MsgInit: Instance 0 response, just mark it
-                            q.set [ByteArray.empty]
-                          else
-                            -- Second MsgInit: Instance 1, respond with our server role
-                            let _ ← sendTxSubmission2Responder sock .MsgInit
-                            let _ ← sendTxSubmission2Responder sock (.MsgRequestTxIds true 0 10)
-                      | none => pure ()
+                      if header.mode == .Initiator then
+                        -- Peer is mini-protocol initiator (instance B) — wants to relay txs to us
+                        let _ ← sendTxSubmission2Responder sock .MsgInit
+                        let _ ← sendTxSubmission2Responder sock (.MsgRequestTxIds true 0 10)
+                        IO.eprintln "[TxSub] → Instance B init, requesting their txs"
+                      else
+                        -- Peer is mini-protocol responder (instance A ack) — no action
+                        IO.eprintln "[TxSub] → Instance A ack, ignoring"
                   | some (.MsgRequestTxIds blocking ack req) => do
-                        match mempoolRef, txSubmPeerRef with
-                        | some mpRef, some peerRef => do
-                            let acked := ack.toNat
-                            peerRef.modify fun s =>
-                              { s with announcedTxIds := s.announcedTxIds.drop acked }
-                            let reqCount := req.toNat
-                            -- NEVER block here — this is the shared receive loop.
-                            -- Reply with what we have now (empty is fine for blocking requests;
-                            -- the peer will re-request later).
-                            if blocking then
-                              -- For blocking: only reply if we have txs, otherwise don't reply
-                              -- (per Ouroboros spec, silence = "wait, I'll have txs later")
-                              let pool ← mpRef.get
-                              let peerSt ← peerRef.get
-                              let txIds := pool.getNewTxIds peerSt.announcedTxIds reqCount
-                              if !txIds.isEmpty then
-                                let _ ← sendTxSubmission2 sock (.MsgReplyTxIds txIds)
-                                let hashes := txIds.map (·.hash)
-                                peerRef.modify fun s =>
-                                  { s with announcedTxIds := s.announcedTxIds ++ hashes }
-                            else
-                              let pool ← mpRef.get
-                              let peerSt ← peerRef.get
-                              let txIds := pool.getNewTxIds peerSt.announcedTxIds reqCount
+                      IO.eprintln s!"[TxSub] → Peer requesting our txs (mode={modeStr})"
+                      match mempoolRef, txSubmPeerRef with
+                      | some mpRef, some peerRef => do
+                          let acked := ack.toNat
+                          peerRef.modify fun s =>
+                            { s with announcedTxIds := s.announcedTxIds.drop acked }
+                          let reqCount := req.toNat
+                          -- NEVER block here — this is the shared receive loop.
+                          if blocking then
+                            let pool ← mpRef.get
+                            let peerSt ← peerRef.get
+                            let txIds := pool.getNewTxIds peerSt.announcedTxIds reqCount
+                            if !txIds.isEmpty then
                               let _ ← sendTxSubmission2 sock (.MsgReplyTxIds txIds)
                               let hashes := txIds.map (·.hash)
                               peerRef.modify fun s =>
                                 { s with announcedTxIds := s.announcedTxIds ++ hashes }
-                        | _, _ =>
-                            if !blocking then
-                              let _ ← sendTxSubmission2 sock (.MsgReplyTxIds [])
-                              pure ()
-                    | some (.MsgRequestTxs hashes) => do
-                        -- Peer requesting full tx bodies (their server role)
-                        match mempoolRef with
-                        | some mpRef => do
+                          else
                             let pool ← mpRef.get
-                            let txBodies := pool.getTxsByHash hashes
-                            let _ ← sendTxSubmission2 sock (.MsgReplyTxs txBodies)
-                        | none =>
-                            let _ ← sendTxSubmission2 sock (.MsgReplyTxs [])
+                            let peerSt ← peerRef.get
+                            let txIds := pool.getNewTxIds peerSt.announcedTxIds reqCount
+                            let _ ← sendTxSubmission2 sock (.MsgReplyTxIds txIds)
+                            let hashes := txIds.map (·.hash)
+                            peerRef.modify fun s =>
+                              { s with announcedTxIds := s.announcedTxIds ++ hashes }
+                      | _, _ =>
+                          if !blocking then
+                            let _ ← sendTxSubmission2 sock (.MsgReplyTxIds [])
                             pure ()
+                  | some (.MsgRequestTxs hashes) => do
+                      -- Mode Initiator: peer requesting full tx bodies from us (instance 0)
+                      match mempoolRef with
+                      | some mpRef => do
+                          let pool ← mpRef.get
+                          let txBodies := pool.getTxsByHash hashes
+                          let _ ← sendTxSubmission2 sock (.MsgReplyTxs txBodies)
+                      | none =>
+                          let _ ← sendTxSubmission2 sock (.MsgReplyTxs [])
+                          pure ()
                   | some (.MsgReplyTxIds txIds) => do
-                      -- Peer replying with tx IDs (their client role — response to our request)
+                      IO.eprintln s!"[TxSub] → Peer announced {txIds.length} tx IDs (mode={modeStr})"
                       if txIds.isEmpty then
-                        -- Peer has no txs; request again (blocking)
+                        IO.eprintln "[TxSub] → Empty, re-requesting (blocking)"
                         let _ ← sendTxSubmission2Responder sock (.MsgRequestTxIds true 0 10)
                       else
                         match mempoolRef with
                         | some mpRef => do
                             let pool ← mpRef.get
                             let wanted := txIds.filter fun tid => !pool.contains tid.hash
+                            IO.eprintln s!"[TxSub] → Want {wanted.length}/{txIds.length}"
                             if wanted.isEmpty then
                               let _ ← sendTxSubmission2Responder sock
                                 (.MsgRequestTxIds false (UInt16.ofNat txIds.length) 10)
@@ -1094,23 +1100,30 @@ partial def receiveChainSyncFrame (sock : Socket)
                               let _ ← sendTxSubmission2Responder sock
                                 (.MsgRequestTxs (wanted.map (·.hash)))
                         | none =>
+                            IO.eprintln "[TxSub] → No mempoolRef for MsgReplyTxIds!"
                             let _ ← sendTxSubmission2Responder sock
                               (.MsgRequestTxIds false (UInt16.ofNat txIds.length) 10)
                   | some (.MsgReplyTxs txBodies) => do
-                      -- Peer replying with full tx bodies — add to mempool!
+                      IO.eprintln s!"[TxSub] → Received {txBodies.length} tx bodies! (mode={modeStr})"
                       match mempoolRef with
                       | some mpRef => do
                           let now ← Cleanode.TUI.Render.nowMs
                           for txBytes in txBodies do
                             let pool ← mpRef.get
                             match ← pool.addTxRaw txBytes now with
-                            | .ok newPool => mpRef.set newPool
-                            | .error _ => pure ()
+                            | .ok newPool =>
+                                mpRef.set newPool
+                                IO.eprintln s!"[TxSub] → addTxRaw OK (size={txBytes.size})"
+                            | .error e =>
+                                IO.eprintln s!"[TxSub] → addTxRaw FAILED: {e}"
                           let _ ← sendTxSubmission2Responder sock
                             (.MsgRequestTxIds false (UInt16.ofNat txBodies.length) 10)
-                      | none => pure ()
-                    | some .MsgDone => pure ()
-                    | none => pure ()
+                      | none =>
+                          IO.eprintln "[TxSub] → No mempoolRef for MsgReplyTxs!"
+                  | some .MsgDone =>
+                      IO.eprintln "[TxSub] → MsgDone"
+                  | none =>
+                      IO.eprintln s!"[TxSub] → DECODE FAILED (size={payload.size})"
                 receiveChainSyncFrame sock discoveryRef mempoolRef txSubmPeerRef txSubmResponderQueue
               else if header.protocolId == .PeerSharing then
                 -- Handle PeerSharing responses inline (non-blocking)
@@ -1444,8 +1457,10 @@ def peerConnectAndSync (host : String) (port : UInt16) (addrStr : String)
                   -- Update TUI peer status to syncing
                   if let some ref := tuiRef then
                     ref.modify (·.updatePeer addrStr "syncing")
-                  -- Send MsgInit as TxSubmission2 Initiator (Instance 0 client)
-                  -- This tells the peer we support tx relay and triggers their MsgInit responses
+                  -- Send MsgInit as TxSubmission2 Initiator (we are client on outbound)
+                  -- NOTE: On outbound connections, we can only be the TxSubmission2 client.
+                  -- The peer acts as server (sends MsgRequestTxIds). To receive tx announcements
+                  -- FROM peers, we need inbound connections (where we act as server).
                   let _ ← sendTxSubmission2 sock .MsgInit
                   -- Create per-peer TxSubmission2 state
                   let txSubmPeerRef ← IO.mkRef TxSubmPeerState.empty
@@ -1603,10 +1618,16 @@ partial def inboundPeerLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
 /-- Handle a single inbound peer: handshake then enter mux loop -/
 partial def handleInboundPeer (sock : Socket) (mempoolRef : IO.Ref Mempool)
     (tuiRef : Option (IO.Ref TUIState)) (network : NetworkMagic := .Mainnet) : IO Unit := do
+  IO.eprintln "[Inbound] New connection, starting handshake..."
   match ← receiveAndRespondHandshake sock (network := network) with
-  | .error _ => let _ ← socket_close sock; return
-  | .ok none => let _ ← socket_close sock; return
+  | .error e =>
+      IO.eprintln s!"[Inbound] Handshake failed: {e}"
+      let _ ← socket_close sock; return
+  | .ok none =>
+      IO.eprintln "[Inbound] Handshake returned none"
+      let _ ← socket_close sock; return
   | .ok (some _version) =>
+      IO.eprintln "[Inbound] Handshake OK, entering mux loop"
       tuiLog tuiRef "Inbound peer connected (handshake OK)"
       inboundPeerLoop sock mempoolRef tuiRef
 
@@ -1625,16 +1646,18 @@ partial def acceptLoop (listenSock : Socket) (mempoolRef : IO.Ref Mempool)
 
 /-- Multi-peer relay node mode -/
 def relayNode (proposal : HandshakeMessage) (networkName : String)
-    (tuiMode : Bool := false) (listenPort : UInt16 := 3001) : IO Unit := do
+    (tuiMode : Bool := false) (listenPort : UInt16 := 3001)
+    (metricsPort : Option UInt16 := none) : IO Unit := do
   -- Open ChainDB
   let chainDb ← ChainDB.open {}
 
   -- Build topology from bootstrap peers
   let bootstrapPeers := match networkName with
-    | "Mainnet" => mainnetBootstrapPeers
-    | "Preprod" => preprodBootstrapPeers
-    | "Preview" => previewBootstrapPeers
-    | _ => mainnetBootstrapPeers
+    | "Mainnet"   => mainnetBootstrapPeers
+    | "Preprod"   => preprodBootstrapPeers
+    | "Preview"   => previewBootstrapPeers
+    | "SanchoNet" => sanchonetBootstrapPeers
+    | _           => mainnetBootstrapPeers
 
   -- Add curated relay peers (from Cardano peer snapshot — real SPO relays)
   let relayPeers := match networkName with
@@ -1662,23 +1685,27 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
     activeSlotsCoeff := { numerator := 1, denominator := 20 }
     securityParam := 2160
     maxLovelaceSupply := 45000000000000000
-    networkMagic := match networkName with | "Preprod" => 1 | "Preview" => 2 | _ => 764824073
+    networkMagic := match networkName with | "Preprod" => 1 | "Preview" => 2 | "SanchoNet" => 4 | _ => 764824073
     networkId := networkName
     protocolParams := none
   }
   let consensusRef ← IO.mkRef (ConsensusState.initial genesis)
 
-  -- TUI state (created only in TUI mode)
+  -- TUI state (always created — also used by metrics server)
   let now ← Cleanode.TUI.Render.nowMs
-  let tuiStateRef : Option (IO.Ref TUIState) ←
-    if tuiMode then
-      some <$> IO.mkRef (TUIState.empty networkName now)
-    else pure none
+  let tuiStateRefInner ← IO.mkRef (TUIState.empty networkName now)
+  let tuiStateRef : Option (IO.Ref TUIState) := some tuiStateRefInner
+
+  -- Start metrics server if configured
+  if let some mp := metricsPort then
+    let _ ← Cleanode.Monitoring.Server.startMetricsServer mp tuiStateRefInner
+
+  -- Start periodic status file writer (for `cleanode query` commands)
+  let _ ← IO.asTask (Cleanode.CLI.Query.statusFileWriterLoop tuiStateRefInner)
 
   -- In TUI mode: launch the render loop; otherwise: print banner
   if tuiMode then
-    if let some ref := tuiStateRef then
-      let _ ← startTUI ref
+    let _ ← startTUI tuiStateRefInner
   else do
     run do
       println (("Dion: a Cardano LEAN 4 Relay Node".style |> cyan |> bold))
@@ -1695,8 +1722,32 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
       println ("".style)
       println (("=== Relay Node Active (Ctrl+C to stop) ===".style |> cyan |> bold))
 
-  -- Launch per-peer reconnect loops — each task owns its connection lifecycle
+  -- Launch inbound connection listener FIRST (before peer tasks exhaust the thread pool)
+  -- NOTE: socket_listen MUST be called inside the task, not outside.
+  -- Lean external objects (Socket) crash when captured across task boundaries.
+  let network : NetworkMagic := match networkName with
+    | "Preprod"   => .Preprod
+    | "Preview"   => .Preview
+    | "SanchoNet" => .SanchoNet
+    | _           => .Mainnet
   let mut tasks : List (Task (Except IO.Error Unit)) := []
+  IO.eprintln s!"[Listen] Creating listener task for port {listenPort}..."
+  let listenTask ← IO.asTask (do
+    IO.eprintln s!"[Listen] Task started, attempting to bind port {listenPort}..."
+    match ← socket_listen listenPort with
+    | .error e =>
+        IO.eprintln s!"[Listen] FAILED: {e}"
+        tuiLog tuiStateRef s!"Failed to listen on port {listenPort}: {e}"
+    | .ok listenSock => do
+        IO.eprintln s!"[Listen] OK — listening on port {listenPort}"
+        tuiLog tuiStateRef s!"Listening for inbound peers on port {listenPort}"
+        try acceptLoop listenSock mempoolRef tuiStateRef network
+        catch e =>
+          IO.eprintln s!"[Listen] acceptLoop crashed: {e}"
+          tuiLog tuiStateRef s!"Listener: {e}")
+  tasks := tasks ++ [listenTask]
+
+  -- Launch per-peer reconnect loops — each task owns its connection lifecycle
   for (host, port) in peerAddrs do
     let task ← IO.asTask (do
       try
@@ -1713,23 +1764,6 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
       tuiLog tuiStateRef s!"Peer spawner: {e}")
   tasks := tasks ++ [spawnerTask]
 
-  -- Launch inbound connection listener for mempool population
-  -- NOTE: socket_listen MUST be called inside the task, not outside.
-  -- Lean external objects (Socket) crash when captured across task boundaries.
-  let network : NetworkMagic := match networkName with
-    | "Preprod" => .Preprod
-    | "Preview" => .Preview
-    | _ => .Mainnet
-  let listenTask ← IO.asTask (do
-    match ← socket_listen listenPort with
-    | .error e =>
-        tuiLog tuiStateRef s!"Failed to listen on port {listenPort}: {e}"
-    | .ok listenSock => do
-        tuiLog tuiStateRef s!"Listening for inbound peers on port {listenPort}"
-        try acceptLoop listenSock mempoolRef tuiStateRef network
-        catch e => tuiLog tuiStateRef s!"Listener: {e}")
-  tasks := tasks ++ [listenTask]
-
   if !tuiMode then
     IO.println s!"  Syncing from {peerAddrs.length} bootstrap peers (discovering more)...\n"
 
@@ -1743,27 +1777,55 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
 
   chainDb.close
 
-def parsePortArg (args : List String) : Option UInt16 :=
-  match args with
-  | "--port" :: n :: _ =>
-    match n.toNat? with
-    | some p => if p > 0 && p < 65536 then some (UInt16.ofNat p) else none
-    | none => none
-  | _ :: rest => parsePortArg rest
-  | [] => none
+open Cleanode.CLI.Args
 
-def main (args : List String) : IO Unit := do
-  -- Parse CLI flags
-  let tuiMode := args.any (· == "--tui") || args.any (· == "-tui")
-  let networkName :=
-    if args.any (· == "--preprod") then "Preprod"
-    else if args.any (· == "--preview") then "Preview"
-    else "Mainnet"
-  let proposal := match networkName with
-    | "Preprod" => createPreprodProposal
-    | "Preview" => createPreviewProposal
-    | _ => createMainnetProposal
-  let listenPort : UInt16 := (parsePortArg args).getD 3001
+/-- Run the relay node with the given config -/
+def runNode (config : NodeConfig) : IO Unit := do
+  let networkName := toString config.network
+
+  let proposal := match config.network with
+    | .preprod   => createPreprodProposal
+    | .preview   => createPreviewProposal
+    | .sanchonet => createSanchoNetProposal
+    | .mainnet   => createMainnetProposal
+
+  -- Mithril fast-sync if requested
+  if config.mithrilSync then
+    let mithrilNetwork := match config.network with
+      | .preprod => Cleanode.Mithril.Types.MithrilNetwork.preprod
+      | .preview => Cleanode.Mithril.Types.MithrilNetwork.preview
+      | _ => Cleanode.Mithril.Types.MithrilNetwork.mainnet
+    let mithrilConfig := Cleanode.Mithril.Types.AggregatorConfig.default mithrilNetwork
+    let dataDir := s!"./data/{networkName.toLower}"
+    IO.println s!"[mithril] Starting fast-sync for {networkName}..."
+    let result ← Cleanode.Mithril.Client.mithrilSync mithrilConfig dataDir
+    match result with
+    | .error e =>
+      IO.eprintln s!"[mithril] Fast-sync failed: {e}"
+      IO.eprintln "[mithril] Falling back to normal peer sync..."
+    | .ok syncResult =>
+      IO.println s!"[mithril] Restored to epoch={syncResult.snapshot.beacon.epoch}, immutable={syncResult.snapshot.beacon.immutableFileNumber}"
+      IO.println s!"[mithril] DB at: {syncResult.dbPath}"
 
   -- Run as multi-peer relay node
-  relayNode proposal networkName tuiMode listenPort
+  relayNode proposal networkName config.tui config.port config.metricsPort
+
+/-- Handle query subcommands (reads status file from a running node) -/
+def runQuery (target : QueryTarget) : IO Unit := do
+  let statusFile := Cleanode.CLI.Query.statusFilePath
+  let fileExists ← System.FilePath.pathExists statusFile
+  if !fileExists then
+    IO.eprintln "Error: node status file not found. Is the node running?"
+    IO.eprintln s!"Expected: {statusFile}"
+    IO.Process.exit 1
+  match target with
+  | .tip => Cleanode.CLI.Query.queryTip
+  | .peers => Cleanode.CLI.Query.queryPeers
+  | .mempool => Cleanode.CLI.Query.queryMempool
+
+def main (args : List String) : IO Unit := do
+  match parseArgs args with
+  | .help => Cleanode.CLI.Args.printUsage
+  | .version => IO.println "Cleanode v0.1.0"
+  | .query target => runQuery target
+  | .run config => runNode config

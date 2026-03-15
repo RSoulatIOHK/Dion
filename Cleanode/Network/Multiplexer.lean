@@ -25,7 +25,7 @@ inductive MiniProtocolId where
   | Handshake      -- 0x0000: Version negotiation
   | ChainSync      -- 0x0002: Block header synchronization
   | BlockFetch     -- 0x0003: Block body retrieval
-  | TxSubmission2  -- 0x0004: Transaction propagation
+  | TxSubmission2  -- 0x0006: Transaction propagation (v2 with MsgInit)
   | KeepAlive      -- 0x0008: Connection health
   | PeerSharing    -- 0x000a: P2P peer discovery
   deriving Repr, BEq

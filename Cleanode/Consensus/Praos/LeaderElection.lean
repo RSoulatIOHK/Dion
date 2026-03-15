@@ -155,4 +155,122 @@ def ChainDensity.densityPermille (d : ChainDensity) : Nat :=
 def ChainDensity.isDenser (a b : ChainDensity) : Bool :=
   a.densityPermille > b.densityPermille
 
+-- =========================
+-- = Chain Selection Rule  =
+-- =========================
+
+/-- A candidate chain fragment for fork comparison.
+    Represents a peer's chain tip and the fork point relative to our current chain. -/
+structure ChainCandidate where
+  tipBlockNo : Nat            -- Block number at the tip
+  tipSlot : Nat               -- Slot number at the tip
+  forkBlockNo : Nat           -- Block number where this chain diverges from ours
+  density : ChainDensity      -- Chain density in the fork region
+
+instance : Repr ChainCandidate where
+  reprPrec c _ := s!"ChainCandidate(tip={c.tipBlockNo}, slot={c.tipSlot}, fork={c.forkBlockNo})"
+
+/-- Ouroboros Praos chain selection: prefer the candidate chain over our current chain.
+
+    Rules (in order):
+    1. Never adopt a chain that forks deeper than k blocks (security parameter)
+    2. Prefer the chain with the highest block number (longest chain)
+    3. Within the same length, prefer the denser chain (more blocks per slot)
+       in the 3k/f window after the fork point
+
+    Returns true if the candidate should be adopted over our chain. -/
+def preferChain (securityParam : Nat) (ourTipBlockNo : Nat)
+    (candidate : ChainCandidate) : Bool :=
+  -- Rule 1: Reject deep forks beyond k
+  if ourTipBlockNo > candidate.forkBlockNo + securityParam then false
+  -- Rule 2: Longer chain wins
+  else if candidate.tipBlockNo > ourTipBlockNo then true
+  else if candidate.tipBlockNo < ourTipBlockNo then false
+  -- Rule 3: Same length — use chain density as tiebreaker
+  else candidate.density.densityPermille > 500  -- prefer denser-than-average fork
+
+/-- Compare two candidate chains. Returns true if `a` is preferred over `b`. -/
+def preferCandidate (a b : ChainCandidate) : Bool :=
+  if a.tipBlockNo > b.tipBlockNo then true
+  else if a.tipBlockNo < b.tipBlockNo then false
+  else a.density.densityPermille > b.density.densityPermille
+
+/-- Select the best chain from a list of candidates.
+    Returns none if no candidate is preferred over our current chain. -/
+def selectBestChain (securityParam : Nat) (ourTipBlockNo : Nat)
+    (candidates : List ChainCandidate) : Option ChainCandidate :=
+  let viable := candidates.filter (preferChain securityParam ourTipBlockNo)
+  match viable with
+  | [] => none
+  | first :: rest =>
+    some (rest.foldl (fun best c => if preferCandidate c best then c else best) first)
+
+-- =========================
+-- = Improved Threshold    =
+-- =========================
+
+/-- Compute (1 - (1-f)^σ) using Taylor series for spec-accurate VRF threshold.
+
+    The exact formula is: threshold = certNatMax * (1 - (1-f)^σ_rel)
+    where σ_rel = poolStake / totalStake.
+
+    We approximate (1-f)^σ via: exp(σ * ln(1-f))
+    Using Taylor series for ln(1-f) ≈ -f - f²/2 - f³/3 - ...
+    and exp(x) ≈ 1 + x + x²/2 + x³/6 + ...
+
+    All arithmetic is scaled by 10^18 to maintain precision. -/
+private def precisionScale : Nat := 1000000000000000000  -- 10^18
+
+/-- Compute ln(1-f) * σ_rel using Taylor expansion, scaled by precisionScale.
+    f = fNum/fDen, σ_rel = poolStake/totalStake.
+    ln(1-f) ≈ -(f + f²/2 + f³/3 + f⁴/4)
+    Result is negative, returned as (isNeg, |value|). -/
+private def lnOneMinusF_times_sigma (fNum fDen poolStake totalStake : Nat)
+    : Nat :=
+  if fDen == 0 || totalStake == 0 then 0
+  else
+    let s := precisionScale
+    -- f scaled
+    let fScaled := fNum * s / fDen
+    -- Terms of -ln(1-f) = f + f²/2 + f³/3 + f⁴/4
+    let f2 := fScaled * fScaled / s
+    let f3 := f2 * fScaled / s
+    let f4 := f3 * fScaled / s
+    let negLn := fScaled + f2 / 2 + f3 / 3 + f4 / 4
+    -- Multiply by σ_rel = poolStake / totalStake
+    negLn * poolStake / totalStake
+
+/-- Compute exp(-x) ≈ 1 - x + x²/2 - x³/6 + x⁴/24
+    where x is scaled by precisionScale. Returns result scaled by precisionScale.
+    x must be positive (we compute exp of negative value). -/
+private def expNeg (x : Nat) : Nat :=
+  let s := precisionScale
+  if x >= s then 0  -- exp(-x) ≈ 0 for x >= 1 (in scaled terms, x >= scale)
+  else
+    let x2 := x * x / s
+    let x3 := x2 * x / s
+    let x4 := x3 * x / s
+    -- 1 - x + x²/2 - x³/6 + x⁴/24
+    let pos := s + x2 / 2 + x4 / 24
+    let neg := x + x3 / 6
+    if pos > neg then pos - neg else 0
+
+/-- Spec-accurate VRF threshold using Taylor series approximation.
+    threshold = certNatMax * (1 - (1-f)^σ_rel)
+    where (1-f)^σ_rel = exp(σ_rel * ln(1-f)) -/
+def computeThresholdAccurate (activeSlotsCoeff : Rational) (poolStake totalStake : Nat)
+    : Nat :=
+  if totalStake == 0 then 0
+  else
+    let certNatMax := 2 ^ 256
+    let s := precisionScale
+    -- Compute |σ * ln(1-f)| (always positive since ln(1-f) < 0)
+    let negExponent := lnOneMinusF_times_sigma
+      activeSlotsCoeff.numerator activeSlotsCoeff.denominator poolStake totalStake
+    -- (1-f)^σ = exp(-|exponent|) = exp(σ * ln(1-f))
+    let oneMinusFsigma := expNeg negExponent
+    -- threshold = certNatMax * (1 - (1-f)^σ)
+    let phi := if s > oneMinusFsigma then s - oneMinusFsigma else 0
+    certNatMax * phi / s
+
 end Cleanode.Consensus.Praos.LeaderElection

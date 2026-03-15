@@ -1,5 +1,6 @@
 import Cleanode.Config.Genesis
 import Cleanode.Consensus.Praos.LeaderElection
+import Cleanode.Crypto.Hash.Sha512
 
 /-!
 # Consensus State
@@ -18,6 +19,7 @@ namespace Cleanode.Consensus.Praos.ConsensusState
 
 open Cleanode.Config.Genesis
 open Cleanode.Consensus.Praos.LeaderElection
+open Cleanode.Crypto.Hash.Sha512
 
 -- ====================
 -- = Operational Cert =
@@ -89,29 +91,40 @@ def slotToKESPeriod (slot : Nat) (slotsPerKESPeriod : Nat := 129600) : Nat :=
 def needsEpochTransition (state : ConsensusState) (slot : Nat) : Bool :=
   slotToEpoch state slot > state.currentEpoch
 
-/-- Process epoch transition: rotate nonces and snapshots -/
+/-- Pure SHA-512-based hash for nonce evolution.
+    evolvingNonce = SHA-512(evolvingNonce || vrfOutput) truncated to 32 bytes.
+    In production this should use Blake2b-256 via FFI; this pure version
+    ensures determinism without IO. -/
+private def hashNonce (a b : ByteArray) : ByteArray :=
+  let input := a.toList ++ b.toList
+  let hashOutput := Internal.hashMessage input
+  let hashBytes := hashOutput.flatMap Cleanode.Crypto.Integer.UInt64.toUInt8BE
+  ByteArray.mk (hashBytes.take 32).toArray
+
+/-- Process epoch transition: rotate nonces and snapshots.
+    New epoch nonce = hash(prevEpochNonce || evolvingNonce) per Praos spec. -/
 def processEpochTransition (state : ConsensusState) (newEpoch : Nat)
     (newSnapshot : StakeSnapshot) : ConsensusState :=
+  let newEpochNonce :=
+    if state.evolvingNonce.size > 0 then
+      hashNonce state.epochNonce state.evolvingNonce
+    else state.epochNonce
   { state with
     prevEpochNonce := state.epochNonce
-    -- New epoch nonce = hash(prevNonce || evolvingNonce)
-    -- Simplified: just use evolving nonce as the new epoch nonce
-    epochNonce := if state.evolvingNonce.size > 0 then state.evolvingNonce
-                  else state.epochNonce
+    epochNonce := newEpochNonce
     evolvingNonce := ByteArray.mk #[]
     stakeSnapshot := newSnapshot
     currentEpoch := newEpoch
     epochFirstSlot := newEpoch * state.epochLength }
 
-/-- Update the evolving nonce with a new block's VRF output -/
+/-- Update the evolving nonce with a new block's VRF output.
+    evolvingNonce' = hash(evolvingNonce || vrfOutput) -/
 def updateEvolvingNonce (state : ConsensusState) (vrfOutput : ByteArray) : ConsensusState :=
-  -- evolvingNonce = hash(evolvingNonce || vrfOutput)
-  -- Simplified: XOR the VRF output into the evolving nonce
-  let newNonce := if state.evolvingNonce.size == 0 then vrfOutput
-                  else
-                    let minLen := min state.evolvingNonce.size vrfOutput.size
-                    ByteArray.mk ((Array.range minLen).map fun i =>
-                      state.evolvingNonce[i]! ^^^ vrfOutput[i]!)
+  let newNonce := if state.evolvingNonce.size == 0 then
+    hashNonce (ByteArray.mk #[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                               0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]) vrfOutput
+  else
+    hashNonce state.evolvingNonce vrfOutput
   { state with evolvingNonce := newNonce }
 
 /-- Look up a pool's stake in the current snapshot -/

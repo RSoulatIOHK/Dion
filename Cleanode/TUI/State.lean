@@ -39,6 +39,22 @@ structure ConsensusInfo where
   currentEpoch     : Nat        -- Current epoch from latest block
   currentKESPeriod : Nat        -- KES period of latest block
   lastIssuerVKey   : String     -- Last block issuer VKey hash (hex, truncated)
+  epochNonceHex    : String     -- Current epoch nonce (hex, truncated)
+  evolvingNonceHex : String     -- Evolving nonce (hex, truncated)
+  deriving Repr
+
+/-- Which panel currently has keyboard focus -/
+inductive ActivePanel where
+  | blocks       -- Arrow keys navigate the block list
+  | consensus    -- Consensus detail expanded in sidepanel
+  deriving Repr, BEq
+
+/-- What detail view is shown in the right sidepanel -/
+inductive DetailView where
+  | none         -- Normal view (mempool + consensus summary)
+  | blockDetail  -- Selected block's full info + tx list
+  | txDetail (txIdx : Nat)  -- A specific transaction's inputs/outputs
+  | consensusFull           -- All consensus info expanded
   deriving Repr
 
 /-- Central TUI state: written by network threads, read by renderer -/
@@ -55,6 +71,10 @@ structure TUIState where
   networkName     : String
   logs            : List String         -- Last M log lines for status bar
   consensus       : ConsensusInfo       -- Consensus validation stats
+  -- Interactive state
+  selectedBlockIdx : Nat := 0           -- Cursor in the block list (0 = newest)
+  activePanel      : ActivePanel := .blocks
+  detailView       : DetailView := .none
   maxRecentBlocks : Nat := 20
   maxLogs         : Nat := 5
   deriving Repr
@@ -75,7 +95,8 @@ def TUIState.empty (networkName : String) (startedAt : Nat) : TUIState :=
     consensus := {
       validatedHeaders := 0, vrfValid := 0, vrfInvalid := 0,
       kesValid := 0, kesInvalid := 0, opCertValid := 0, opCertInvalid := 0,
-      currentEpoch := 0, currentKESPeriod := 0, lastIssuerVKey := ""
+      currentEpoch := 0, currentKESPeriod := 0, lastIssuerVKey := "",
+      epochNonceHex := "", evolvingNonceHex := ""
     } }
 
 /-- Add a block to the recent blocks list (newest first, bounded, deduplicated) -/
@@ -126,6 +147,53 @@ def TUIState.updateConsensus (s : TUIState) (f : ConsensusInfo → ConsensusInfo
 /-- Update mempool stats from current mempool state -/
 def TUIState.updateMempool (s : TUIState) (txCount bytes : Nat) : TUIState :=
   { s with mempoolTxCount := txCount, mempoolBytes := bytes }
+
+-- ====================
+-- = Interactive Nav  =
+-- ====================
+
+/-- Move selection up in the block list -/
+def TUIState.selectUp (s : TUIState) : TUIState :=
+  match s.detailView with
+  | .txDetail idx => { s with detailView := .txDetail (if idx > 0 then idx - 1 else 0) }
+  | _ =>
+    if s.selectedBlockIdx > 0 then { s with selectedBlockIdx := s.selectedBlockIdx - 1 }
+    else s
+
+/-- Move selection down in the block list -/
+def TUIState.selectDown (s : TUIState) : TUIState :=
+  match s.detailView with
+  | .txDetail idx => { s with detailView := .txDetail (idx + 1) }
+  | _ =>
+    let maxIdx := if s.recentBlocks.length > 0 then s.recentBlocks.length - 1 else 0
+    if s.selectedBlockIdx < maxIdx then { s with selectedBlockIdx := s.selectedBlockIdx + 1 }
+    else s
+
+/-- Press Enter: open detail for selected block, or drill into tx -/
+def TUIState.selectEnter (s : TUIState) : TUIState :=
+  match s.detailView with
+  | .none => { s with detailView := .blockDetail }
+  | .blockDetail => { s with detailView := .txDetail 0 }
+  | .txDetail _ => s  -- Already at deepest level
+  | .consensusFull => s
+
+/-- Press Escape: go back one level -/
+def TUIState.selectBack (s : TUIState) : TUIState :=
+  match s.detailView with
+  | .txDetail _ => { s with detailView := .blockDetail }
+  | .blockDetail => { s with detailView := .none }
+  | .consensusFull => { s with detailView := .none, activePanel := .blocks }
+  | .none => s
+
+/-- Toggle consensus detail panel -/
+def TUIState.toggleConsensus (s : TUIState) : TUIState :=
+  match s.detailView with
+  | .consensusFull => { s with detailView := .none, activePanel := .blocks }
+  | _ => { s with detailView := .consensusFull, activePanel := .consensus }
+
+/-- Get the currently selected block (if any) -/
+def TUIState.selectedBlock (s : TUIState) : Option BlockSummary :=
+  s.recentBlocks[s.selectedBlockIdx]?
 
 /-- Log helper: routes to TUI state or IO.println depending on mode -/
 def tuiLog (tuiRef : Option (IO.Ref TUIState)) (msg : String) : IO Unit :=

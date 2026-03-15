@@ -118,10 +118,10 @@ def renderBlockRow (b : BlockSummary) (rowWidth : Nat) : String :=
   let hashShort := b.hash.take 12
   let txLabel := if b.txCount == 1 then "tx " else "txs"
   let feesAda := b.totalFees / 1000000
-  let content := s!"{Ansi.brightYellow}#{formatNum b.blockNo}{Ansi.reset}" ++
-    s!"{Ansi.dim}  slot {Ansi.reset}{Ansi.cyan}{formatNum b.slot}{Ansi.reset}" ++
-    s!"{Ansi.dim}  {Ansi.reset}{Ansi.white}{b.txCount} {txLabel}{Ansi.reset}" ++
-    s!"{Ansi.dim}  {Ansi.reset}{Ansi.green}{feesAda}₳{Ansi.reset}" ++
+  let content := s!"  {Ansi.brightYellow}#{formatNum b.blockNo}{Ansi.reset}" ++
+    s!"  slot {Ansi.cyan}{formatNum b.slot}{Ansi.reset}" ++
+    s!"  {b.txCount} {txLabel}" ++
+    s!"  {Ansi.green}{feesAda}A{Ansi.reset}" ++
     s!"{Ansi.dim}  {hashShort}..{Ansi.reset}"
   padRight content rowWidth
 
@@ -129,8 +129,8 @@ def renderBlockRow (b : BlockSummary) (rowWidth : Nat) : String :=
 def renderBlockPanel (blocks : List BlockSummary) (width : Nat) (height : Nat) : List String :=
   let title := s!"{Ansi.brightCyan}{Ansi.bold}  RECENT BLOCKS{Ansi.reset}"
   let divider := s!"{Ansi.dim}  {hline '─' (width - 6)}{Ansi.reset}"
-  let blockRows := blocks.take (height - 2) |>.map fun b =>
-    s!"  {renderBlockRow b (width - 4)}"
+  let visible := blocks.take (height - 2)
+  let blockRows := visible.map fun b => renderBlockRow b (width - 4)
   -- Pad to fill height
   let remaining := height - 2 - blockRows.length
   let emptyRows := if blocks.isEmpty then
@@ -177,8 +177,12 @@ def renderMempoolPanel (state : TUIState) (width : Nat) (height : Nat) : List St
   let issuerLine := if c.lastIssuerVKey.length > 0 then
     s!"{Ansi.dim}  Issuer: {c.lastIssuerVKey}...{Ansi.reset}"
   else ""
+  let nonceLine := if c.epochNonceHex.length > 0 then
+    s!"{Ansi.dim}  Nonce: {Ansi.reset}{Ansi.cyan}{c.epochNonceHex}..{Ansi.reset}" ++
+    (if c.evolvingNonceHex.length > 0 then s!"{Ansi.dim}  evolving: {Ansi.reset}{Ansi.cyan}{c.evolvingNonceHex}..{Ansi.reset}" else "")
+  else ""
   let lines := [title, divider, statsLine, bar, emptyMsg, "",
-                consTitle, consDivider, epochLine, vrfLine, opCertLine, kesLine, issuerLine]
+                consTitle, consDivider, epochLine, vrfLine, opCertLine, kesLine, issuerLine, nonceLine]
   -- Pad to fill height
   lines ++ List.replicate (max 0 (height - lines.length)) ""
 
@@ -235,6 +239,70 @@ def renderStatusBar (state : TUIState) (width : Nat) : List String :=
     padRight content (width - 4)
 
 -- ========================
+-- = Block Detail Panel   =
+-- ========================
+
+/-- Render block detail when a block is selected and Enter is pressed -/
+def renderBlockDetail (block : BlockSummary) (width : Nat) (height : Nat) : List String :=
+  let title := s!"{Ansi.brightCyan}{Ansi.bold}  BLOCK #{formatNum block.blockNo}{Ansi.reset}{Ansi.dim}  [Esc=back Enter=txs]{Ansi.reset}"
+  let divider := s!"{Ansi.dim}  {hline '─' (width - 6)}{Ansi.reset}"
+  let slotLine := s!"{Ansi.white}  Slot: {Ansi.cyan}{formatNum block.slot}{Ansi.reset}"
+  let hashLine := s!"{Ansi.white}  Hash: {Ansi.dim}{block.hash}{Ansi.reset}"
+  let eraName := match block.era with
+    | 0 => "Byron" | 1 => "Shelley" | 2 => "Allegra" | 3 => "Mary"
+    | 4 => "Alonzo" | 5 => "Babbage" | 6 => "Conway" | _ => s!"Era {block.era}"
+  let eraLine := s!"{Ansi.white}  Era: {Ansi.yellow}{eraName}{Ansi.reset}"
+  let sizeLine := s!"{Ansi.white}  Size: {Ansi.reset}{block.size} bytes"
+  let feesAda := block.totalFees / 1000000
+  let feesLine := s!"{Ansi.white}  Fees: {Ansi.green}{feesAda} ADA{Ansi.reset}{Ansi.dim} ({block.totalFees} lovelace){Ansi.reset}"
+  let peerLine := s!"{Ansi.dim}  From: {block.peerAddr}{Ansi.reset}"
+  let txTitle := s!""
+  let txHeader := s!"{Ansi.brightCyan}{Ansi.bold}  TRANSACTIONS ({block.txCount}){Ansi.reset}"
+  let txDivider := s!"{Ansi.dim}  {hline '─' (width - 6)}{Ansi.reset}"
+  -- Transaction list (placeholder — we only have count, not full tx data in BlockSummary)
+  let txRows := (List.range (min block.txCount (height - 12))).map fun i =>
+    s!"  {Ansi.dim}Tx #{i + 1}{Ansi.reset}"
+  let lines := [title, divider, slotLine, hashLine, eraLine, sizeLine, feesLine, peerLine, txTitle,
+                txHeader, txDivider] ++ txRows
+  lines ++ List.replicate (max 0 (height - lines.length)) ""
+
+-- ==============================
+-- = Consensus Detail Panel     =
+-- ==============================
+
+/-- Render expanded consensus detail (full sidepanel) -/
+def renderConsensusDetail (state : TUIState) (width : Nat) (height : Nat) : List String :=
+  let c := state.consensus
+  let title := s!"{Ansi.brightCyan}{Ansi.bold}  CONSENSUS DETAIL{Ansi.reset}{Ansi.dim}  [Tab/Esc=back]{Ansi.reset}"
+  let divider := s!"{Ansi.dim}  {hline '─' (width - 6)}{Ansi.reset}"
+  let epochLine := s!"{Ansi.white}  Epoch: {Ansi.brightYellow}{c.currentEpoch}{Ansi.reset}"
+  let kesLine := s!"{Ansi.white}  KES Period: {Ansi.cyan}{c.currentKESPeriod}{Ansi.reset}"
+  let headersLine := s!"{Ansi.white}  Headers validated: {Ansi.brightYellow}{c.validatedHeaders}{Ansi.reset}"
+  let sec1 := s!"{Ansi.brightCyan}{Ansi.bold}  VRF{Ansi.reset}"
+  let vrfLine := s!"{Ansi.brightGreen}    {c.vrfValid} valid{Ansi.reset}" ++
+    (if c.vrfInvalid > 0 then s!"  {Ansi.red}{c.vrfInvalid} invalid{Ansi.reset}" else "")
+  let sec2 := s!"{Ansi.brightCyan}{Ansi.bold}  OPERATIONAL CERTIFICATES{Ansi.reset}"
+  let opLine := s!"{Ansi.brightGreen}    {c.opCertValid} valid{Ansi.reset}" ++
+    (if c.opCertInvalid > 0 then s!"  {Ansi.red}{c.opCertInvalid} invalid{Ansi.reset}" else "")
+  let sec3 := s!"{Ansi.brightCyan}{Ansi.bold}  KES SIGNATURES{Ansi.reset}"
+  let kesValLine := s!"{Ansi.brightGreen}    {c.kesValid} valid{Ansi.reset}" ++
+    (if c.kesInvalid > 0 then s!"  {Ansi.red}{c.kesInvalid} invalid{Ansi.reset}" else "")
+  let sec4 := s!"{Ansi.brightCyan}{Ansi.bold}  NONCES{Ansi.reset}"
+  let epochNonce := if c.epochNonceHex.length > 0 then
+    s!"{Ansi.white}    Epoch:    {Ansi.yellow}{c.epochNonceHex}..{Ansi.reset}"
+  else s!"{Ansi.dim}    Epoch:    (not yet computed){Ansi.reset}"
+  let evolvNonce := if c.evolvingNonceHex.length > 0 then
+    s!"{Ansi.white}    Evolving: {Ansi.cyan}{c.evolvingNonceHex}..{Ansi.reset}"
+  else s!"{Ansi.dim}    Evolving: (empty){Ansi.reset}"
+  let issuer := if c.lastIssuerVKey.length > 0 then
+    s!"{Ansi.dim}  Last issuer: {c.lastIssuerVKey}...{Ansi.reset}"
+  else ""
+  let lines := [title, divider, epochLine, kesLine, headersLine, "",
+                sec1, vrfLine, "", sec2, opLine, "", sec3, kesValLine, "",
+                sec4, epochNonce, evolvNonce, "", issuer]
+  lines ++ List.replicate (max 0 (height - lines.length)) ""
+
+-- ========================
 -- = Full Frame Compose   =
 -- ========================
 
@@ -257,8 +325,9 @@ def renderFrame (state : TUIState) (nowMs : Nat) (width : Nat := 160) (height : 
   -- Header
   let header := [topBorder width] ++ renderHeader state width nowMs
 
-  -- Block + Mempool panels side by side
+  -- Left panel: block list
   let blockLines := renderBlockPanel state.recentBlocks leftWidth panelHeight
+  -- Right panel: always mempool + consensus
   let mempoolLines := renderMempoolPanel state rightWidth panelHeight
   let panelRows := List.range panelHeight |>.map fun i =>
     let left := (blockLines.get? i).getD ""

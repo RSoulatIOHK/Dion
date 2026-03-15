@@ -143,4 +143,82 @@ theorem kes_period_monotonic :
   simp [slotToKESPeriod]
   exact Nat.div_le_div_right h1
 
+-- ====================
+-- = Chain Selection  =
+-- ====================
+
+/-- A chain that forks deeper than k is never adopted -/
+theorem deep_fork_rejected :
+    ∀ (k ourTip : Nat) (cand : ChainCandidate),
+      ourTip > cand.forkBlockNo + k →
+      preferChain k ourTip cand = false := by
+  intros k ourTip cand h
+  simp [preferChain]
+  omega
+
+/-- A candidate with strictly higher block number is always preferred (within k) -/
+theorem longer_chain_preferred :
+    ∀ (k ourTip : Nat) (cand : ChainCandidate),
+      ourTip ≤ cand.forkBlockNo + k →
+      cand.tipBlockNo > ourTip →
+      preferChain k ourTip cand = true := by
+  intros k ourTip cand h1 h2
+  simp [preferChain]
+  omega
+
+/-- A candidate with strictly lower block number is never preferred -/
+theorem shorter_chain_rejected :
+    ∀ (k ourTip : Nat) (cand : ChainCandidate),
+      cand.tipBlockNo < ourTip →
+      ourTip ≤ cand.forkBlockNo + k →
+      preferChain k ourTip cand = false := by
+  intros k ourTip cand h1 h2
+  simp [preferChain]
+  omega
+
+/-- selectBestChain returns none for an empty candidate list -/
+theorem select_empty_none :
+    ∀ (k ourTip : Nat),
+      selectBestChain k ourTip [] = none := by
+  intros
+  simp [selectBestChain]
+
+/-- Epoch transition preserves the epoch length -/
+theorem epoch_transition_preserves_length :
+    ∀ (state : ConsensusState) (newEpoch : Nat) (snapshot : StakeSnapshot),
+      (processEpochTransition state newEpoch snapshot).epochLength =
+      state.epochLength := by
+  intros state newEpoch snapshot
+  simp [processEpochTransition]
+
+/-- Epoch transition preserves the active slots coefficient -/
+theorem epoch_transition_preserves_f :
+    ∀ (state : ConsensusState) (newEpoch : Nat) (snapshot : StakeSnapshot),
+      (processEpochTransition state newEpoch snapshot).activeSlotsCoeff =
+      state.activeSlotsCoeff := by
+  intros state newEpoch snapshot
+  simp [processEpochTransition]
+
+/-- Epoch transition clears the evolving nonce -/
+theorem epoch_transition_clears_evolving :
+    ∀ (state : ConsensusState) (newEpoch : Nat) (snapshot : StakeSnapshot),
+      (processEpochTransition state newEpoch snapshot).evolvingNonce =
+      ByteArray.mk #[] := by
+  intros state newEpoch snapshot
+  simp [processEpochTransition]
+
+/-- Epoch transition sets the new epoch correctly -/
+theorem epoch_transition_sets_epoch :
+    ∀ (state : ConsensusState) (newEpoch : Nat) (snapshot : StakeSnapshot),
+      (processEpochTransition state newEpoch snapshot).currentEpoch = newEpoch := by
+  intros state newEpoch snapshot
+  simp [processEpochTransition]
+
+/-- The accurate threshold is zero when total stake is zero -/
+theorem accurate_threshold_zero_total :
+    ∀ (f : Rational) (poolStake : Nat),
+      computeThresholdAccurate f poolStake 0 = 0 := by
+  intros f poolStake
+  simp [computeThresholdAccurate]
+
 end Cleanode.Proofs.Phase4Proofs

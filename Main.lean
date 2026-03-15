@@ -19,6 +19,7 @@ import Cleanode.Network.ConnectionManager
 import Cleanode.Network.MuxDispatcher
 import Cleanode.Network.HandshakeServer
 import Cleanode.Config.Topology
+import Cleanode.Config.Genesis
 import Cleanode.Storage.BlockStore
 import Cleanode.Storage.ChainDB
 import Cleanode.Storage.Database
@@ -51,6 +52,7 @@ open Cleanode.Network.MuxDispatcher
 open Cleanode.Network.PeerSharing
 open Cleanode.Network.HandshakeServer
 open Cleanode.Config.Topology
+open Cleanode.Config.Genesis
 open Cleanode.Storage.BlockStore
 open Cleanode.Storage.ChainDB
 open Cleanode.Storage.Database
@@ -632,7 +634,8 @@ def natToBE8 (n : Nat) : ByteArray :=
     - KES signature verification over header body hash
     Updates ConsensusInfo in the TUI state with validation results. -/
 def validateBlockHeader (shelleyInfo : ShelleyBlockHeader)
-    (ref : IO.Ref TUIState) : IO Unit := do
+    (ref : IO.Ref TUIState)
+    (consensusRef : Option (IO.Ref ConsensusState) := none) : IO Unit := do
   let epochLength := 432000
   let slotsPerKESPeriod := 129600
   let epoch := shelleyInfo.slot / epochLength
@@ -644,6 +647,20 @@ def validateBlockHeader (shelleyInfo : ShelleyBlockHeader)
     currentKESPeriod := kesPeriod
     lastIssuerVKey := issuerHex
   })
+  -- === KES Period Bounds Check ===
+  -- OpCert kesPeriod must be ≤ current KES period, and the key must not be expired
+  -- (current period - opCert period < maxEvolutions = 2^6 = 64)
+  if let some cert := shelleyInfo.opCert then
+    let maxEvolutions := 64  -- 2^6 for Sum-KES depth 6
+    if cert.kesPeriod > kesPeriod then
+      ref.modify (·.addLog s!"KES period future: cert={cert.kesPeriod} > current={kesPeriod}")
+    else if kesPeriod - cert.kesPeriod >= maxEvolutions then
+      ref.modify (·.addLog s!"KES period expired: evolved {kesPeriod - cert.kesPeriod} >= {maxEvolutions}")
+  -- === Epoch Nonce from Consensus State ===
+  let epochNonce ← if let some csRef := consensusRef then
+    pure (← csRef.get).epochNonce
+  else
+    pure (ByteArray.mk #[])
   -- === VRF Proof Verification ===
   match shelleyInfo.vrfResult with
   | some vrf => do
@@ -657,10 +674,10 @@ def validateBlockHeader (shelleyInfo : ShelleyBlockHeader)
           let computed ← vrf_proof_to_hash_ffi vrf.proof
           pure (computed == vrf.output)
         else pure true  -- Pre-Alonzo: 32-byte output, different derivation
-        -- Full VRF verification (U=[s]B-[c]Y, V=[s]H-[c]Gamma, c'=challenge)
-        -- requires the correct alpha (epochNonce ++ slot), which we attempt
+        -- Full VRF verification: alpha = epochNonce ++ slot (8 bytes big-endian)
         let slotBytes := natToBE8 shelleyInfo.slot
-        let vrfCryptoOk ← vrf_verify_ffi shelleyInfo.vrfVKey slotBytes vrf.proof
+        let alpha := if epochNonce.size > 0 then epochNonce ++ slotBytes else slotBytes
+        let vrfCryptoOk ← vrf_verify_ffi shelleyInfo.vrfVKey alpha vrf.proof
         if hashOk || vrfCryptoOk then
           ref.modify (·.updateConsensus fun c => { c with vrfValid := c.vrfValid + 1 })
         else
@@ -718,7 +735,8 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
     (seenBlocks : Option (IO.Ref (Option (List Nat))) := none)
     (tuiRef : Option (IO.Ref TUIState) := none)
     (peerAddr : String := "")
-    (mempoolRef : Option (IO.Ref Mempool) := none) : IO Bool := do
+    (mempoolRef : Option (IO.Ref Mempool) := none)
+    (consensusRef : Option (IO.Ref ConsensusState) := none) : IO Bool := do
   -- Extract the actual block point from the header (not the tip)
   -- The headerBytes is tag24-wrapped: d8 18 <bytestring>
   -- Block hash in Cardano = blake2b_256(content inside tag24 bytestring)
@@ -793,7 +811,7 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
             -- Validate consensus fields for Shelley+ headers
             if header.era >= 1 then
               match extractShelleyInfo header.headerBytes with
-              | some shelleyInfo => validateBlockHeader shelleyInfo ref
+              | some shelleyInfo => validateBlockHeader shelleyInfo ref consensusRef
               | none => pure ()
             -- Remove confirmed txs from mempool and update TUI stats
             if let some mpRef := mempoolRef then
@@ -816,6 +834,34 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
           match tuiRef with
           | some ref => ref.modify (·.addLog s!"Block #{blockNo} stored in chain.db")
           | none => IO.println s!"  💾 Block #{blockNo} stored in chain.db"
+        -- Update consensus state: epoch boundary detection and nonce evolution
+        if let some csRef := consensusRef then
+          let slot := blockPoint.slot.toNat
+          csRef.modify fun cs =>
+            let newEpoch := slotToEpoch cs slot
+            let cs := if needsEpochTransition cs slot then
+              -- Epoch boundary: rotate nonces and take stake snapshot
+              let snapshot := cs.stakeSnapshot  -- retain current (no new UTxO scan mid-sync)
+              processEpochTransition cs newEpoch snapshot
+            else cs
+            -- Update evolving nonce with VRF output from block header
+            if header.era >= 1 then
+              match extractShelleyInfo header.headerBytes with
+              | some info =>
+                match info.vrfResult with
+                | some vrf => updateEvolvingNonce cs vrf.output
+                | none => cs
+              | none => cs
+            else cs
+          -- Push nonce info to TUI
+          if let some ref := tuiRef then
+            let cs ← csRef.get
+            let epochHex := bytesToHex cs.epochNonce |>.take 16
+            let evolvingHex := bytesToHex cs.evolvingNonce |>.take 16
+            ref.modify (·.updateConsensus fun c => { c with
+              epochNonceHex := epochHex
+              evolvingNonceHex := evolvingHex
+            })
         return true
 
 /-- Encode a KeepAlive response (MsgKeepAliveResponse) -/
@@ -983,12 +1029,10 @@ partial def receiveChainSyncFrame (sock : Socket)
                           if state.isEmpty then
                             -- First MsgInit: Instance 0 response, just mark it
                             q.set [ByteArray.empty]
-                            IO.eprintln "[TxSub2] Got Instance 0 MsgInit (server response)"
                           else
                             -- Second MsgInit: Instance 1, respond with our server role
-                            let _ ← sendTxSubmission2 sock .MsgInit
-                            let _ ← sendTxSubmission2 sock (.MsgRequestTxIds true 0 10)
-                            IO.eprintln "[TxSub2] Got Instance 1 MsgInit, sent MsgInit + MsgRequestTxIds"
+                            let _ ← sendTxSubmission2Responder sock .MsgInit
+                            let _ ← sendTxSubmission2Responder sock (.MsgRequestTxIds true 0 10)
                       | none => pure ()
                   | some (.MsgRequestTxIds blocking ack req) => do
                         match mempoolRef, txSubmPeerRef with
@@ -1035,27 +1079,25 @@ partial def receiveChainSyncFrame (sock : Socket)
                             pure ()
                   | some (.MsgReplyTxIds txIds) => do
                       -- Peer replying with tx IDs (their client role — response to our request)
-                      IO.eprintln s!"[TxSub2] MsgReplyTxIds: {txIds.length} txs"
                       if txIds.isEmpty then
                         -- Peer has no txs; request again (blocking)
-                        let _ ← sendTxSubmission2 sock (.MsgRequestTxIds true 0 10)
+                        let _ ← sendTxSubmission2Responder sock (.MsgRequestTxIds true 0 10)
                       else
                         match mempoolRef with
                         | some mpRef => do
                             let pool ← mpRef.get
                             let wanted := txIds.filter fun tid => !pool.contains tid.hash
                             if wanted.isEmpty then
-                              let _ ← sendTxSubmission2 sock
+                              let _ ← sendTxSubmission2Responder sock
                                 (.MsgRequestTxIds false (UInt16.ofNat txIds.length) 10)
                             else
-                              let _ ← sendTxSubmission2 sock
+                              let _ ← sendTxSubmission2Responder sock
                                 (.MsgRequestTxs (wanted.map (·.hash)))
                         | none =>
-                            let _ ← sendTxSubmission2 sock
+                            let _ ← sendTxSubmission2Responder sock
                               (.MsgRequestTxIds false (UInt16.ofNat txIds.length) 10)
                   | some (.MsgReplyTxs txBodies) => do
                       -- Peer replying with full tx bodies — add to mempool!
-                      IO.eprintln s!"[TxSub2] MsgReplyTxs: {txBodies.length} txs received!"
                       match mempoolRef with
                       | some mpRef => do
                           let now ← Cleanode.TUI.Render.nowMs
@@ -1064,10 +1106,11 @@ partial def receiveChainSyncFrame (sock : Socket)
                             match ← pool.addTxRaw txBytes now with
                             | .ok newPool => mpRef.set newPool
                             | .error _ => pure ()
-                          let _ ← sendTxSubmission2 sock
+                          let _ ← sendTxSubmission2Responder sock
                             (.MsgRequestTxIds false (UInt16.ofNat txBodies.length) 10)
                       | none => pure ()
-                    | _ => pure ()
+                    | some .MsgDone => pure ()
+                    | none => pure ()
                 receiveChainSyncFrame sock discoveryRef mempoolRef txSubmPeerRef txSubmResponderQueue
               else if header.protocolId == .PeerSharing then
                 -- Handle PeerSharing responses inline (non-blocking)
@@ -1103,7 +1146,8 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
     (peerAddr : String := "")
     (mempoolRef : Option (IO.Ref Mempool) := none)
     (txSubmPeerRef : Option (IO.Ref TxSubmPeerState) := none)
-    (txSubmResponderQueue : Option (IO.Ref (List ByteArray)) := none) : IO SyncExit := do
+    (txSubmResponderQueue : Option (IO.Ref (List ByteArray)) := none)
+    (consensusRef : Option (IO.Ref ConsensusState) := none) : IO SyncExit := do
   -- Request next block header
   match ← sendChainSync sock requestNext with
   | .error e =>
@@ -1117,9 +1161,9 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
           | none => do
               return .protocolError "Failed to decode ChainSync message"
           | some (.MsgRollForward header tip) => do
-              let ok ← fetchAndDisplayBlock sock header tip chainDb seenBlocks tuiRef peerAddr mempoolRef
+              let ok ← fetchAndDisplayBlock sock header tip chainDb seenBlocks tuiRef peerAddr mempoolRef consensusRef
               if ok then
-                syncLoop sock (blockCount + 1) chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue
+                syncLoop sock (blockCount + 1) chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef
               else
                 return .protocolError "Failed to fetch block"
           | some (.MsgRollBackward rollbackPoint _) => do
@@ -1138,7 +1182,7 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
                       ("↩ Rollback to slot ".style |> yellow),
                       (s!"{rollbackPoint.slot}".style |> yellow |> bold)
                     ]
-              syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue
+              syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef
           | some (.MsgAwaitReply) => do
               -- Dedup: only print once across peers (encode as blockCount + 2B offset)
               let shouldPrint ← do
@@ -1162,9 +1206,9 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
               | .ok frame => do
                   match decodeChainSyncMessage frame.payload with
                   | some (.MsgRollForward header tip) => do
-                      let ok ← fetchAndDisplayBlock sock header tip chainDb seenBlocks tuiRef peerAddr mempoolRef
+                      let ok ← fetchAndDisplayBlock sock header tip chainDb seenBlocks tuiRef peerAddr mempoolRef consensusRef
                       if ok then
-                        syncLoop sock (blockCount + 1) chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue
+                        syncLoop sock (blockCount + 1) chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef
                       else
                         return .protocolError "Failed to fetch block"
                   | some (.MsgRollBackward rollbackPoint2 _) => do
@@ -1182,15 +1226,15 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
                               ("↩ Rollback to slot ".style |> yellow),
                               (s!"{rollbackPoint2.slot}".style |> yellow |> bold)
                             ]
-                      syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue
+                      syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef
                   | some other => do
                       IO.println s!"Unexpected message: {repr other}"
-                      syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue
+                      syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef
                   | none =>
                       return .protocolError "Failed to decode ChainSync message"
           | some other => do
               IO.println s!"Unexpected message: {repr other}"
-              syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue
+              syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef
 
 /-- Connect, handshake, find tip, intersect, and enter sync loop.
     Returns a SyncExit indicating why the session ended. -/
@@ -1320,7 +1364,8 @@ def peerFindTipAndSync (sock : Socket) (addrStr : String) (chainDb : ChainDB)
     (tuiRef : Option (IO.Ref TUIState) := none)
     (mempoolRef : Option (IO.Ref Mempool) := none)
     (txSubmPeerRef : Option (IO.Ref TxSubmPeerState) := none)
-    (txSubmResponderQueue : Option (IO.Ref (List ByteArray)) := none) : IO SyncExit := do
+    (txSubmResponderQueue : Option (IO.Ref (List ByteArray)) := none)
+    (consensusRef : Option (IO.Ref ConsensusState) := none) : IO SyncExit := do
   -- Find chain tip
   match ← sendChainSync sock findIntersectTip with
   | .error e => return .connectionLost s!"Failed to query tip: {e}"
@@ -1341,7 +1386,7 @@ def peerFindTipAndSync (sock : Socket) (addrStr : String) (chainDb : ChainDB)
                       match decodeChainSyncMessage frame2.payload with
                       | some (.MsgIntersectFound point _) => do
                           tuiLog tuiRef s!"Peer {addrStr}: intersected at slot {point.slot}"
-                          syncLoop sock 0 (some chainDb) discoveryRef seenBlocks tuiRef addrStr mempoolRef txSubmPeerRef txSubmResponderQueue
+                          syncLoop sock 0 (some chainDb) discoveryRef seenBlocks tuiRef addrStr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef
                       | _ => return .protocolError "Failed to intersect"
           | _ => return .protocolError "Failed to find tip"
 
@@ -1352,7 +1397,8 @@ def peerConnectAndSync (host : String) (port : UInt16) (addrStr : String)
     (discoveryRef : Option (IO.Ref DiscoveryState) := none)
     (seenBlocks : Option (IO.Ref (Option (List Nat))) := none)
     (tuiRef : Option (IO.Ref TUIState) := none)
-    (mempoolRef : Option (IO.Ref Mempool) := none) : IO SyncExit := do
+    (mempoolRef : Option (IO.Ref Mempool) := none)
+    (consensusRef : Option (IO.Ref ConsensusState) := none) : IO SyncExit := do
   match ← socket_connect host port with
   | .error e => return .connectionLost s!"Connection failed: {e}"
   | .ok sock => do
@@ -1365,16 +1411,28 @@ def peerConnectAndSync (host : String) (port : UInt16) (addrStr : String)
           socket_close sock
           return .connectionLost s!"Handshake send failed: {e}"
       | .ok _ => do
-          match ← socket_receive sock 1024 with
+          -- Read handshake response using proper mux framing (8-byte header + payload)
+          -- to avoid consuming extra bytes (e.g. TxSubmission2 MsgInit) from the TCP buffer
+          match ← socket_receive_exact sock 8 with
           | .error e =>
               socket_close sock
               return .connectionLost s!"Handshake recv failed: {e}"
-          | .ok rawData => do
-              match decodeMuxFrame rawData >>= fun f => decodeHandshakeMessage f.payload with
+          | .ok hdrBytes => do
+              match decodeMuxHeader hdrBytes with
               | none =>
                   socket_close sock
-                  return .protocolError "Handshake decode failed"
-              | some hsMsg => do
+                  return .protocolError "Handshake header decode failed"
+              | some hdr => do
+                  match ← socket_receive_exact sock hdr.payloadLength.toNat.toUInt32 with
+                  | .error e =>
+                      socket_close sock
+                      return .connectionLost s!"Handshake payload recv failed: {e}"
+                  | .ok payloadBytes => do
+                      match decodeHandshakeMessage payloadBytes with
+                      | none =>
+                          socket_close sock
+                          return .protocolError "Handshake decode failed"
+                      | some hsMsg => do
                   let peerSharingEnabled := match hsMsg with
                     | .AcceptVersion _ vd => vd.peerSharing == 1
                     | _ => false
@@ -1386,8 +1444,9 @@ def peerConnectAndSync (host : String) (port : UInt16) (addrStr : String)
                   -- Update TUI peer status to syncing
                   if let some ref := tuiRef then
                     ref.modify (·.updatePeer addrStr "syncing")
-                  -- Don't send MsgInit yet — wait to see if peer sends TxSub2 frames first
-                  -- let _ ← sendTxSubmission2 sock .MsgInit
+                  -- Send MsgInit as TxSubmission2 Initiator (Instance 0 client)
+                  -- This tells the peer we support tx relay and triggers their MsgInit responses
+                  let _ ← sendTxSubmission2 sock .MsgInit
                   -- Create per-peer TxSubmission2 state
                   let txSubmPeerRef ← IO.mkRef TxSubmPeerState.empty
                   -- Responder queue: no longer used (handled inline in mux loop)
@@ -1395,7 +1454,7 @@ def peerConnectAndSync (host : String) (port : UInt16) (addrStr : String)
                   if peerSharingEnabled && discoveryRef.isSome then
                     tuiLog tuiRef s!"Peer {addrStr}: PeerSharing enabled, requesting peers..."
                     let _ ← sendPeerSharing sock (.MsgShareRequest 10)
-                  let result ← peerFindTipAndSync sock addrStr chainDb discoveryRef seenBlocks tuiRef mempoolRef (some txSubmPeerRef) (some responderQueue)
+                  let result ← peerFindTipAndSync sock addrStr chainDb discoveryRef seenBlocks tuiRef mempoolRef (some txSubmPeerRef) (some responderQueue) consensusRef
                   socket_close sock
                   return result
 
@@ -1406,6 +1465,7 @@ partial def peerReconnectLoop (host : String) (port : UInt16)
     (seenBlocks : Option (IO.Ref (Option (List Nat))) := none)
     (tuiRef : Option (IO.Ref TUIState) := none)
     (mempoolRef : Option (IO.Ref Mempool) := none)
+    (consensusRef : Option (IO.Ref ConsensusState) := none)
     (attempt : Nat := 0) : IO Unit := do
   let addrStr := s!"{host}:{port}"
   if attempt > 0 then
@@ -1416,19 +1476,19 @@ partial def peerReconnectLoop (host : String) (port : UInt16)
       IO.println s!"  ⟳ Peer {addrStr}: reconnecting in {delaySec}s (attempt {attempt + 1})..."
     IO.sleep (UInt32.ofNat (delaySec * 1000))
 
-  match ← peerConnectAndSync host port addrStr proposal chainDb discoveryRef seenBlocks tuiRef mempoolRef with
+  match ← peerConnectAndSync host port addrStr proposal chainDb discoveryRef seenBlocks tuiRef mempoolRef consensusRef with
   | .connectionLost reason => do
       if let some ref := tuiRef then
         ref.modify (·.updatePeer addrStr "disconnected")
       else
         IO.println s!"  ⚡ Peer {addrStr}: {reason}"
-      peerReconnectLoop host port proposal chainDb discoveryRef seenBlocks tuiRef mempoolRef (attempt + 1)
+      peerReconnectLoop host port proposal chainDb discoveryRef seenBlocks tuiRef mempoolRef consensusRef (attempt + 1)
   | .protocolError reason => do
       if let some ref := tuiRef then
         ref.modify (·.updatePeer addrStr "error")
       else
         IO.println s!"  ✗ Peer {addrStr}: {reason}"
-      peerReconnectLoop host port proposal chainDb discoveryRef seenBlocks tuiRef mempoolRef (attempt + 1)
+      peerReconnectLoop host port proposal chainDb discoveryRef seenBlocks tuiRef mempoolRef consensusRef (attempt + 1)
   | .done => pure ()
 
 /-- Peer spawner loop: drains discovered peers and spawns new connection tasks -/
@@ -1437,12 +1497,13 @@ partial def peerSpawnerLoop (discoveryRef : IO.Ref DiscoveryState)
     (seenBlocks : Option (IO.Ref (Option (List Nat))) := none)
     (tuiRef : Option (IO.Ref TUIState) := none)
     (mempoolRef : Option (IO.Ref Mempool) := none)
+    (consensusRef : Option (IO.Ref ConsensusState) := none)
     (maxPeers : Nat := 20) : IO Unit := do
   IO.sleep 30000  -- Check every 30 seconds
   let newPeers ← discoveryRef.modifyGet fun ds =>
     (ds.discovered, { ds with discovered := [], known := ds.known ++ ds.discovered })
   if newPeers.isEmpty then
-    peerSpawnerLoop discoveryRef proposal chainDb seenBlocks tuiRef mempoolRef maxPeers
+    peerSpawnerLoop discoveryRef proposal chainDb seenBlocks tuiRef mempoolRef consensusRef maxPeers
   else do
     let knownCount := (← discoveryRef.get).known.length
     let budget := if knownCount >= maxPeers then 0 else maxPeers - knownCount
@@ -1451,10 +1512,10 @@ partial def peerSpawnerLoop (discoveryRef : IO.Ref DiscoveryState)
       tuiLog tuiRef s!"Connecting to discovered peer {host}:{port}"
       let _ ← IO.asTask (do
         try
-          peerReconnectLoop host port proposal chainDb (some discoveryRef) seenBlocks tuiRef mempoolRef
+          peerReconnectLoop host port proposal chainDb (some discoveryRef) seenBlocks tuiRef mempoolRef consensusRef
         catch e =>
           tuiLog tuiRef s!"Discovered peer {host}:{port}: {e}")
-    peerSpawnerLoop discoveryRef proposal chainDb seenBlocks tuiRef mempoolRef maxPeers
+    peerSpawnerLoop discoveryRef proposal chainDb seenBlocks tuiRef mempoolRef consensusRef maxPeers
 
 -- ============================================================
 -- = Inbound Connection Handling (for mempool population)     =
@@ -1594,6 +1655,19 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
   -- Shared mempool (all peers read/write via IO.Ref)
   let mempoolRef ← IO.mkRef (Mempool.empty {})
 
+  -- Shared consensus state (epoch nonces, stake snapshots, chain selection)
+  let genesis : Cleanode.Config.Genesis.ShelleyGenesis := {
+    epochLength := 432000
+    slotLength := 1
+    activeSlotsCoeff := { numerator := 1, denominator := 20 }
+    securityParam := 2160
+    maxLovelaceSupply := 45000000000000000
+    networkMagic := match networkName with | "Preprod" => 1 | "Preview" => 2 | _ => 764824073
+    networkId := networkName
+    protocolParams := none
+  }
+  let consensusRef ← IO.mkRef (ConsensusState.initial genesis)
+
   -- TUI state (created only in TUI mode)
   let now ← Cleanode.TUI.Render.nowMs
   let tuiStateRef : Option (IO.Ref TUIState) ←
@@ -1626,7 +1700,7 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
   for (host, port) in peerAddrs do
     let task ← IO.asTask (do
       try
-        peerReconnectLoop host port proposal chainDb (some discoveryRef) (some seenBlocksRef) tuiStateRef (some mempoolRef)
+        peerReconnectLoop host port proposal chainDb (some discoveryRef) (some seenBlocksRef) tuiStateRef (some mempoolRef) (some consensusRef)
       catch e =>
         tuiLog tuiStateRef s!"Peer {host}:{port}: {e}")
     tasks := tasks ++ [task]
@@ -1634,7 +1708,7 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
   -- Launch peer discovery spawner
   let spawnerTask ← IO.asTask (do
     try
-      peerSpawnerLoop discoveryRef proposal chainDb (some seenBlocksRef) tuiStateRef (some mempoolRef)
+      peerSpawnerLoop discoveryRef proposal chainDb (some seenBlocksRef) tuiStateRef (some mempoolRef) (some consensusRef)
     catch e =>
       tuiLog tuiStateRef s!"Peer spawner: {e}")
   tasks := tasks ++ [spawnerTask]

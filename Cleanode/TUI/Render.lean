@@ -48,7 +48,7 @@ partial def tuiRenderLoop (stateRef : IO.Ref TUIState) : IO Unit := do
   loop
 
 /-- Start the TUI render loop as a background task -/
-def startTUI (stateRef : IO.Ref TUIState) : IO (Task (Except IO.Error Unit)) :=
+def startTUI (stateRef : IO.Ref TUIState) : IO (Task (Except IO.Error Unit)) := do
   IO.asTask (tuiRenderLoop stateRef)
 
 /-- Stop the TUI and restore terminal (call on shutdown) -/

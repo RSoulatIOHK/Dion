@@ -65,6 +65,81 @@ structure ForgedBlock where
   vrfOutput : List UInt8
   selectedTxs : BlockBody
 
+-- ==========================
+-- = Header CBOR Encoding   =
+-- ==========================
+
+open Cleanode.Network.Cbor in
+/-- Encode VRF result as CBOR array [output, proof].
+    output: 64-byte VRF output as byte string
+    proof: 80-byte VRF proof as byte string -/
+private def encodeVrfResult (proof : VRFProof) (output : List UInt8) : ByteArray :=
+  let outputBytes := ByteArray.mk output.toArray
+  let proofGamma := Cleanode.Crypto.Sign.Ed25519.Point.EdPoint.compress proof.gamma
+  -- VRF proof encoding: [gamma (32B) || challenge (16B) || response (32B)] = 80 bytes
+  let challengeBytes := (List.range 16).map fun i =>
+    ((proof.challenge >>> (i * 8)) % 256).toUInt8
+  let responseBytes := (List.range 32).map fun i =>
+    ((proof.response >>> (i * 8)) % 256).toUInt8
+  let proofBytes := ByteArray.mk (proofGamma ++ challengeBytes ++ responseBytes).toArray
+  encodeArrayHeader 2 ++ encodeBytes outputBytes ++ encodeBytes proofBytes
+
+open Cleanode.Network.Cbor in
+/-- Encode operational certificate as CBOR array [hotVKey, seqNum, kesPeriod, coldSig] -/
+private def encodeOpCert (cert : OperationalCert) : ByteArray :=
+  encodeArrayHeader 4
+    ++ encodeBytes cert.hotVKey
+    ++ encodeUInt cert.sequenceNumber
+    ++ encodeUInt cert.kesPeriod
+    ++ encodeBytes cert.coldKeySignature
+
+open Cleanode.Network.Cbor in
+/-- Encode protocol version as CBOR array [major, minor] -/
+private def encodeProtocolVersion (major minor : Nat) : ByteArray :=
+  encodeArrayHeader 2 ++ encodeUInt major ++ encodeUInt minor
+
+open Cleanode.Network.Cbor in
+/-- Encode the 10-element header body as CBOR.
+    Fields:
+    0. blockNumber
+    1. slot
+    2. prevHash (32 bytes, or empty for genesis)
+    3. issuerVKeyHash (28 bytes)
+    4. vrfVKey (32 bytes)
+    5. vrfResult [output, proof]
+    6. bodySize
+    7. bodyHash (32 bytes)
+    8. opCert [hotVKey, seqNum, kesPeriod, coldSig]
+    9. protocolVersion [major, minor] -/
+def encodeHeaderBody (blockNumber slot : Nat) (prevHash issuerVKeyHash vrfVKey : ByteArray)
+    (vrfProof : VRFProof) (vrfOutput : List UInt8)
+    (bodySize : Nat) (bodyHash : ByteArray)
+    (opCert : OperationalCert) (protocolMajor protocolMinor : Nat) : ByteArray :=
+  encodeArrayHeader 10
+    ++ encodeUInt blockNumber
+    ++ encodeUInt slot
+    ++ encodeBytes prevHash
+    ++ encodeBytes issuerVKeyHash
+    ++ encodeBytes vrfVKey
+    ++ encodeVrfResult vrfProof vrfOutput
+    ++ encodeUInt bodySize
+    ++ encodeBytes bodyHash
+    ++ encodeOpCert opCert
+    ++ encodeProtocolVersion protocolMajor protocolMinor
+
+open Cleanode.Network.Cbor in
+/-- Wrap header body in a full block header: [headerBody, kesSig]
+    Wrapped in CBOR tag 24 (encoded CBOR) for on-wire format. -/
+def encodeBlockHeader (headerBodyBytes kesSig : ByteArray) : ByteArray :=
+  let innerArray := encodeArrayHeader 2 ++ headerBodyBytes ++ encodeBytes kesSig
+  encodeTagged 24 innerArray
+
+open Cleanode.Network.Cbor in
+/-- Encode the block body as CBOR array of transaction byte strings -/
+def encodeBlockBody (txs : List SelectedTx) : ByteArray :=
+  let arr := encodeArrayHeader txs.length
+  txs.foldl (fun acc tx => acc ++ encodeBytes tx.rawBytes) arr
+
 -- ====================
 -- = Forge Logic      =
 -- ====================
@@ -82,13 +157,26 @@ def tryForgeBlock (params : ForgeParams) (consensusState : ConsensusState)
   | .notLeader => none
   | .invalidPool => none
   | .isLeader vrfProof vrfOutput =>
-    -- We're the leader! Build the block.
+    -- Encode the block body
+    let bodyBytes := encodeBlockBody blockBody.transactions
+    -- Compute body hash (placeholder — in production use blake2b_256 via IO)
+    let bodyHash := ByteArray.mk #[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                                     0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+    -- Encode header body (VRF key from params)
+    let vrfVKey := ByteArray.mk params.vrfPublicKey.toArray
+    let headerBodyBytes := encodeHeaderBody blockNumber slot prevHash
+      params.poolId vrfVKey vrfProof vrfOutput
+      bodyBytes.size bodyHash
+      params.operationalCert params.protocolMajor params.protocolMinor
+    -- KES signature placeholder (would be signed via IO in production)
+    let kesSig := ByteArray.mk (Array.replicate 448 0)  -- Sum-KES depth 6: 448 bytes
+    let headerBytes := encodeBlockHeader headerBodyBytes kesSig
     some {
       blockNumber := blockNumber
       slot := slot
       prevHash := prevHash
-      headerBytes := ByteArray.mk #[]  -- TODO: CBOR encode header
-      bodyBytes := ByteArray.mk #[]    -- TODO: CBOR encode body
+      headerBytes := headerBytes
+      bodyBytes := bodyBytes
       vrfProof := vrfProof
       vrfOutput := vrfOutput
       selectedTxs := blockBody

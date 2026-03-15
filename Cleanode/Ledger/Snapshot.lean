@@ -128,7 +128,7 @@ partial def createSnapshot (state : LedgerState) (snapshotDir : FilePath) : IO U
   let mut data := serializeSnapshotHeader header
 
   -- Serialize UTxO entries
-  for entry in state.utxo.entries do
+  for entry in state.utxo.toList do
     data := data ++ serializeUTxOEntry entry
 
   let filename := snapshotDir / s!"snapshot_{si.epoch}_{si.slot}.dat"

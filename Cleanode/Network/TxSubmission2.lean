@@ -1,4 +1,5 @@
 import Cleanode.Network.Cbor
+import Cleanode.Network.ByteArrayBuilder
 import Cleanode.Network.Multiplexer
 import Cleanode.Network.Socket
 
@@ -98,19 +99,19 @@ def encodeTxSubmission2Message : TxSubmission2Message → ByteArray
       -- Spec requires indefinite-length list for txIdsAndSizes
       let arr := encodeArrayHeader 2
       let msgId := encodeUInt 1
-      let idsEnc := txIds.foldl (fun acc id => acc ++ encodeTxId id) ⟨#[]⟩
+      let idsEnc := ByteArrayBuilder.foldEncode txIds encodeTxId
       arr ++ msgId ++ encodeIndefiniteArrayHeader ++ idsEnc ++ encodeBreak
   | .MsgRequestTxs txIds =>
       -- Spec requires indefinite-length list for txIdList
       let arr := encodeArrayHeader 2
       let msgId := encodeUInt 2
-      let idsEnc := txIds.foldl (fun acc id => acc ++ encodeBytes id) ⟨#[]⟩
+      let idsEnc := ByteArrayBuilder.foldEncode txIds encodeBytes
       arr ++ msgId ++ encodeIndefiniteArrayHeader ++ idsEnc ++ encodeBreak
   | .MsgReplyTxs txs =>
       -- Spec requires indefinite-length list for txList
       let arr := encodeArrayHeader 2
       let msgId := encodeUInt 3
-      let txsEnc := txs.foldl (fun acc tx => acc ++ encodeBytes tx) ⟨#[]⟩
+      let txsEnc := ByteArrayBuilder.foldEncode txs encodeBytes
       arr ++ msgId ++ encodeIndefiniteArrayHeader ++ txsEnc ++ encodeBreak
   | .MsgDone =>
       let arr := encodeArrayHeader 1

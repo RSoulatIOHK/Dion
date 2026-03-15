@@ -1,4 +1,5 @@
 import Cleanode.Network.Cbor
+import Cleanode.Network.ByteArrayBuilder
 import Cleanode.Network.Multiplexer
 import Cleanode.Network.Socket
 
@@ -132,7 +133,7 @@ def encodeChainSyncMessage : ChainSyncMessage → ByteArray
       let arr := encodeArrayHeader 2
       let msgId := encodeUInt 4
       let pointsArr := encodeArrayHeader points.length
-      let pointsEnc := points.foldl (fun acc p => acc ++ encodePoint p) ⟨#[]⟩
+      let pointsEnc := ByteArrayBuilder.foldEncode points encodePoint
       arr ++ msgId ++ pointsArr ++ pointsEnc
   | .MsgIntersectFound point tip =>
       let arr := encodeArrayHeader 3

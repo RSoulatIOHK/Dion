@@ -128,9 +128,9 @@ private def extractStakeKeyHash (address : ByteArray) : Option ByteArray :=
     for addresses whose stake credential is delegated to this pool -/
 def DelegationState.poolStake (s : DelegationState) (poolId : ByteArray) (utxo : UTxOSet) : Nat :=
   let delegators := s.delegations.filter (fun d => d.poolId == poolId) |>.map (·.stakeKeyHash)
-  utxo.entries.foldl (fun acc entry =>
-    match extractStakeKeyHash entry.output.address with
-    | some stakeHash => if delegators.any (· == stakeHash) then acc + entry.output.amount else acc
+  utxo.map.fold (fun acc _ output =>
+    match extractStakeKeyHash output.address with
+    | some stakeHash => if delegators.any (· == stakeHash) then acc + output.amount else acc
     | none => acc
   ) 0
 

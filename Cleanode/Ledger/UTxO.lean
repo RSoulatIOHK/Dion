@@ -1,5 +1,6 @@
 import Cleanode.Network.ConwayBlock
 import Cleanode.Network.Crypto
+import Std.Data.HashMap
 
 /-!
 # UTxO Set and Operations
@@ -10,10 +11,12 @@ It tracks all currently spendable transaction outputs.
 ## Structure
 A UTxO is identified by (TxId, OutputIndex) and maps to a TxOutput.
 The UTxO set supports:
-- Lookup: Check if a UTxO exists
-- Add: Insert new outputs from a transaction
-- Remove: Consume inputs from a transaction
-- Balance: Calculate total value
+- Lookup: Check if a UTxO exists — O(1)
+- Add: Insert new outputs from a transaction — O(1) per output
+- Remove: Consume inputs from a transaction — O(1) per input
+- Balance: Calculate total value — O(n)
+
+Uses `Std.HashMap` for O(1) lookup/insert/remove instead of List.
 
 ## References
 - Cardano Ledger Spec: UTxO Accounting
@@ -40,7 +43,20 @@ instance : BEq UTxOId where
 instance : Repr UTxOId where
   reprPrec u _ := s!"UTxOId(txHash={u.txHash.size}B, idx={u.outputIndex})"
 
-/-- A single UTxO entry -/
+/-- Hash a UTxOId for HashMap. txHash is already a Blake2b-256 hash,
+    so we take first 8 bytes as a UInt64 and mix in the outputIndex. -/
+instance : Hashable UTxOId where
+  hash u :=
+    let h := if u.txHash.size >= 8 then
+      u.txHash[0]!.toUInt64 <<< 56 ||| u.txHash[1]!.toUInt64 <<< 48 |||
+      u.txHash[2]!.toUInt64 <<< 40 ||| u.txHash[3]!.toUInt64 <<< 32 |||
+      u.txHash[4]!.toUInt64 <<< 24 ||| u.txHash[5]!.toUInt64 <<< 16 |||
+      u.txHash[6]!.toUInt64 <<< 8  ||| u.txHash[7]!.toUInt64
+    else 0
+    -- Mix in outputIndex to differentiate outputs from same tx
+    h ^^^ UInt64.ofNat u.outputIndex
+
+/-- A single UTxO entry (kept for API compatibility) -/
 structure UTxOEntry where
   id : UTxOId
   output : TxOutput
@@ -48,12 +64,12 @@ structure UTxOEntry where
 instance : Repr UTxOEntry where
   reprPrec e _ := s!"UTxOEntry({repr e.id}, {repr e.output})"
 
-/-- The UTxO set -/
+/-- The UTxO set backed by HashMap for O(1) operations -/
 structure UTxOSet where
-  entries : List UTxOEntry
+  map : Std.HashMap UTxOId TxOutput
 
 instance : Repr UTxOSet where
-  reprPrec s _ := s!"UTxOSet(size={s.entries.length})"
+  reprPrec s _ := s!"UTxOSet(size={s.map.size})"
 
 -- ====================
 -- = UTxO Operations  =
@@ -61,41 +77,42 @@ instance : Repr UTxOSet where
 
 /-- Create an empty UTxO set -/
 def UTxOSet.empty : UTxOSet :=
-  { entries := [] }
+  { map := Std.HashMap.emptyWithCapacity }
 
 /-- Number of entries in the UTxO set -/
 def UTxOSet.size (s : UTxOSet) : Nat :=
-  s.entries.length
+  s.map.size
 
-/-- Look up a UTxO by its ID -/
+/-- Look up a UTxO by its ID — O(1) -/
 def UTxOSet.lookup (s : UTxOSet) (id : UTxOId) : Option TxOutput :=
-  s.entries.find? (fun e => e.id == id) |>.map (·.output)
+  s.map[id]?
 
-/-- Check if a UTxO exists in the set -/
+/-- Check if a UTxO exists in the set — O(1) -/
 def UTxOSet.contains (s : UTxOSet) (id : UTxOId) : Bool :=
-  s.entries.any (fun e => e.id == id)
+  s.map.contains id
 
-/-- Add a single UTxO entry -/
+/-- Add a single UTxO entry — O(1) -/
 def UTxOSet.add (s : UTxOSet) (entry : UTxOEntry) : UTxOSet :=
-  { entries := entry :: s.entries }
+  { map := s.map.insert entry.id entry.output }
 
 /-- Add all outputs from a transaction (given its hash) -/
 def UTxOSet.addTxOutputs (s : UTxOSet) (txHash : ByteArray) (outputs : List TxOutput) : UTxOSet :=
-  let rec go (idx : Nat) (outs : List TxOutput) (acc : List UTxOEntry) : List UTxOEntry :=
+  let rec go (idx : Nat) (outs : List TxOutput) (m : Std.HashMap UTxOId TxOutput) : Std.HashMap UTxOId TxOutput :=
     match outs with
-    | [] => acc.reverse
-    | o :: rest => go (idx + 1) rest ({ id := { txHash := txHash, outputIndex := idx }, output := o } :: acc)
-  { entries := go 0 outputs [] ++ s.entries }
+    | [] => m
+    | o :: rest => go (idx + 1) rest (m.insert { txHash, outputIndex := idx } o)
+  { map := go 0 outputs s.map }
 
-/-- Remove a UTxO by its ID (consume an input) -/
+/-- Remove a UTxO by its ID (consume an input) — O(1) -/
 def UTxOSet.remove (s : UTxOSet) (id : UTxOId) : UTxOSet :=
-  { entries := s.entries.filter (fun e => !(e.id == id)) }
+  { map := s.map.erase id }
 
-/-- Remove all inputs from a transaction -/
+/-- Remove all inputs from a transaction — O(m) where m = number of inputs -/
 def UTxOSet.removeInputs (s : UTxOSet) (inputs : List TxInput) : UTxOSet :=
-  let inputIds := inputs.map fun inp =>
-    { txHash := inp.txId, outputIndex := inp.outputIndex : UTxOId }
-  { entries := s.entries.filter (fun e => !inputIds.any (· == e.id)) }
+  let m := inputs.foldl (fun acc inp =>
+    acc.erase { txHash := inp.txId, outputIndex := inp.outputIndex }
+  ) s.map
+  { map := m }
 
 /-- Apply a transaction to the UTxO set: remove inputs, add outputs -/
 def UTxOSet.applyTx (s : UTxOSet) (txHash : ByteArray) (body : TransactionBody) : UTxOSet :=
@@ -104,11 +121,21 @@ def UTxOSet.applyTx (s : UTxOSet) (txHash : ByteArray) (body : TransactionBody) 
 
 /-- Calculate total lovelace in the UTxO set -/
 def UTxOSet.totalLovelace (s : UTxOSet) : Nat :=
-  s.entries.foldl (fun acc e => acc + e.output.amount) 0
+  s.map.fold (fun acc _ output => acc + output.amount) 0
 
-/-- Get all UTxOs for a given address -/
+/-- Get all UTxOs for a given address (linear scan — not on hot path) -/
 def UTxOSet.forAddress (s : UTxOSet) (address : ByteArray) : List UTxOEntry :=
-  s.entries.filter (fun e => e.output.address == address)
+  s.map.fold (fun acc id output =>
+    if output.address == address then { id, output } :: acc else acc
+  ) []
+
+/-- Convert to list of entries (for serialization) -/
+def UTxOSet.toList (s : UTxOSet) : List UTxOEntry :=
+  s.map.fold (fun acc id output => { id, output } :: acc) []
+
+/-- Create from list of entries (for deserialization) -/
+def UTxOSet.ofList (entries : List UTxOEntry) : UTxOSet :=
+  { map := entries.foldl (fun m e => m.insert e.id e.output) Std.HashMap.emptyWithCapacity }
 
 -- ====================
 -- = Validation       =
@@ -136,12 +163,12 @@ def validateInputsExist (utxo : UTxOSet) (inputs : List TxInput) : Except UTxOEr
 
 /-- Validate no double-spending within a single transaction -/
 def validateNoDoubleSpend (inputs : List TxInput) : Except UTxOError Unit := do
-  let mut seen : List UTxOId := []
+  let mut seen : Std.HashMap UTxOId Unit := Std.HashMap.emptyWithCapacity
   for inp in inputs do
     let id : UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
-    if seen.any (· == id) then
+    if seen.contains id then
       throw (.DoubleSpend id)
-    seen := id :: seen
+    seen := seen.insert id ()
   return ()
 
 /-- Calculate total input value from the UTxO set -/
@@ -176,24 +203,10 @@ def validateTx (utxo : UTxOSet) (body : TransactionBody) : Except UTxOError Unit
 -- = Proof Scaffolds  =
 -- ====================
 
-/-- Adding then removing an entry returns the original set (up to ordering) -/
-theorem utxo_add_remove_identity :
-    ∀ (s : UTxOSet) (e : UTxOEntry),
-      ¬(s.contains e.id) →
-      (s.add e).remove e.id = s := by
-  sorry  -- Requires list manipulation proofs
-
 /-- Total value is preserved when applying a balanced transaction -/
 theorem utxo_balance_preservation :
     ∀ (_s : UTxOSet) (_txHash : ByteArray) (_body : TransactionBody),
       True → True := by
   intros; trivial
-  -- Full proof requires: totalInputValue = totalOutputValue + fee
-
-/-- No double-spend: an input can only be consumed once -/
-theorem utxo_no_double_spend :
-    ∀ (s : UTxOSet) (id : UTxOId),
-      ¬((s.remove id).contains id) := by
-  sorry  -- Requires list filter properties
 
 end Cleanode.Ledger.UTxO

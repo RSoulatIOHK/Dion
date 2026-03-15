@@ -1,4 +1,5 @@
 import Cleanode.Network.Cbor
+import Cleanode.Network.ByteArrayBuilder
 import Cleanode.Network.Multiplexer
 import Cleanode.Network.Socket
 
@@ -76,7 +77,7 @@ def encodePeerSharingMessage : PeerSharingMessage → ByteArray
       let arr := encodeArrayHeader 2
       let msgId := encodeUInt 1
       let peersArr := encodeArrayHeader peers.length
-      let peersEnc := peers.foldl (fun acc p => acc ++ encodePeerAddress p) ⟨#[]⟩
+      let peersEnc := ByteArrayBuilder.foldEncode peers encodePeerAddress
       arr ++ msgId ++ peersArr ++ peersEnc
   | .MsgDone =>
       let arr := encodeArrayHeader 1

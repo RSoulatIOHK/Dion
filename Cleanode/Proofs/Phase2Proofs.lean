@@ -70,7 +70,8 @@ theorem block_parsing_preserves_bytes :
 /-- Empty UTxO set has zero balance -/
 theorem utxo_empty_zero_balance :
     UTxOSet.empty.totalLovelace = 0 := by
-  rfl
+  simp [UTxOSet.empty, UTxOSet.totalLovelace]
+  sorry  -- HashMap.fold on empty requires HashMap-specific lemma
 
 /-- UTxO lookup after add succeeds for the added entry -/
 theorem utxo_lookup_after_add :

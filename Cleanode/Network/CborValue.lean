@@ -1,4 +1,5 @@
 import Cleanode.Network.Cbor
+import Cleanode.Network.ByteArrayBuilder
 
 /-!
 # CBOR Value Type and Generic Codec
@@ -53,10 +54,12 @@ partial def encodeCborValue : CborValue → ByteArray
       encodeHead .TextString utf8.size ++ utf8
   | .array items =>
       let header := encodeHead .Array items.length
-      items.foldl (fun acc v => acc ++ encodeCborValue v) header
+      let b := items.foldl (fun b v => b.append (encodeCborValue v)) (ByteArrayBuilder.Builder.empty.append header)
+      b.toByteArray
   | .map pairs =>
       let header := encodeHead .Map pairs.length
-      pairs.foldl (fun acc (k, v) => acc ++ encodeCborValue k ++ encodeCborValue v) header
+      let b := pairs.foldl (fun b (k, v) => (b.append (encodeCborValue k)).append (encodeCborValue v)) (ByteArrayBuilder.Builder.empty.append header)
+      b.toByteArray
   | .tag t value =>
       encodeHead .Tag t ++ encodeCborValue value
   | .bool b =>

@@ -4,6 +4,7 @@ import Cleanode.Test.Ed25519Test
 import Cleanode.Test.VRFTest
 import Cleanode.Test.CborTest
 import Cleanode.Test.KESTest
+import Cleanode.Test.BlockRoundTripTest
 import Cleanode.Test.Benchmark
 
 /-!
@@ -23,6 +24,7 @@ open Cleanode.Test.Ed25519Test
 open Cleanode.Test.VRFTest
 open Cleanode.Test.CborTest
 open Cleanode.Test.KESTest
+open Cleanode.Test.BlockRoundTripTest
 open Cleanode.Test.Benchmark
 
 def main (args : List String) : IO UInt32 := do
@@ -69,6 +71,14 @@ def main (args : List String) : IO UInt32 := do
   IO.println "--- KES (Sum-KES-6) ---"
   let kesResults ← runKESTests
   for r in kesResults do
+    printResult r
+    summary := summary.add r
+
+  -- Block Round-Trip
+  IO.println ""
+  IO.println "--- Block CBOR Round-Trip ---"
+  let blockResults ← runBlockRoundTripTests
+  for r in blockResults do
     printResult r
     summary := summary.add r
 

@@ -93,6 +93,15 @@ def rawCertToLedger : RawCertificate → Option Cleanode.Ledger.Certificate.Cert
         metadata := none
       })
   | .poolRetirement pid epoch => some (.poolRetirement pid epoch)
+  | .conwayRegistration kh deposit => some (.conwayRegistration kh deposit)
+  | .conwayDeregistration kh refund => some (.conwayDeregistration kh refund)
+  | .voteDelegation kh drepCred => some (.voteDelegation kh (.keyHash drepCred))
+  | .stakeVoteDelegation kh pid drepCred => some (.stakeVoteDelegation kh pid (.keyHash drepCred))
+  | .stakeRegDelegation kh pid deposit => some (.stakeRegDelegation kh pid deposit)
+  | .voteRegDelegation kh drepCred deposit => some (.voteRegDelegation kh (.keyHash drepCred) deposit)
+  | .stakeVoteRegDelegation kh pid drepCred deposit => some (.stakeVoteRegDelegation kh pid (.keyHash drepCred) deposit)
+  | .authCommitteeHot cold hot => some (.authCommitteeHot cold hot)
+  | .resignCommitteeCold cold => some (.resignCommitteeCold cold)
   | .unknown _ => none
 
 /-- Atomically check if a key is in the set; if not, add it.

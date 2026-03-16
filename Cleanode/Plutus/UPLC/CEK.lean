@@ -492,6 +492,18 @@ def isScriptSuccess (result : CekValue) : Bool :=
 -- = IO Evaluation    =
 -- ====================
 
+/-- Convert an integer to a little-endian byte array for BLS scalar multiplication.
+    The blst library expects little-endian scalar bytes. For negative scalars,
+    we negate the point instead (handled by the caller using abs value). -/
+private partial def intToScalarBytes (n : Int) : ByteArray :=
+  if n == 0 then ByteArray.mk #[0]
+  else
+    let nat := if n < 0 then (-n).toNat else n.toNat
+    let rec go (v : Nat) (acc : Array UInt8) : Array UInt8 :=
+      if v == 0 then acc
+      else go (v / 256) (acc.push (UInt8.ofNat (v % 256)))
+    ByteArray.mk (go nat #[])
+
 open Cleanode.Crypto.BLS12_381 in
 /-- Apply BLS12-381 and crypto builtins that require IO (FFI calls).
     Returns `none` if the builtin is not IO-based (use pure `applyBuiltin` instead). -/
@@ -506,8 +518,13 @@ def applyBuiltinIO (fun_ : BuiltinFun) (args : List CekValue) : IO (Option (Exce
     let r ← g1Neg a
     if r.size == 0 then return some (.error "bls12_381_G1_neg: invalid point")
     return some (.ok (.VConst (.ByteString r)))
-  | .Bls12_381_G1_scalarMul, [.VConst (.ByteString scalar), .VConst (.ByteString point)] =>
-    let r ← g1ScalarMul scalar point
+  | .Bls12_381_G1_scalarMul, [.VConst (.Integer n), .VConst (.ByteString point)] =>
+    let scalar := intToScalarBytes n
+    let r ← if n < 0 then do
+      let r ← g1ScalarMul scalar point
+      if r.size == 0 then return some (.error "bls12_381_G1_scalarMul: invalid input")
+      g1Neg r
+    else g1ScalarMul scalar point
     if r.size == 0 then return some (.error "bls12_381_G1_scalarMul: invalid input")
     return some (.ok (.VConst (.ByteString r)))
   | .Bls12_381_G1_equal, [.VConst (.ByteString a), .VConst (.ByteString b)] =>
@@ -533,8 +550,13 @@ def applyBuiltinIO (fun_ : BuiltinFun) (args : List CekValue) : IO (Option (Exce
     let r ← g2Neg a
     if r.size == 0 then return some (.error "bls12_381_G2_neg: invalid point")
     return some (.ok (.VConst (.ByteString r)))
-  | .Bls12_381_G2_scalarMul, [.VConst (.ByteString scalar), .VConst (.ByteString point)] =>
-    let r ← g2ScalarMul scalar point
+  | .Bls12_381_G2_scalarMul, [.VConst (.Integer n), .VConst (.ByteString point)] =>
+    let scalar := intToScalarBytes n
+    let r ← if n < 0 then do
+      let r ← g2ScalarMul scalar point
+      if r.size == 0 then return some (.error "bls12_381_G2_scalarMul: invalid input")
+      g2Neg r
+    else g2ScalarMul scalar point
     if r.size == 0 then return some (.error "bls12_381_G2_scalarMul: invalid input")
     return some (.ok (.VConst (.ByteString r)))
   | .Bls12_381_G2_equal, [.VConst (.ByteString a), .VConst (.ByteString b)] =>
@@ -571,17 +593,19 @@ def applyBuiltinIO (fun_ : BuiltinFun) (args : List CekValue) : IO (Option (Exce
     let r ← Cleanode.Network.Crypto.ed25519_verify_ffi vk msg sig
     return some (.ok (.VConst (.Bool r)))
   -- Sha2_256 and Sha3_256: no FFI available yet, return placeholder
-  | .Sha2_256, [.VConst (.ByteString _bs)] =>
-    -- TODO: add SHA-256 FFI
-    return some (.ok (.VConst (.ByteString (ByteArray.mk (Array.replicate 32 0)))))
-  | .Sha3_256, [.VConst (.ByteString _bs)] =>
-    -- TODO: add SHA3-256 FFI
-    return some (.ok (.VConst (.ByteString (ByteArray.mk (Array.replicate 32 0)))))
-  -- Secp256k1 (stub — no FFI yet)
-  | .VerifyEcdsaSecp256k1Signature, [.VConst (.ByteString _vk), .VConst (.ByteString _msg), .VConst (.ByteString _sig)] =>
-    return some (.ok (.VConst (.Bool false)))  -- TODO: add secp256k1 FFI
-  | .VerifySchnorrSecp256k1Signature, [.VConst (.ByteString _vk), .VConst (.ByteString _msg), .VConst (.ByteString _sig)] =>
-    return some (.ok (.VConst (.Bool false)))  -- TODO: add secp256k1 FFI
+  | .Sha2_256, [.VConst (.ByteString bs)] =>
+    let r ← Cleanode.Network.Crypto.sha256 bs
+    return some (.ok (.VConst (.ByteString r)))
+  | .Sha3_256, [.VConst (.ByteString bs)] =>
+    let r ← Cleanode.Network.Crypto.sha3_256 bs
+    return some (.ok (.VConst (.ByteString r)))
+  -- Secp256k1 ECDSA and Schnorr verification via FFI
+  | .VerifyEcdsaSecp256k1Signature, [.VConst (.ByteString vk), .VConst (.ByteString msg), .VConst (.ByteString sig)] =>
+    let r ← Cleanode.Network.Crypto.secp256k1_ecdsa_verify vk msg sig
+    return some (.ok (.VConst (.Bool r)))
+  | .VerifySchnorrSecp256k1Signature, [.VConst (.ByteString vk), .VConst (.ByteString msg), .VConst (.ByteString sig)] =>
+    let r ← Cleanode.Network.Crypto.secp256k1_schnorr_verify vk msg sig
+    return some (.ok (.VConst (.Bool r)))
   | _, _ => return none
 
 /-- IO-based CEK step: tries IO builtins first, falls back to pure step. -/

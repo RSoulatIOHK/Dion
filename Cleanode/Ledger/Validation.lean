@@ -3,6 +3,7 @@ import Cleanode.Ledger.State
 import Cleanode.Ledger.Fee
 import Cleanode.Ledger.Value
 import Cleanode.Plutus.Evaluate
+import Cleanode.Network.Cbor
 import Cleanode.Network.Crypto
 import Cleanode.Network.CryptoSpec
 import Cleanode.Network.EraTx
@@ -27,6 +28,7 @@ open Cleanode.Ledger.UTxO
 open Cleanode.Ledger.State
 open Cleanode.Ledger.Fee
 open Cleanode.Ledger.Value
+open Cleanode.Network.Cbor
 open Cleanode.Network.ConwayBlock
 open Cleanode.Network.Crypto
 open Cleanode.Network.CryptoSpec
@@ -221,11 +223,140 @@ def validateCollateral (utxo : UTxOSet) (body : TransactionBody)
   if providedCollateral < requiredCollateral then
     throw (.InsufficientCollateral requiredCollateral providedCollateral)
 
+-- ==============================
+-- = Script Data Hash Helpers   =
+-- ==============================
+
+/-- Encode a RedeemerTag as its CBOR integer (Spend=0, Mint=1, Cert=2, Reward=3) -/
+private def redeemerTagToNat : RedeemerTag → Nat
+  | .Spend  => 0
+  | .Mint   => 1
+  | .Cert   => 2
+  | .Reward => 3
+
+/-- Encode a single redeemer as CBOR: [tag, index, data, [mem, steps]].
+    The `data` field is already raw CBOR (PlutusData), so we embed it directly. -/
+private def encodeRedeemerCbor (r : Redeemer) : ByteArray :=
+  encodeArrayHeader 4
+  ++ encodeUInt (redeemerTagToNat r.tag)
+  ++ encodeUInt r.index
+  ++ r.data  -- already CBOR-encoded PlutusData
+  ++ (encodeArrayHeader 2 ++ encodeUInt r.exUnits.mem ++ encodeUInt r.exUnits.steps)
+
+/-- Encode the full redeemers list as a CBOR array of redeemer arrays.
+    This matches the Conway witness set key 5 encoding. -/
+private def encodeRedeemersCbor (redeemers : List Redeemer) : ByteArray :=
+  let body := redeemers.foldl (fun acc r => acc ++ encodeRedeemerCbor r) ByteArray.empty
+  encodeArrayHeader redeemers.length ++ body
+
+/-- Encode the datums list as a CBOR array.
+    Each datum in `witnesses.datums` is already raw CBOR (PlutusData),
+    so we wrap them in a CBOR array header. -/
+private def encodeDatumsCbor (datums : List ByteArray) : ByteArray :=
+  let body := datums.foldl (fun acc d => acc ++ d) ByteArray.empty
+  encodeArrayHeader datums.length ++ body
+
+/-- Determine which Plutus language versions are used in the transaction,
+    based on which script lists are non-empty in the witness set.
+    Returns a sorted list of language IDs (0=PlutusV1, 1=PlutusV2, 2=PlutusV3). -/
+private def usedLanguages (witnesses : WitnessSet) : List Nat :=
+  let l0 := if !witnesses.plutusV1Scripts.isEmpty then [0] else []
+  let l1 := if !witnesses.plutusV2Scripts.isEmpty then [1] else []
+  let l2 := if !witnesses.plutusV3Scripts.isEmpty then [2] else []
+  l0 ++ l1 ++ l2
+
+/-- Default PlutusV1 cost model parameters (166 values, Conway mainnet).
+    These are the protocol parameters for PlutusV1 cost model. -/
+private def plutusV1CostParams : List Nat :=
+  [ 205665, 812, 1, 1, 1000, 571, 0, 1, 1000, 24177, 4, 1, 1000, 29773, 4, 7391,
+    32, 32366, 26308, 0, 2, 4, 1000, 0, 1, 59957, 4, 1, 11183, 32, 201305, 8356, 4,
+    16000, 100, 16000, 100, 16000, 100, 16000, 100, 16000, 100, 16000, 100, 100, 100,
+    16000, 100, 94375, 32, 132994, 32, 61462, 4, 72010, 178, 0, 1, 22151, 32, 91189,
+    769, 4, 2, 85848, 123203, 7305, 1, 85848, 85848, 123203, 7305, 1, 85848, 85848,
+    270652, 22588, 4, 1457325, 64566, 4, 20467, 1, 4, 0, 141992, 32, 100788, 420,
+    1, 1, 81663, 32, 59498, 32, 20142, 32, 24588, 32, 20744, 32, 25933, 32, 24623,
+    32, 53384111, 14333, 10, 43249, 32, 11183, 32, 64566, 4, 1000, 571, 0, 1, 16000,
+    100, 16000, 100, 962335, 18, 2780678, 6, 442008, 1, 52538055, 3756, 18, 267929,
+    18, 76433006, 8868, 18, 52948122, 18, 1995836, 36, 3227919, 12, 901022, 1, 166917,
+    4, 22100, 2, 28999, 36, 104661, 36, 31020, 36, 43623, 36, 32247, 36, 64832, 36,
+    65493, 32, 65493, 32, 4, 22100, 10 ]
+
+/-- Default PlutusV2 cost model parameters (175 values, Conway mainnet). -/
+private def plutusV2CostParams : List Nat :=
+  [ 205665, 812, 1, 1, 1000, 571, 0, 1, 1000, 24177, 4, 1, 1000, 29773, 4, 7391,
+    32, 32366, 26308, 0, 2, 4, 1000, 0, 1, 59957, 4, 1, 11183, 32, 201305, 8356, 4,
+    16000, 100, 16000, 100, 16000, 100, 16000, 100, 16000, 100, 16000, 100, 100, 100,
+    16000, 100, 94375, 32, 132994, 32, 61462, 4, 72010, 178, 0, 1, 22151, 32, 91189,
+    769, 4, 2, 85848, 123203, 7305, 1, 85848, 85848, 123203, 7305, 1, 85848, 85848,
+    270652, 22588, 4, 1457325, 64566, 4, 20467, 1, 4, 0, 141992, 32, 100788, 420,
+    1, 1, 81663, 32, 59498, 32, 20142, 32, 24588, 32, 20744, 32, 25933, 32, 24623,
+    32, 53384111, 14333, 10, 43249, 32, 11183, 32, 64566, 4, 1000, 571, 0, 1, 16000,
+    100, 16000, 100, 962335, 18, 2780678, 6, 442008, 1, 52538055, 3756, 18, 267929,
+    18, 76433006, 8868, 18, 52948122, 18, 1995836, 36, 3227919, 12, 901022, 1, 166917,
+    4, 22100, 2, 28999, 36, 104661, 36, 31020, 36, 43623, 36, 32247, 36, 64832, 36,
+    65493, 32, 65493, 32, 4, 22100, 10, 38887044, 32947, 10 ]
+
+/-- Default PlutusV3 cost model parameters (233 values, Conway mainnet). -/
+private def plutusV3CostParams : List Nat :=
+  [ 100788, 420, 1, 1, 1000, 173, 0, 1, 1000, 59957, 4, 1, 11183, 32, 201305, 8356,
+    4, 16000, 100, 16000, 100, 16000, 100, 16000, 100, 16000, 100, 16000, 100, 100,
+    100, 16000, 100, 94375, 32, 132994, 32, 61462, 4, 72010, 178, 0, 1, 22151, 32,
+    91189, 769, 4, 2, 85848, 123203, 7305, 1, 85848, 85848, 123203, 7305, 1, 85848,
+    85848, 270652, 22588, 4, 1457325, 64566, 4, 20467, 1, 4, 0, 141992, 32, 100788,
+    420, 1, 1, 81663, 32, 59498, 32, 20142, 32, 24588, 32, 20744, 32, 25933, 32,
+    24623, 32, 53384111, 14333, 10, 43249, 32, 11183, 32, 64566, 4, 1000, 571, 0, 1,
+    16000, 100, 16000, 100, 962335, 18, 2780678, 6, 442008, 1, 52538055, 3756, 18,
+    267929, 18, 76433006, 8868, 18, 52948122, 18, 1995836, 36, 3227919, 12, 901022,
+    1, 166917, 4, 22100, 2, 28999, 36, 104661, 36, 31020, 36, 43623, 36, 32247, 36,
+    64832, 36, 65493, 32, 65493, 32, 4, 22100, 10, 38887044, 32947, 10, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 ]
+
+/-- Get the cost model parameters for a given language version (0=V1, 1=V2, 2=V3). -/
+private def costParamsForLanguage : Nat → List Nat
+  | 0 => plutusV1CostParams
+  | 1 => plutusV2CostParams
+  | 2 => plutusV3CostParams
+  | _ => []
+
+/-- Encode a list of integers as a CBOR array of unsigned ints. -/
+private def encodeIntArrayCbor (params : List Nat) : ByteArray :=
+  let body := params.foldl (fun acc n => acc ++ encodeUInt n) ByteArray.empty
+  encodeArrayHeader params.length ++ body
+
+/-- Build the language views CBOR encoding.
+    This is a CBOR map: `{ language_id => [cost_params...] }` containing
+    only the languages actually used in the transaction.
+    Per the Alonzo spec, for PlutusV1 the map value is the **serialized CBOR bytes**
+    of the cost model integer array (i.e., encoded as a CBOR byte string wrapping
+    the CBOR-encoded array). For PlutusV2 and PlutusV3, the value is the integer
+    array directly. Language keys are sorted in ascending order. -/
+private def buildLanguageViewsCbor (langs : List Nat) : ByteArray :=
+  -- langs is already sorted ascending (built that way in usedLanguages)
+  let entries := langs.foldl (fun acc lang =>
+    let params := costParamsForLanguage lang
+    let paramsCbor := encodeIntArrayCbor params
+    -- PlutusV1 (lang 0): value is a CBOR byte string wrapping the serialized array
+    -- PlutusV2/V3 (lang 1, 2): value is the integer array directly
+    let value := if lang == 0 then encodeBytes paramsCbor else paramsCbor
+    acc ++ encodeUInt lang ++ value
+  ) ByteArray.empty
+  encodeMapHeader langs.length ++ entries
+
 /-- Validate script data hash consistency.
     For Alonzo+ txs with Plutus scripts, scriptDataHash (key 10) must equal
-    Blake2b-256(redeemers_cbor || datums_cbor || language_views_cbor).
-    Full computation requires raw witness CBOR; validate presence for now,
-    with hash verification when raw CBOR is available. -/
+    `Blake2b-256(redeemers_cbor || datums_cbor || language_views_cbor)`.
+
+    The hash preimage is the concatenation of:
+    1. redeemers_cbor: CBOR array of `[tag, index, data, [mem, steps]]`
+    2. datums_cbor: CBOR array of PlutusData items
+    3. language_views_cbor: CBOR map of `{ language_id => cost_model_params }`
+       (only including languages actually used by the transaction)
+
+    ## References
+    - Alonzo Ledger Spec: scriptDataHash definition
+    - CIP-0032: Inline datums / reference scripts -/
 def validateScriptDataHash (body : TransactionBody) (witnesses : WitnessSet)
     : IO (Except ValidationError Unit) := do
   let hasPlutusScripts := !witnesses.plutusV1Scripts.isEmpty ||
@@ -238,7 +369,26 @@ def validateScriptDataHash (body : TransactionBody) (witnesses : WitnessSet)
   -- If there are no scripts/redeemers, scriptDataHash should be absent
   if !hasPlutusScripts && !hasRedeemers && body.scriptDataHash.isSome then
     return .error .InvalidScriptDataHash
-  return .ok ()
+  -- If both are present, compute the actual hash and compare
+  match body.scriptDataHash with
+  | none => return .ok ()  -- No scripts, no hash — already validated above
+  | some expectedHash =>
+    -- 1. Encode redeemers as CBOR array
+    let redeemersCbor := encodeRedeemersCbor witnesses.redeemers
+    -- 2. Encode datums as CBOR array (each datum is already raw CBOR PlutusData)
+    let datumsCbor := encodeDatumsCbor witnesses.datums
+    -- 3. Build language views CBOR map for used languages
+    let langs := usedLanguages witnesses
+    let languageViewsCbor := buildLanguageViewsCbor langs
+    -- 4. Concatenate: redeemers || datums || language_views
+    let preimage := redeemersCbor ++ datumsCbor ++ languageViewsCbor
+    -- 5. Compute Blake2b-256 hash
+    let computedHash ← blake2b_256 preimage
+    -- 6. Compare with declared scriptDataHash
+    if computedHash == expectedHash then
+      return .ok ()
+    else
+      return .error .InvalidScriptDataHash
 
 /-- Plutus script execution result -/
 structure PlutusExecResult where

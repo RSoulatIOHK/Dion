@@ -65,4 +65,22 @@ opaque vrf_verify_ffi (vrfVKey : @& ByteArray) (alpha : @& ByteArray)
 @[extern "cleanode_vrf_proof_to_hash"]
 opaque vrf_proof_to_hash_ffi (proof : @& ByteArray) : IO ByteArray
 
+/-- Compute SHA-256 hash (32 bytes) via FFI -/
+@[extern "cleanode_sha256"]
+opaque sha256 (data : @& ByteArray) : IO ByteArray
+
+/-- Compute SHA3-256 (Keccak-256) hash (32 bytes) via FFI -/
+@[extern "cleanode_sha3_256"]
+opaque sha3_256 (data : @& ByteArray) : IO ByteArray
+
+/-- Verify ECDSA secp256k1 signature (Plutus builtin #50) -/
+@[extern "cleanode_secp256k1_ecdsa_verify"]
+opaque secp256k1_ecdsa_verify (publicKey : @& ByteArray) (message : @& ByteArray)
+    (signature : @& ByteArray) : IO Bool
+
+/-- Verify Schnorr secp256k1 signature, BIP-340 (Plutus builtin #51) -/
+@[extern "cleanode_secp256k1_schnorr_verify"]
+opaque secp256k1_schnorr_verify (publicKey : @& ByteArray) (message : @& ByteArray)
+    (signature : @& ByteArray) : IO Bool
+
 end Cleanode.Network.Crypto

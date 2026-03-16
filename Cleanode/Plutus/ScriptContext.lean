@@ -156,7 +156,15 @@ def buildTxInfo (body : TransactionBody) (witnesses : WitnessSet)
   let outputs := .List (body.outputs.map encodeTxOutput)
   let fee := encodeValue (Value.lovelaceOnly body.fee)
   let mint := encodeValue (Value.fromNativeAssets body.mint)
-  let certs := .List []  -- TODO: encode certificates
+  let certs := .List (body.certificates.map fun cert => match cert with
+    | .stakeKeyRegistration kh => .Constr 0 [.Constr 0 [.ByteString kh]]
+    | .stakeKeyDeregistration kh => .Constr 1 [.Constr 0 [.ByteString kh]]
+    | .stakeDelegation kh poolId => .Constr 2 [.Constr 0 [.ByteString kh], .ByteString poolId]
+    | .poolRegistration poolId vrfHash _ _ _ _ _ =>
+        .Constr 3 [.ByteString poolId, .ByteString vrfHash]
+    | .poolRetirement poolId epoch =>
+        .Constr 4 [.ByteString poolId, .Integer (Int.ofNat epoch)]
+    | .unknown _ => .Constr 7 [])
   let withdrawals := .Map (body.withdrawals.map fun (addr, amt) =>
     (.ByteString addr, .Integer (Int.ofNat amt)))
   let validRange := encodeValidityRange body.validityIntervalStart body.ttl
@@ -169,7 +177,11 @@ def buildTxInfo (body : TransactionBody) (witnesses : WitnessSet)
       PlutusData.Constr 0 [.Integer (Int.ofNat r.exUnits.mem),
                             .Integer (Int.ofNat r.exUnits.steps)]]
     (key, val))
-  let datums := .Map []  -- TODO: collect datums from witnesses + inline datums
+  -- Collect datums: witness datums + inline datums from resolved inputs
+  let witnessDatums := witnesses.datums.map fun d => (.ByteString d, .ByteString d)
+  let inlineDatums := resolvedInputs.filterMap fun (_, out) =>
+    out.inlineDatum.map fun d => (.ByteString d, .ByteString d)
+  let datums := .Map (witnessDatums ++ inlineDatums)
   let txId := .Constr 0 [.ByteString txHash]
   .Constr 0 [inputs, refInputs, outputs, fee, mint, certs, withdrawals,
              validRange, signatories, redeemers, datums, txId]

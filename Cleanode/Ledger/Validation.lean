@@ -140,6 +140,9 @@ inductive NativeScript where
   | RequireTimeBefore (slot : Nat)
   | RequireTimeAfter (slot : Nat)
 
+instance : Inhabited NativeScript where
+  default := .RequireTimeBefore 0
+
 /-- Evaluate a native script -/
 partial def evaluateNativeScript (script : NativeScript) (signers : List ByteArray)
     (currentSlot : Nat) : Bool :=
@@ -153,17 +156,28 @@ partial def evaluateNativeScript (script : NativeScript) (signers : List ByteArr
   | .RequireTimeBefore slot => currentSlot < slot
   | .RequireTimeAfter slot => currentSlot >= slot
 
+/-- Convert a parsed NativeScriptCbor to our NativeScript type for evaluation -/
+private partial def toNativeScript (ns : NativeScriptCbor) : NativeScript :=
+  match ns with
+  | NativeScriptCbor.requireSignature kh => NativeScript.RequireSignature kh
+  | NativeScriptCbor.requireAllOf scripts => NativeScript.RequireAllOf (scripts.map toNativeScript)
+  | NativeScriptCbor.requireAnyOf scripts => NativeScript.RequireAnyOf (scripts.map toNativeScript)
+  | NativeScriptCbor.requireMOfN m scripts => NativeScript.RequireMOf m (scripts.map toNativeScript)
+  | NativeScriptCbor.requireTimeBefore slot => NativeScript.RequireTimeBefore slot
+  | NativeScriptCbor.requireTimeAfter slot => NativeScript.RequireTimeAfter slot
+
 /-- Validate native scripts from witness set.
     Each native script must evaluate to true given the provided signers and slot. -/
 def validateNativeScripts (witnesses : WitnessSet) (signerKeyHashes : List ByteArray)
-    (currentSlot : Nat) : ValidationResult :=
-  -- Native scripts from witness key 1 are raw CBOR bytes.
-  -- Full native script parsing and evaluation will be wired once the CBOR parser
-  -- for native scripts is available. For now, accept if no native scripts present.
-  if witnesses.nativeScripts.isEmpty then .ok ()
-  else
-    -- TODO: parse each ByteArray as a NativeScript and evaluate
-    .ok ()
+    (currentSlot : Nat) : ValidationResult := do
+  if witnesses.nativeScripts.isEmpty then return ()
+  for rawScript in witnesses.nativeScripts do
+    match Cleanode.Network.ConwayBlock.parseNativeScriptCbor rawScript with
+    | none => throw (ValidationError.ScriptFailure rawScript "failed to parse native script CBOR")
+    | some parsed =>
+      let script := toNativeScript parsed
+      if !evaluateNativeScript script signerKeyHashes currentSlot then
+        throw (ValidationError.ScriptFailure rawScript "native script evaluation failed")
 
 /-- Check if an address is script-locked (payment credential is a script hash).
     Shelley base addresses: header byte bits 4-7 encode address type.

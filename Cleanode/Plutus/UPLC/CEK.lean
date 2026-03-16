@@ -94,6 +94,75 @@ inductive CekState where
   | Error (msg : String)
 
 -- ====================
+-- = PlutusData CBOR  =
+-- ====================
+
+/-- Encode a CBOR unsigned integer header (major type 0) -/
+private def cborUInt (n : Nat) : ByteArray :=
+  if n < 24 then ByteArray.mk #[n.toUInt8]
+  else if n < 256 then ByteArray.mk #[24, n.toUInt8]
+  else if n < 65536 then ByteArray.mk #[25, (n / 256).toUInt8, (n % 256).toUInt8]
+  else if n < 4294967296 then
+    ByteArray.mk #[26, (n / 16777216 % 256).toUInt8, (n / 65536 % 256).toUInt8,
+                    (n / 256 % 256).toUInt8, (n % 256).toUInt8]
+  else
+    ByteArray.mk #[27, (n / (1 <<< 56) % 256).toUInt8, (n / (1 <<< 48) % 256).toUInt8,
+                    (n / (1 <<< 40) % 256).toUInt8, (n / (1 <<< 32) % 256).toUInt8,
+                    (n / 16777216 % 256).toUInt8, (n / 65536 % 256).toUInt8,
+                    (n / 256 % 256).toUInt8, (n % 256).toUInt8]
+
+/-- Encode a CBOR header with major type and additional info -/
+private def cborHeader (majorType : UInt8) (n : Nat) : ByteArray :=
+  let base := majorType <<< 5
+  if n < 24 then ByteArray.mk #[base ||| n.toUInt8]
+  else if n < 256 then ByteArray.mk #[base ||| 24, n.toUInt8]
+  else if n < 65536 then ByteArray.mk #[base ||| 25, (n / 256).toUInt8, (n % 256).toUInt8]
+  else if n < 4294967296 then
+    ByteArray.mk #[base ||| 26, (n / 16777216 % 256).toUInt8, (n / 65536 % 256).toUInt8,
+                    (n / 256 % 256).toUInt8, (n % 256).toUInt8]
+  else
+    ByteArray.mk #[base ||| 27, (n / (1 <<< 56) % 256).toUInt8, (n / (1 <<< 48) % 256).toUInt8,
+                    (n / (1 <<< 40) % 256).toUInt8, (n / (1 <<< 32) % 256).toUInt8,
+                    (n / 16777216 % 256).toUInt8, (n / 65536 % 256).toUInt8,
+                    (n / 256 % 256).toUInt8, (n % 256).toUInt8]
+
+/-- CBOR-encode PlutusData per the Cardano specification.
+    - Constr tag 0-6: CBOR tag 121+tag, fields as array
+    - Constr tag 7+: CBOR tag 102, [tag, fields]
+    - Map: CBOR major type 5
+    - List: CBOR major type 4
+    - Integer: CBOR major type 0 (positive) or 1 (negative)
+    - ByteString: CBOR major type 2 -/
+partial def encodePlutusDataCbor (d : PlutusData) : ByteArray :=
+  match d with
+  | .Constr tag fields =>
+    let encodedFields := cborHeader 4 fields.length ++
+      fields.foldl (fun acc f => acc ++ encodePlutusDataCbor f) ByteArray.empty
+    if tag <= 6 then
+      -- Tags 0-6: use CBOR tags 121-127
+      cborHeader 6 (121 + tag) ++ encodedFields
+    else if tag <= 127 then
+      -- Tags 7-127: use CBOR tags 1280+tag-7
+      cborHeader 6 (1280 + tag - 7) ++ encodedFields
+    else
+      -- Tags 128+: use CBOR tag 102 with [tag, fields]
+      cborHeader 6 102 ++ cborHeader 4 2 ++ cborUInt tag ++ encodedFields
+  | .Map entries =>
+    let header := cborHeader 5 entries.length
+    entries.foldl (fun acc (k, v) => acc ++ encodePlutusDataCbor k ++ encodePlutusDataCbor v) header
+  | .List items =>
+    let header := cborHeader 4 items.length
+    items.foldl (fun acc item => acc ++ encodePlutusDataCbor item) header
+  | .Integer value =>
+    if value >= 0 then cborUInt value.toNat
+    else
+      -- Negative: CBOR major type 1, value = -1 - n
+      let n := (-value - 1).toNat
+      cborHeader 1 n
+  | .ByteString bytes =>
+    cborHeader 2 bytes.size ++ bytes
+
+-- ====================
 -- = Builtin Apply    =
 -- ====================
 
@@ -257,9 +326,8 @@ def applyBuiltin (fun_ : BuiltinFun) (args : List CekValue) : Except String CekV
     return val
 
   -- Serialization
-  | .SerialiseData, [.VConst (.Data _d)] =>
-    -- TODO: CBOR-encode PlutusData
-    return .VConst (.ByteString ByteArray.empty)
+  | .SerialiseData, [.VConst (.Data d)] =>
+    return .VConst (.ByteString (encodePlutusDataCbor d))
 
   -- Integer/ByteString conversion
   | .IntegerToByteString, [.VConst (.Bool _endian), .VConst (.Integer _width), .VConst (.Integer n)] =>

@@ -72,7 +72,9 @@ instance : Repr NativeAsset where
 structure TxOutput where
   address : ByteArray         -- Cardano address (variable length)
   amount : Nat                -- Lovelace amount
-  datum : Option ByteArray    -- Optional datum for smart contracts
+  datum : Option ByteArray    -- Optional datum hash (32 bytes) from output key 2
+  inlineDatum : Option ByteArray  -- Inline datum CBOR from output key 3 (Babbage+)
+  scriptRef : Option ByteArray    -- Reference script from output key 4 (Babbage+)
   nativeAssets : List NativeAsset  -- Native tokens (non-ADA assets)
 
 instance : Repr TxOutput where
@@ -114,6 +116,7 @@ instance : Repr VKeyWitness where
 structure WitnessSet where
   vkeyWitnesses : List VKeyWitness := []  -- Key 0
   nativeScripts : List ByteArray := []     -- Key 1 (raw CBOR per script)
+  datums : List ByteArray := []            -- Key 2 (plutus_data, raw CBOR per datum)
   bootstrapWitnesses : List ByteArray := [] -- Key 3 (raw CBOR per witness)
   plutusV1Scripts : List ByteArray := []   -- Key 4 (raw script bytes)
   redeemers : List Redeemer                -- Key 5
@@ -121,7 +124,7 @@ structure WitnessSet where
   plutusV3Scripts : List ByteArray := []   -- Key 7 (raw script bytes)
 
 instance : Repr WitnessSet where
-  reprPrec w _ := s!"WitnessSet(vkeys={w.vkeyWitnesses.length}, native={w.nativeScripts.length}, redeemers={w.redeemers.length}, plutus={w.plutusV1Scripts.length + w.plutusV2Scripts.length + w.plutusV3Scripts.length})"
+  reprPrec w _ := s!"WitnessSet(vkeys={w.vkeyWitnesses.length}, native={w.nativeScripts.length}, datums={w.datums.length}, redeemers={w.redeemers.length}, plutus={w.plutusV1Scripts.length + w.plutusV2Scripts.length + w.plutusV3Scripts.length})"
 
 /-- Raw certificate parsed from block CBOR.
     Kept lightweight to avoid circular dependencies with Ledger.Certificate.
@@ -246,6 +249,9 @@ partial def parseTxOutputC (c : Cursor) : Option (CResult TxOutput) := do
     let mut address := ⟨#[]⟩
     let mut amount := 0
     let mut nativeAssets : List NativeAsset := []
+    let mut datumHash : Option ByteArray := none
+    let mut inlineDatum : Option ByteArray := none
+    let mut scriptRef : Option ByteArray := none
 
     for _ in [0:r1.value] do
       match CborCursor.decodeUInt cur with
@@ -273,12 +279,46 @@ partial def parseTxOutputC (c : Cursor) : Option (CResult TxOutput) := do
                       match skipValue keyResult.cursor with
                       | some after => cur := after
                       | none => break
+          | 2 => do  -- Datum option: [0, datumHash] or [1, inlineDatum]
+              -- CDDL: datum_option = [0, hash32] / [1, data]
+              match CborCursor.decodeArrayHeader keyResult.cursor with
+              | some arrR => do
+                  match CborCursor.decodeUInt arrR.cursor with
+                  | some tagR => do
+                      if tagR.value == 0 then
+                        -- datum hash
+                        match CborCursor.decodeBytes tagR.cursor with
+                        | some hashR => do datumHash := some hashR.value; cur := hashR.cursor
+                        | none => match skipValue tagR.cursor with
+                          | some after => cur := after
+                          | none => break
+                      else
+                        -- inline datum (tag 1): capture raw CBOR
+                        let start := tagR.cursor
+                        match skipValue start with
+                        | some after => do
+                            inlineDatum := some (extractBetween start after)
+                            cur := after
+                        | none => break
+                  | none => match skipValue keyResult.cursor with
+                      | some after => cur := after
+                      | none => break
+              | none => match skipValue keyResult.cursor with
+                  | some after => cur := after
+                  | none => break
+          | 3 => do  -- Script ref: tag 24 (CBOR-encoded script)
+              let start := keyResult.cursor
+              match skipValue start with
+              | some after => do
+                  scriptRef := some (extractBetween start after)
+                  cur := after
+              | none => break
           | _ => do
               match skipValue keyResult.cursor with
               | some after => cur := after
               | none => break
 
-    some { value := { address, amount, datum := none, nativeAssets }, cursor := cur }
+    some { value := { address, amount, datum := datumHash, inlineDatum, scriptRef, nativeAssets }, cursor := cur }
   else do  -- Array format (pre-Babbage)
     let r1 ← CborCursor.decodeArrayHeader c
     if r1.value < 2 then none
@@ -307,7 +347,7 @@ partial def parseTxOutputC (c : Cursor) : Option (CResult TxOutput) := do
         | some after => cur := after
         | none => break
 
-      some { value := { address := r2.value, amount, datum := none, nativeAssets }, cursor := cur }
+      some { value := { address := r2.value, amount, datum := none, inlineDatum := none, scriptRef := none, nativeAssets }, cursor := cur }
 
 /-- Parse a single redeemer from CBOR array [tag, index, data, ex_units] -/
 partial def parseRedeemerC (c : Cursor) : Option (CResult Redeemer) := do
@@ -396,6 +436,7 @@ partial def parseWitnessSetC (c : Cursor) : Option (CResult WitnessSet) := do
   let mut cur := r1.cursor
   let mut vkeys : List VKeyWitness := []
   let mut nativeScripts : List ByteArray := []
+  let mut datums : List ByteArray := []
   let mut bootstrapWits : List ByteArray := []
   let mut plutusV1 : List ByteArray := []
   let mut redeemers : List Redeemer := []
@@ -424,6 +465,12 @@ partial def parseWitnessSetC (c : Cursor) : Option (CResult WitnessSet) := do
         | 1 => do  -- native_scripts
             match parseRawArrayC cur with
             | some r => do nativeScripts := r.value; cur := r.cursor
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+        | 2 => do  -- plutus_data (datums)
+            match parseRawArrayC cur with
+            | some r => do datums := r.value; cur := r.cursor
             | none => match skipValue cur with
                 | some after => cur := after
                 | none => break
@@ -469,7 +516,8 @@ partial def parseWitnessSetC (c : Cursor) : Option (CResult WitnessSet) := do
 
   some {
     value := {
-      vkeyWitnesses := vkeys, nativeScripts, bootstrapWitnesses := bootstrapWits,
+      vkeyWitnesses := vkeys, nativeScripts, datums,
+      bootstrapWitnesses := bootstrapWits,
       plutusV1Scripts := plutusV1, redeemers,
       plutusV2Scripts := plutusV2, plutusV3Scripts := plutusV3
     },
@@ -1002,6 +1050,80 @@ partial def parseConwayBlockBody (bs : ByteArray) : Option ConwayBlockBody := do
         { body := body, witnesses := { redeemers := [] } }
       )
       some { transactions, invalidTxs := [] }
+
+-- ==========================
+-- = Native Script Parser   =
+-- ==========================
+
+/-- Native script AST matching Cardano's timelock scripts.
+    CBOR format: [type, ...params] -/
+inductive NativeScriptCbor where
+  | requireSignature (keyHash : ByteArray)           -- type 0
+  | requireAllOf (scripts : List NativeScriptCbor)   -- type 1
+  | requireAnyOf (scripts : List NativeScriptCbor)   -- type 2
+  | requireMOfN (m : Nat) (scripts : List NativeScriptCbor) -- type 3
+  | requireTimeBefore (slot : Nat)                   -- type 4 (InvalidHereafter)
+  | requireTimeAfter (slot : Nat)                    -- type 5 (InvalidBefore)
+
+/-- Parse a native script from raw CBOR bytes.
+    Format: [type, ...params] where type determines the structure. -/
+partial def parseNativeScriptCbor (data : ByteArray) : Option NativeScriptCbor :=
+  let c := Cursor.mk' data
+  parseNativeScriptC c |>.map (·.value)
+where
+  parseNativeScriptC (c : Cursor) : Option (CResult NativeScriptCbor) := do
+    let r1 ← CborCursor.decodeArrayHeader c
+    if r1.value < 1 then none
+    let r2 ← CborCursor.decodeUInt r1.cursor
+    let scriptType := r2.value
+    match scriptType with
+    | 0 => do  -- RequireSignature: [0, keyHash]
+      let r3 ← CborCursor.decodeBytes r2.cursor
+      some { value := .requireSignature r3.value, cursor := r3.cursor }
+    | 1 => do  -- RequireAllOf: [1, [script...]]
+      let (scripts, afterScripts) ← parseScriptArray r2.cursor
+      some { value := .requireAllOf scripts, cursor := afterScripts }
+    | 2 => do  -- RequireAnyOf: [2, [script...]]
+      let (scripts, afterScripts) ← parseScriptArray r2.cursor
+      some { value := .requireAnyOf scripts, cursor := afterScripts }
+    | 3 => do  -- RequireMOfN: [3, m, [script...]]
+      let r3 ← CborCursor.decodeUInt r2.cursor
+      let m := r3.value
+      let (scripts, afterScripts) ← parseScriptArray r3.cursor
+      some { value := .requireMOfN m scripts, cursor := afterScripts }
+    | 4 => do  -- InvalidHereafter (RequireTimeBefore): [4, slot]
+      let r3 ← CborCursor.decodeUInt r2.cursor
+      some { value := .requireTimeBefore r3.value, cursor := r3.cursor }
+    | 5 => do  -- InvalidBefore (RequireTimeAfter): [5, slot]
+      let r3 ← CborCursor.decodeUInt r2.cursor
+      some { value := .requireTimeAfter r3.value, cursor := r3.cursor }
+    | _ => none
+  parseScriptArray (c : Cursor) : Option (List NativeScriptCbor × Cursor) := do
+    let r1 ← CborCursor.decodeArrayHeader c
+    let mut cur := r1.cursor
+    let mut scripts : List NativeScriptCbor := []
+    for _ in [0:r1.value] do
+      match parseNativeScriptC cur with
+      | some r => do scripts := scripts ++ [r.value]; cur := r.cursor
+      | none =>
+        match skipValue cur with
+        | some after => cur := after
+        | none => break
+    some (scripts, cur)
+
+-- ==========================
+-- = Script Hash Helpers    =
+-- ==========================
+
+/-- Compute the hash of a script from its raw CBOR bytes.
+    Script hash = Blake2b-224(0x00 ++ scriptBytes) for native scripts
+    Script hash = Blake2b-224(0x01 ++ scriptBytes) for PlutusV1
+    Script hash = Blake2b-224(0x02 ++ scriptBytes) for PlutusV2
+    Script hash = Blake2b-224(0x03 ++ scriptBytes) for PlutusV3
+    The version prefix byte is prepended before hashing. -/
+def scriptHashPrefix (scriptBytes : ByteArray) (versionByte : UInt8) : ByteArray :=
+  let prefixed := ByteArray.mk #[versionByte] ++ scriptBytes
+  prefixed
 
 -- ==========================
 -- = Legacy API Compat      =

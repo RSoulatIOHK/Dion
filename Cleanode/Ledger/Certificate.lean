@@ -1,5 +1,6 @@
 import Cleanode.Ledger.State
 import Cleanode.Ledger.Governance
+import Cleanode.Network.ConwayBlock
 
 /-!
 # Cardano Certificates
@@ -159,6 +160,30 @@ def applyCertificate (state : LedgerState) (cert : Certificate) : LedgerState :=
 /-- Apply all certificates from a transaction to the ledger state -/
 def applyCertificates (state : LedgerState) (certs : List Certificate) : LedgerState :=
   certs.foldl applyCertificate state
+
+/-- Convert a RawCertificate from the parser to a full Certificate.
+    Note: pool registration loses some fields in the raw parse. -/
+def fromRawCertificate (raw : Cleanode.Network.ConwayBlock.RawCertificate) : Certificate :=
+  match raw with
+  | .stakeKeyRegistration kh => .stakeKeyRegistration kh
+  | .stakeKeyDeregistration kh => .stakeKeyDeregistration kh
+  | .stakeDelegation kh pid => .stakeDelegation kh pid
+  | .poolRegistration pid vrfHash pledge cost _margin rewardAccount owners =>
+    .poolRegistration {
+      poolId := pid, vrfKeyHash := vrfHash, pledge, cost, margin := 0,
+      rewardAccount, owners, relays := [], metadata := none
+    }
+  | .poolRetirement pid epoch => .poolRetirement pid epoch
+  | .conwayRegistration kh deposit => .conwayRegistration kh deposit
+  | .conwayDeregistration kh refund => .conwayDeregistration kh refund
+  | .voteDelegation kh drepCred => .voteDelegation kh (.keyHash drepCred)
+  | .stakeVoteDelegation kh pid drepCred => .stakeVoteDelegation kh pid (.keyHash drepCred)
+  | .stakeRegDelegation kh pid deposit => .stakeRegDelegation kh pid deposit
+  | .voteRegDelegation kh drepCred deposit => .voteRegDelegation kh (.keyHash drepCred) deposit
+  | .stakeVoteRegDelegation kh pid drepCred deposit => .stakeVoteRegDelegation kh pid (.keyHash drepCred) deposit
+  | .authCommitteeHot cold hot => .authCommitteeHot cold hot
+  | .resignCommitteeCold cold => .resignCommitteeCold cold
+  | .unknown _ => .stakeKeyRegistration ByteArray.empty  -- Fallback for unrecognized types
 
 -- ====================
 -- = Validation       =

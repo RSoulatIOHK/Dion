@@ -248,6 +248,30 @@ instance : Repr TxApplicationError where
     | .FeeTooLow r p, _ => s!"FeeTooLow(required={r}, paid={p})"
     | .TxTooLarge s m, _ => s!"TxTooLarge(size={s}, max={m})"
 
+/-- Process governance actions from a transaction body.
+    Handles voting procedures (key 18), proposals (key 19),
+    treasury (key 20), and donation (key 21). -/
+def processGovernance (state : LedgerState) (txHash : ByteArray)
+    (body : TransactionBody) : LedgerState :=
+  -- Proposals (key 19): add raw CBOR as a proposal
+  let gs := match body.proposalProcedures with
+    | some rawCbor =>
+      let actionId : Governance.GovActionId := { txHash, index := 0 }
+      let proposal : Governance.GovProposal := {
+        actionType := .InfoAction
+        deposit := 0
+        returnAddr := ByteArray.empty
+        anchor := none
+        rawCbor
+      }
+      state.governance.addProposal actionId proposal
+    | none => state.governance
+  -- Donation (key 21): add to treasury
+  let treasury := match body.donation with
+    | some d => state.treasury + d
+    | none => state.treasury
+  { state with governance := gs, treasury }
+
 /-- Apply a single transaction to the ledger state -/
 def applyTransaction (state : LedgerState) (txHash : ByteArray) (tx : Transaction)
     : Except TxApplicationError LedgerState := do
@@ -267,7 +291,8 @@ def applyTransaction (state : LedgerState) (txHash : ByteArray) (tx : Transactio
 
   -- 4. Apply UTxO changes
   let newUtxo := state.utxo.applyTx txHash tx.body
-  return { state with utxo := newUtxo }
+  -- 5. Process governance actions
+  return processGovernance { state with utxo := newUtxo } txHash tx.body
 
 /-- Apply all transactions in a block -/
 def applyBlock (state : LedgerState) (slot blockNo : Nat) (blockHash : ByteArray)

@@ -164,7 +164,25 @@ def buildTxInfo (body : TransactionBody) (witnesses : WitnessSet)
         .Constr 3 [.ByteString poolId, .ByteString vrfHash]
     | .poolRetirement poolId epoch =>
         .Constr 4 [.ByteString poolId, .Integer (Int.ofNat epoch)]
-    | .unknown _ => .Constr 7 [])
+    | .conwayRegistration kh deposit =>
+        .Constr 5 [.Constr 0 [.ByteString kh], .Integer (Int.ofNat deposit)]
+    | .conwayDeregistration kh refund =>
+        .Constr 6 [.Constr 0 [.ByteString kh], .Integer (Int.ofNat refund)]
+    | .voteDelegation kh drepCred =>
+        .Constr 7 [.Constr 0 [.ByteString kh], .ByteString drepCred]
+    | .stakeVoteDelegation kh poolId drepCred =>
+        .Constr 8 [.Constr 0 [.ByteString kh], .ByteString poolId, .ByteString drepCred]
+    | .stakeRegDelegation kh poolId deposit =>
+        .Constr 9 [.Constr 0 [.ByteString kh], .ByteString poolId, .Integer (Int.ofNat deposit)]
+    | .voteRegDelegation kh drepCred deposit =>
+        .Constr 10 [.Constr 0 [.ByteString kh], .ByteString drepCred, .Integer (Int.ofNat deposit)]
+    | .stakeVoteRegDelegation kh poolId drepCred deposit =>
+        .Constr 11 [.Constr 0 [.ByteString kh], .ByteString poolId, .ByteString drepCred, .Integer (Int.ofNat deposit)]
+    | .authCommitteeHot cold hot =>
+        .Constr 12 [.ByteString cold, .ByteString hot]
+    | .resignCommitteeCold cold =>
+        .Constr 13 [.ByteString cold]
+    | .unknown _ => .Constr 14 [])
   let withdrawals := .Map (body.withdrawals.map fun (addr, amt) =>
     (.ByteString addr, .Integer (Int.ofNat amt)))
   let validRange := encodeValidityRange body.validityIntervalStart body.ttl

@@ -1,5 +1,7 @@
 import Cleanode.Plutus.UPLC.Term
 import Cleanode.Plutus.ScriptContext
+import Cleanode.Crypto.BLS12_381
+import Cleanode.Network.Crypto
 
 /-!
 # CEK Machine for UPLC Evaluation
@@ -376,8 +378,10 @@ def step (state : CekState) (budget : ExBudget) : CekState × ExBudget :=
     | .Computing env term cont =>
       match term with
       | .Var idx =>
-        if h : idx < env.size then
-          (.Returning env[idx] cont, budget')
+        -- de Bruijn: index 0 = most recently bound (last in env array)
+        let ridx := env.size - 1 - idx
+        if h : ridx < env.size then
+          (.Returning env[ridx] cont, budget')
         else (.Error s!"variable index {idx} out of range (env size {env.size})", budget')
       | .LamAbs body =>
         (.Returning (.VLamAbs body env) cont, budget')
@@ -483,5 +487,139 @@ def isScriptSuccess (result : CekValue) : Bool :=
   | .VConst (.Bool true) => true
   | .VConstr 0 _ => true  -- Constr 0 [] is also considered "success" in some contexts
   | _ => false
+
+-- ====================
+-- = IO Evaluation    =
+-- ====================
+
+open Cleanode.Crypto.BLS12_381 in
+/-- Apply BLS12-381 and crypto builtins that require IO (FFI calls).
+    Returns `none` if the builtin is not IO-based (use pure `applyBuiltin` instead). -/
+def applyBuiltinIO (fun_ : BuiltinFun) (args : List CekValue) : IO (Option (Except String CekValue)) := do
+  match fun_, args with
+  -- BLS12-381 G1
+  | .Bls12_381_G1_add, [.VConst (.ByteString a), .VConst (.ByteString b)] =>
+    let r ← g1Add a b
+    if r.size == 0 then return some (.error "bls12_381_G1_add: invalid point")
+    return some (.ok (.VConst (.ByteString r)))
+  | .Bls12_381_G1_neg, [.VConst (.ByteString a)] =>
+    let r ← g1Neg a
+    if r.size == 0 then return some (.error "bls12_381_G1_neg: invalid point")
+    return some (.ok (.VConst (.ByteString r)))
+  | .Bls12_381_G1_scalarMul, [.VConst (.ByteString scalar), .VConst (.ByteString point)] =>
+    let r ← g1ScalarMul scalar point
+    if r.size == 0 then return some (.error "bls12_381_G1_scalarMul: invalid input")
+    return some (.ok (.VConst (.ByteString r)))
+  | .Bls12_381_G1_equal, [.VConst (.ByteString a), .VConst (.ByteString b)] =>
+    let r ← g1Equal a b
+    return some (.ok (.VConst (.Bool r)))
+  | .Bls12_381_G1_hashToGroup, [.VConst (.ByteString msg), .VConst (.ByteString dst)] =>
+    let r ← g1HashToGroup msg dst
+    return some (.ok (.VConst (.ByteString r)))
+  | .Bls12_381_G1_compress, [.VConst (.ByteString a)] =>
+    let r ← g1Compress a
+    if r.size == 0 then return some (.error "bls12_381_G1_compress: invalid point")
+    return some (.ok (.VConst (.ByteString r)))
+  | .Bls12_381_G1_uncompress, [.VConst (.ByteString a)] =>
+    let r ← g1Uncompress a
+    if r.size == 0 then return some (.error "bls12_381_G1_uncompress: invalid point")
+    return some (.ok (.VConst (.ByteString r)))
+  -- BLS12-381 G2
+  | .Bls12_381_G2_add, [.VConst (.ByteString a), .VConst (.ByteString b)] =>
+    let r ← g2Add a b
+    if r.size == 0 then return some (.error "bls12_381_G2_add: invalid point")
+    return some (.ok (.VConst (.ByteString r)))
+  | .Bls12_381_G2_neg, [.VConst (.ByteString a)] =>
+    let r ← g2Neg a
+    if r.size == 0 then return some (.error "bls12_381_G2_neg: invalid point")
+    return some (.ok (.VConst (.ByteString r)))
+  | .Bls12_381_G2_scalarMul, [.VConst (.ByteString scalar), .VConst (.ByteString point)] =>
+    let r ← g2ScalarMul scalar point
+    if r.size == 0 then return some (.error "bls12_381_G2_scalarMul: invalid input")
+    return some (.ok (.VConst (.ByteString r)))
+  | .Bls12_381_G2_equal, [.VConst (.ByteString a), .VConst (.ByteString b)] =>
+    let r ← g2Equal a b
+    return some (.ok (.VConst (.Bool r)))
+  | .Bls12_381_G2_hashToGroup, [.VConst (.ByteString msg), .VConst (.ByteString dst)] =>
+    let r ← g2HashToGroup msg dst
+    return some (.ok (.VConst (.ByteString r)))
+  | .Bls12_381_G2_compress, [.VConst (.ByteString a)] =>
+    let r ← g2Compress a
+    if r.size == 0 then return some (.error "bls12_381_G2_compress: invalid point")
+    return some (.ok (.VConst (.ByteString r)))
+  | .Bls12_381_G2_uncompress, [.VConst (.ByteString a)] =>
+    let r ← g2Uncompress a
+    if r.size == 0 then return some (.error "bls12_381_G2_uncompress: invalid point")
+    return some (.ok (.VConst (.ByteString r)))
+  -- Pairing
+  | .Bls12_381_millerLoop, [.VConst (.ByteString g1), .VConst (.ByteString g2)] =>
+    let r ← millerLoop g1 g2
+    if r.size == 0 then return some (.error "bls12_381_millerLoop: invalid input")
+    return some (.ok (.VConst (.ByteString r)))
+  | .Bls12_381_mulMlResult, [.VConst (.ByteString a), .VConst (.ByteString b)] =>
+    let r ← mulMlResult a b
+    if r.size == 0 then return some (.error "bls12_381_mulMlResult: invalid input")
+    return some (.ok (.VConst (.ByteString r)))
+  | .Bls12_381_finalVerify, [.VConst (.ByteString a), .VConst (.ByteString b)] =>
+    let r ← finalVerify a b
+    return some (.ok (.VConst (.Bool r)))
+  -- Crypto builtins via FFI
+  | .Blake2b_256, [.VConst (.ByteString bs)] =>
+    let r ← Cleanode.Network.Crypto.blake2b_256 bs
+    return some (.ok (.VConst (.ByteString r)))
+  | .VerifyEd25519Signature, [.VConst (.ByteString vk), .VConst (.ByteString msg), .VConst (.ByteString sig)] =>
+    let r ← Cleanode.Network.Crypto.ed25519_verify_ffi vk msg sig
+    return some (.ok (.VConst (.Bool r)))
+  -- Sha2_256 and Sha3_256: no FFI available yet, return placeholder
+  | .Sha2_256, [.VConst (.ByteString _bs)] =>
+    -- TODO: add SHA-256 FFI
+    return some (.ok (.VConst (.ByteString (ByteArray.mk (Array.replicate 32 0)))))
+  | .Sha3_256, [.VConst (.ByteString _bs)] =>
+    -- TODO: add SHA3-256 FFI
+    return some (.ok (.VConst (.ByteString (ByteArray.mk (Array.replicate 32 0)))))
+  -- Secp256k1 (stub — no FFI yet)
+  | .VerifyEcdsaSecp256k1Signature, [.VConst (.ByteString _vk), .VConst (.ByteString _msg), .VConst (.ByteString _sig)] =>
+    return some (.ok (.VConst (.Bool false)))  -- TODO: add secp256k1 FFI
+  | .VerifySchnorrSecp256k1Signature, [.VConst (.ByteString _vk), .VConst (.ByteString _msg), .VConst (.ByteString _sig)] =>
+    return some (.ok (.VConst (.Bool false)))  -- TODO: add secp256k1 FFI
+  | _, _ => return none
+
+/-- IO-based CEK step: tries IO builtins first, falls back to pure step. -/
+def stepIO (state : CekState) (budget : ExBudget) : IO (CekState × ExBudget) := do
+  match budget.subtract stepCost with
+  | none => return (.Error "budget exhausted", { mem := 0, steps := 0 })
+  | some budget' =>
+    match state with
+    | .Returning value (.FrameApplyFun (.VBuiltin b arity args) :: rest) =>
+      let newArgs := args ++ [value]
+      if newArgs.length >= arity then
+        -- Try IO builtins first
+        match ← applyBuiltinIO b newArgs with
+        | some (.ok result) => return (.Returning result rest, budget')
+        | some (.error msg) => return (.Error msg, budget')
+        | none =>
+          -- Fall back to pure builtin
+          match applyBuiltin b newArgs with
+          | .ok result => return (.Returning result rest, budget')
+          | .error msg => return (.Error msg, budget')
+      else
+        return (.Returning (.VBuiltin b arity newArgs) rest, budget')
+    | _ =>
+      -- All other states use the pure step
+      let result := step state budget
+      return result
+
+/-- Run the CEK machine with IO support for BLS12-381 and crypto builtins. -/
+partial def evaluateIO (term : Term) (budget : ExBudget) : IO (Except String (CekValue × ExBudget)) := do
+  let rec go (state : CekState) (budget : ExBudget) (fuel : Nat) : IO (Except String (CekValue × ExBudget)) := do
+    if fuel == 0 then return .error "evaluation fuel exhausted"
+    else
+      match state with
+      | .Done value => return .ok (value, budget)
+      | .Error msg => return .error msg
+      | _ =>
+        let (state', budget') ← stepIO state budget
+        go state' budget' (fuel - 1)
+  go (.Computing #[] term []) budget 10000000
 
 end Cleanode.Plutus.UPLC.CEK

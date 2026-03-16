@@ -137,7 +137,16 @@ inductive RawCertificate where
       (pledge cost margin : Nat) (rewardAccount : ByteArray)
       (owners : List ByteArray)
   | poolRetirement (poolId : ByteArray) (epoch : Nat)
-  | unknown (certType : Nat)  -- Conway-era certs (types 7-14) we don't handle yet
+  | conwayRegistration (keyHash : ByteArray) (deposit : Nat)  -- type 7
+  | conwayDeregistration (keyHash : ByteArray) (refund : Nat)  -- type 8
+  | voteDelegation (keyHash : ByteArray) (drepCred : ByteArray)  -- type 9
+  | stakeVoteDelegation (keyHash : ByteArray) (poolId : ByteArray) (drepCred : ByteArray)  -- type 10
+  | stakeRegDelegation (keyHash : ByteArray) (poolId : ByteArray) (deposit : Nat)  -- type 11
+  | voteRegDelegation (keyHash : ByteArray) (drepCred : ByteArray) (deposit : Nat)  -- type 12
+  | stakeVoteRegDelegation (keyHash : ByteArray) (poolId : ByteArray) (drepCred : ByteArray) (deposit : Nat)  -- type 13
+  | authCommitteeHot (coldCredHash : ByteArray) (hotCredHash : ByteArray)  -- type 14
+  | resignCommitteeCold (coldCredHash : ByteArray)  -- type 15
+  | unknown (certType : Nat)
 
 instance : Repr RawCertificate where
   reprPrec
@@ -146,6 +155,15 @@ instance : Repr RawCertificate where
     | .stakeDelegation _ _, _ => "StakeDelegation"
     | .poolRegistration _ _ _ _ _ _ _, _ => "PoolRegistration"
     | .poolRetirement _ e, _ => s!"PoolRetirement(epoch={e})"
+    | .conwayRegistration _ d, _ => s!"ConwayRegistration(deposit={d})"
+    | .conwayDeregistration _ r, _ => s!"ConwayDeregistration(refund={r})"
+    | .voteDelegation _ _, _ => "VoteDelegation"
+    | .stakeVoteDelegation _ _ _, _ => "StakeVoteDelegation"
+    | .stakeRegDelegation _ _ d, _ => s!"StakeRegDelegation(deposit={d})"
+    | .voteRegDelegation _ _ d, _ => s!"VoteRegDelegation(deposit={d})"
+    | .stakeVoteRegDelegation _ _ _ d, _ => s!"StakeVoteRegDelegation(deposit={d})"
+    | .authCommitteeHot _ _, _ => "AuthCommitteeHot"
+    | .resignCommitteeCold _, _ => "ResignCommitteeCold"
     | .unknown t, _ => s!"UnknownCert({t})"
 
 structure TransactionBody where
@@ -580,7 +598,90 @@ partial def parseCertificateC (c : Cursor) : Option (CResult RawCertificate) := 
       let poolR ← CborCursor.decodeBytes cur
       let epochR ← CborCursor.decodeUInt poolR.cursor
       some { value := .poolRetirement poolR.value epochR.value, cursor := epochR.cursor }
-  | _ => do  -- Conway-era certs (7-14) or unknown — skip remaining fields
+  | 7 => do  -- conwayRegistration: [7, stake_credential, coin]
+      let credR ← CborCursor.decodeArrayHeader cur
+      let _credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes _credType.cursor
+      let depositR ← CborCursor.decodeUInt hashR.cursor
+      some { value := .conwayRegistration hashR.value depositR.value, cursor := depositR.cursor }
+  | 8 => do  -- conwayDeregistration: [8, stake_credential, coin]
+      let credR ← CborCursor.decodeArrayHeader cur
+      let _credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes _credType.cursor
+      let refundR ← CborCursor.decodeUInt hashR.cursor
+      some { value := .conwayDeregistration hashR.value refundR.value, cursor := refundR.cursor }
+  | 9 => do  -- voteDelegation: [9, stake_credential, drep_credential]
+      let credR ← CborCursor.decodeArrayHeader cur
+      let _credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes _credType.cursor
+      let drepR ← CborCursor.decodeArrayHeader hashR.cursor
+      let drepType ← CborCursor.decodeUInt drepR.cursor
+      -- DRep can be [0, keyhash], [1, scripthash], [2], [3]
+      if drepR.value >= 2 then
+        let drepHashR ← CborCursor.decodeBytes drepType.cursor
+        some { value := .voteDelegation hashR.value drepHashR.value, cursor := drepHashR.cursor }
+      else
+        some { value := .voteDelegation hashR.value ByteArray.empty, cursor := drepType.cursor }
+  | 10 => do  -- stakeVoteDelegation: [10, stake_credential, pool_keyhash, drep_credential]
+      let credR ← CborCursor.decodeArrayHeader cur
+      let _credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes _credType.cursor
+      let poolR ← CborCursor.decodeBytes hashR.cursor
+      let drepR ← CborCursor.decodeArrayHeader poolR.cursor
+      let drepType ← CborCursor.decodeUInt drepR.cursor
+      if drepR.value >= 2 then
+        let drepHashR ← CborCursor.decodeBytes drepType.cursor
+        some { value := .stakeVoteDelegation hashR.value poolR.value drepHashR.value, cursor := drepHashR.cursor }
+      else
+        some { value := .stakeVoteDelegation hashR.value poolR.value ByteArray.empty, cursor := drepType.cursor }
+  | 11 => do  -- stakeRegDelegation: [11, stake_credential, pool_keyhash, coin]
+      let credR ← CborCursor.decodeArrayHeader cur
+      let _credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes _credType.cursor
+      let poolR ← CborCursor.decodeBytes hashR.cursor
+      let depositR ← CborCursor.decodeUInt poolR.cursor
+      some { value := .stakeRegDelegation hashR.value poolR.value depositR.value, cursor := depositR.cursor }
+  | 12 => do  -- voteRegDelegation: [12, stake_credential, drep_credential, coin]
+      let credR ← CborCursor.decodeArrayHeader cur
+      let _credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes _credType.cursor
+      let drepR ← CborCursor.decodeArrayHeader hashR.cursor
+      let drepType ← CborCursor.decodeUInt drepR.cursor
+      let afterDrep ← if drepR.value >= 2 then
+        let drepHashR ← CborCursor.decodeBytes drepType.cursor
+        some (drepHashR.value, drepHashR.cursor)
+      else
+        some (ByteArray.empty, drepType.cursor)
+      let depositR ← CborCursor.decodeUInt afterDrep.2
+      some { value := .voteRegDelegation hashR.value afterDrep.1 depositR.value, cursor := depositR.cursor }
+  | 13 => do  -- stakeVoteRegDelegation: [13, stake_credential, pool_keyhash, drep_credential, coin]
+      let credR ← CborCursor.decodeArrayHeader cur
+      let _credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes _credType.cursor
+      let poolR ← CborCursor.decodeBytes hashR.cursor
+      let drepR ← CborCursor.decodeArrayHeader poolR.cursor
+      let drepType ← CborCursor.decodeUInt drepR.cursor
+      let afterDrep ← if drepR.value >= 2 then
+        let drepHashR ← CborCursor.decodeBytes drepType.cursor
+        some (drepHashR.value, drepHashR.cursor)
+      else
+        some (ByteArray.empty, drepType.cursor)
+      let depositR ← CborCursor.decodeUInt afterDrep.2
+      some { value := .stakeVoteRegDelegation hashR.value poolR.value afterDrep.1 depositR.value, cursor := depositR.cursor }
+  | 14 => do  -- authCommitteeHot: [14, cold_credential, hot_credential]
+      let coldR ← CborCursor.decodeArrayHeader cur
+      let _coldType ← CborCursor.decodeUInt coldR.cursor
+      let coldHashR ← CborCursor.decodeBytes _coldType.cursor
+      let hotR ← CborCursor.decodeArrayHeader coldHashR.cursor
+      let _hotType ← CborCursor.decodeUInt hotR.cursor
+      let hotHashR ← CborCursor.decodeBytes _hotType.cursor
+      some { value := .authCommitteeHot coldHashR.value hotHashR.value, cursor := hotHashR.cursor }
+  | 15 => do  -- resignCommitteeCold: [15, cold_credential]
+      let coldR ← CborCursor.decodeArrayHeader cur
+      let _coldType ← CborCursor.decodeUInt coldR.cursor
+      let coldHashR ← CborCursor.decodeBytes _coldType.cursor
+      some { value := .resignCommitteeCold coldHashR.value, cursor := coldHashR.cursor }
+  | _ => do  -- unknown cert types — skip remaining fields
       for _ in [1:arrLen] do
         match skipValue cur with
         | some after => cur := after
@@ -980,53 +1081,62 @@ def parseConwayBlockBodyIO (bs : ByteArray) : IO (Option ConwayBlockBody) := do
     else
       pure c0
 
-  -- Block might be wrapped as [era_id, actual_block] or just [header, body_array]
+  -- Block might be:
+  -- (a) [era_id, [header, tx_bodies, witnesses, aux_data, invalid_txs]] (2-element wrapped)
+  -- (b) [header, tx_bodies, witnesses, aux_data, invalid_txs] (5-element direct)
   match CborCursor.decodeArrayHeader blockCursor with
   | none => return none
   | some r1 => do
-      let actualCursor ←
+      -- Determine the cursor pointing to the first element of the 5-element block body
+      let blockBodyCursor ←
         if r1.value == 2 then do
+          -- Format (a): skip era_id, then decode inner 5-element array
           match CborCursor.decodeUInt r1.cursor with
           | some eraResult =>
-              if eraResult.value <= 10 then pure eraResult.cursor
-              else pure r1.cursor
-          | none => pure r1.cursor
+              if eraResult.value <= 10 then do
+                match CborCursor.decodeArrayHeader eraResult.cursor with
+                | some innerArr =>
+                    if innerArr.value >= 5 then pure (some innerArr.cursor)
+                    else pure none
+                | none => pure none
+              else pure none
+          | none => pure none
+        else if r1.value >= 5 then
+          -- Format (b): already at the first element of the 5-element block
+          pure (some r1.cursor)
         else
-          pure r1.cursor
+          pure none
 
-      match CborCursor.decodeArrayHeader actualCursor with
+      match blockBodyCursor with
       | none => return none
-      | some blockArray => do
-          if blockArray.value >= 5 then do
-            -- Skip header (element 0)
-            match skipValue blockArray.cursor with
-            | none => return none
-            | some afterHeader => do
-                -- Element 1: Parse tx_bodies array
-                match parseTransactionBodiesC afterHeader with
+      | some elemCursor => do
+          -- Skip header (element 0)
+          match skipValue elemCursor with
+          | none => return none
+          | some afterHeader => do
+              -- Element 1: Parse tx_bodies array
+              match parseTransactionBodiesC afterHeader with
+              | none =>
+                  return some { transactions := [], invalidTxs := [] }
+              | some txBodiesResult =>
+                  -- Element 2: Parse witnesses array
+                  match parseWitnessSetsC txBodiesResult.cursor with
                   | none =>
-                      return some { transactions := [], invalidTxs := [] }
-                  | some txBodiesResult =>
-                      -- Element 2: Parse witnesses array
-                      match parseWitnessSetsC txBodiesResult.cursor with
-                      | none =>
-                          let transactions := txBodiesResult.value.map (fun body =>
+                      let transactions := txBodiesResult.value.map (fun body =>
+                        { body := body, witnesses := { redeemers := [] } }
+                      )
+                      return some { transactions, invalidTxs := [] }
+                  | some witnessResult =>
+                      let transactions := List.zipWith (fun body witnesses =>
+                        { body := body, witnesses := witnesses }
+                      ) txBodiesResult.value witnessResult.value
+                      let transactions :=
+                        if txBodiesResult.value.length > witnessResult.value.length then
+                          transactions ++ (txBodiesResult.value.drop witnessResult.value.length).map (fun body =>
                             { body := body, witnesses := { redeemers := [] } }
                           )
-                          return some { transactions, invalidTxs := [] }
-                      | some witnessResult =>
-                          let transactions := List.zipWith (fun body witnesses =>
-                            { body := body, witnesses := witnesses }
-                          ) txBodiesResult.value witnessResult.value
-                          let transactions :=
-                            if txBodiesResult.value.length > witnessResult.value.length then
-                              transactions ++ (txBodiesResult.value.drop witnessResult.value.length).map (fun body =>
-                                { body := body, witnesses := { redeemers := [] } }
-                              )
-                            else transactions
-                          return some { transactions, invalidTxs := [] }
-          else
-            return none
+                        else transactions
+                      return some { transactions, invalidTxs := [] }
 
 /-- Parse Conway/Babbage block body (non-IO version for compatibility) -/
 partial def parseConwayBlockBody (bs : ByteArray) : Option ConwayBlockBody := do

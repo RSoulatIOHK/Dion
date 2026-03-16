@@ -222,20 +222,23 @@ def validateCollateral (utxo : UTxOSet) (body : TransactionBody)
     throw (.InsufficientCollateral requiredCollateral providedCollateral)
 
 /-- Validate script data hash consistency.
-    For Alonzo+ txs with Plutus scripts, scriptDataHash (key 10) must be present.
-    Full computation: scriptDataHash == Blake2b-256(redeemers_cbor || datums_cbor || language_views_cbor)
-    Currently validates presence only; full hash computation requires raw witness CBOR tracking. -/
-def validateScriptDataHash (body : TransactionBody) (witnesses : WitnessSet) : ValidationResult := do
+    For Alonzo+ txs with Plutus scripts, scriptDataHash (key 10) must equal
+    Blake2b-256(redeemers_cbor || datums_cbor || language_views_cbor).
+    Full computation requires raw witness CBOR; validate presence for now,
+    with hash verification when raw CBOR is available. -/
+def validateScriptDataHash (body : TransactionBody) (witnesses : WitnessSet)
+    : IO (Except ValidationError Unit) := do
   let hasPlutusScripts := !witnesses.plutusV1Scripts.isEmpty ||
                           !witnesses.plutusV2Scripts.isEmpty ||
                           !witnesses.plutusV3Scripts.isEmpty
   let hasRedeemers := !witnesses.redeemers.isEmpty
   -- If there are Plutus scripts or redeemers, scriptDataHash must be present
   if (hasPlutusScripts || hasRedeemers) && body.scriptDataHash.isNone then
-    throw .InvalidScriptDataHash
+    return .error .InvalidScriptDataHash
   -- If there are no scripts/redeemers, scriptDataHash should be absent
   if !hasPlutusScripts && !hasRedeemers && body.scriptDataHash.isSome then
-    throw .InvalidScriptDataHash
+    return .error .InvalidScriptDataHash
+  return .ok ()
 
 /-- Plutus script execution result -/
 structure PlutusExecResult where
@@ -345,7 +348,7 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
   | .ok () => pure ()
 
   -- 13. Script data hash validation
-  match validateScriptDataHash body witnesses with
+  match ← validateScriptDataHash body witnesses with
   | .error e => return .error e
   | .ok () => pure ()
 

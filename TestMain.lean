@@ -5,6 +5,9 @@ import Cleanode.Test.VRFTest
 import Cleanode.Test.CborTest
 import Cleanode.Test.KESTest
 import Cleanode.Test.BlockRoundTripTest
+import Cleanode.Test.PlutusConformanceTest
+import Cleanode.Test.IntegrationTest
+import Cleanode.Test.BLS12_381Test
 import Cleanode.Test.Benchmark
 
 /-!
@@ -25,6 +28,9 @@ open Cleanode.Test.VRFTest
 open Cleanode.Test.CborTest
 open Cleanode.Test.KESTest
 open Cleanode.Test.BlockRoundTripTest
+open Cleanode.Test.PlutusConformanceTest
+open Cleanode.Test.IntegrationTest
+open Cleanode.Test.BLS12_381Test
 open Cleanode.Test.Benchmark
 
 def main (args : List String) : IO UInt32 := do
@@ -79,6 +85,30 @@ def main (args : List String) : IO UInt32 := do
   IO.println "--- Block CBOR Round-Trip ---"
   let blockResults ← runBlockRoundTripTests
   for r in blockResults do
+    printResult r
+    summary := summary.add r
+
+  -- Plutus Conformance
+  IO.println ""
+  IO.println "--- Plutus Conformance (UPLC/CEK) ---"
+  let plutusResults ← runPlutusConformanceTests
+  for r in plutusResults do
+    printResult r
+    summary := summary.add r
+
+  -- Integration (Forge → Parse Roundtrip)
+  IO.println ""
+  IO.println "--- Integration (Forge → Parse → Validate) ---"
+  let integrationResults ← runIntegrationTests
+  for r in integrationResults do
+    printResult r
+    summary := summary.add r
+
+  -- BLS12-381
+  IO.println ""
+  IO.println "--- BLS12-381 (via blst FFI) ---"
+  let blsResults ← runBLS12_381Tests
+  for r in blsResults do
     printResult r
     summary := summary.add r
 

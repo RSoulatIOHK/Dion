@@ -196,7 +196,7 @@ def Mempool.addTxRaw (pool : Mempool) (rawBytes : ByteArray) (nowMs : Nat)
   if pool.totalBytes + rawBytes.size > pool.config.maxBytes then return .error "mempool byte limit"
   let entry : MempoolEntry := {
     txHash := txHash
-    transaction := { body := { inputs := [], outputs := [], fee := 0, rawBytes := rawBytes }, witnesses := { redeemers := [] } }
+    transaction := { body := { inputs := [], outputs := [], fee := 0, certificates := [], rawBytes := rawBytes }, witnesses := { redeemers := [] } }
     rawBytes := rawBytes
     addedAt := nowMs
     size := rawBytes.size
@@ -211,9 +211,13 @@ def Mempool.addTxRaw (pool : Mempool) (rawBytes : ByteArray) (nowMs : Nat)
     Tracks which txs have been announced to this peer. -/
 structure TxSubmPeerState where
   announcedTxIds : List ByteArray
+  /-- When a blocking MsgRequestTxIds arrives and the mempool is empty,
+      we store the requested count here. The main receive loop checks this
+      before each socket read and sends the reply inline when txs appear. -/
+  pendingBlockingReq : Option Nat := none
 
 def TxSubmPeerState.empty : TxSubmPeerState :=
-  { announcedTxIds := [] }
+  { announcedTxIds := [], pendingBlockingReq := none }
 
 /-- Get tx IDs not yet announced to a specific peer, up to `count` -/
 def Mempool.getNewTxIds (pool : Mempool) (announced : List ByteArray) (count : Nat) : List TxId :=

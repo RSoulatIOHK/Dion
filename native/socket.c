@@ -32,7 +32,9 @@
   }
 #else
   #include <unistd.h>
+  #include <poll.h>
   #include <sys/socket.h>
+  #include <sys/un.h>
   #include <netinet/in.h>
   #include <arpa/inet.h>
   #include <netdb.h>
@@ -267,6 +269,83 @@ lean_obj_res cleanode_socket_receive_exact(lean_obj_arg sock_obj, uint32_t num_b
 }
 
 /*
+ * Receive exactly num_bytes with a timeout in milliseconds.
+ * Returns Except SocketError (Option ByteArray):
+ *   Ok (some bytes) — received all bytes
+ *   Ok none         — timed out (no data within timeout_ms)
+ *   Error e         — socket error or connection closed
+ *
+ * cleanode_socket_receive_exact_timeout : Socket -> UInt32 -> UInt32 -> IO (Except SocketError (Option ByteArray))
+ */
+lean_obj_res cleanode_socket_receive_exact_timeout(lean_obj_arg sock_obj, uint32_t num_bytes, uint32_t timeout_ms, lean_obj_arg world) {
+    int sockfd = (int)socket_get_fd(sock_obj);
+
+    uint8_t* buffer = malloc(num_bytes);
+    if (!buffer) {
+        lean_object* err = mk_socket_error_receive_failed(lean_mk_string("malloc failed"));
+        return lean_io_result_mk_ok(mk_except_error(err));
+    }
+
+    size_t total_received = 0;
+    while (total_received < num_bytes) {
+        /* Use poll() to wait with timeout before each recv */
+        struct pollfd pfd;
+        pfd.fd = sockfd;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+
+        /* For the first chunk, use the full timeout. For subsequent chunks
+           (partial read), use a shorter timeout since data should be arriving. */
+        int poll_timeout = (total_received == 0) ? (int)timeout_ms : 5000;
+        int poll_ret = poll(&pfd, 1, poll_timeout);
+
+        if (poll_ret == 0) {
+            /* Timeout */
+            free(buffer);
+            if (total_received == 0) {
+                /* Clean timeout — no data at all, return None */
+                /* Option.none = ctor 0, no fields */
+                return lean_io_result_mk_ok(mk_except_ok(lean_box(0)));
+            } else {
+                /* Partial read timeout — treat as error */
+                lean_object* err = mk_socket_error_receive_failed(lean_mk_string("timeout during partial read"));
+                return lean_io_result_mk_ok(mk_except_error(err));
+            }
+        }
+        if (poll_ret < 0) {
+            free(buffer);
+            char err_msg[256];
+            snprintf(err_msg, sizeof(err_msg), "poll: %s", sock_strerror());
+            lean_object* err = mk_socket_error_receive_failed(lean_mk_string(err_msg));
+            return lean_io_result_mk_ok(mk_except_error(err));
+        }
+
+        ssize_t received = recv(sockfd, buffer + total_received, num_bytes - total_received, 0);
+        if (received < 0) {
+            free(buffer);
+            char err_msg[256];
+            snprintf(err_msg, sizeof(err_msg), "recv: %s", sock_strerror());
+            lean_object* err = mk_socket_error_receive_failed(lean_mk_string(err_msg));
+            return lean_io_result_mk_ok(mk_except_error(err));
+        }
+        if (received == 0) {
+            free(buffer);
+            lean_object* err = mk_socket_error_receive_failed(lean_mk_string("connection closed by peer"));
+            return lean_io_result_mk_ok(mk_except_error(err));
+        }
+        total_received += received;
+    }
+
+    lean_object* byte_array = lean_alloc_sarray(sizeof(uint8_t), total_received, total_received);
+    memcpy(lean_sarray_cptr(byte_array), buffer, total_received);
+    free(buffer);
+    /* Option.some byte_array = ctor 1, 1 field */
+    lean_object* some_val = lean_alloc_ctor(1, 1, 0);
+    lean_ctor_set(some_val, 0, byte_array);
+    return lean_io_result_mk_ok(mk_except_ok(some_val));
+}
+
+/*
  * Resolve hostname to all IP addresses (DNS discovery)
  * cleanode_dns_resolve : String -> IO (Array String)
  */
@@ -392,3 +471,89 @@ lean_obj_res cleanode_socket_close(lean_obj_arg sock_obj, lean_obj_arg world) {
     CLOSESOCKET(sockfd);
     return lean_io_result_mk_ok(lean_box(0));
 }
+
+#ifndef _WIN32
+/*
+ * Create a listening Unix domain socket at the given path.
+ * Unlinks any stale socket file before binding.
+ * cleanode_unix_listen : String -> IO (Except SocketError Socket)
+ */
+lean_obj_res cleanode_unix_listen(lean_obj_arg path_obj, lean_obj_arg world) {
+    const char* path = lean_string_cstr(path_obj);
+
+    int sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sockfd == -1) {
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg), "unix socket: %s", sock_strerror());
+        lean_object* err = mk_socket_error_connection_failed(lean_mk_string(err_msg));
+        return lean_io_result_mk_ok(mk_except_error(err));
+    }
+
+    // Remove stale socket file if it exists
+    unlink(path);
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    // Ensure path fits (sun_path is typically 104 or 108 bytes)
+    if (strlen(path) >= sizeof(addr.sun_path)) {
+        CLOSESOCKET(sockfd);
+        lean_object* err = mk_socket_error_connection_failed(
+            lean_mk_string("unix socket path too long"));
+        return lean_io_result_mk_ok(mk_except_error(err));
+    }
+    strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+
+    if (bind(sockfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg), "unix bind %s: %s", path, sock_strerror());
+        CLOSESOCKET(sockfd);
+        lean_object* err = mk_socket_error_connection_failed(lean_mk_string(err_msg));
+        return lean_io_result_mk_ok(mk_except_error(err));
+    }
+
+    if (listen(sockfd, 5) != 0) {
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg), "unix listen: %s", sock_strerror());
+        CLOSESOCKET(sockfd);
+        lean_object* err = mk_socket_error_connection_failed(lean_mk_string(err_msg));
+        return lean_io_result_mk_ok(mk_except_error(err));
+    }
+
+    lean_object* socket = mk_socket((uint32_t)sockfd);
+    return lean_io_result_mk_ok(mk_except_ok(socket));
+}
+
+/*
+ * Accept one connection from a Unix domain listening socket.
+ * cleanode_unix_accept : Socket -> IO (Except SocketError Socket)
+ */
+lean_obj_res cleanode_unix_accept(lean_obj_arg sock_obj, lean_obj_arg world) {
+    int listenfd = (int)socket_get_fd(sock_obj);
+
+    struct sockaddr_un client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+    int clientfd = accept(listenfd, (struct sockaddr*)&client_addr, &addr_len);
+    if (clientfd == -1) {
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg), "unix accept: %s", sock_strerror());
+        lean_object* err = mk_socket_error_connection_failed(lean_mk_string(err_msg));
+        return lean_io_result_mk_ok(mk_except_error(err));
+    }
+
+    lean_object* socket = mk_socket((uint32_t)clientfd);
+    return lean_io_result_mk_ok(mk_except_ok(socket));
+}
+
+/*
+ * Close a Unix socket and unlink the socket file.
+ * cleanode_unix_close_and_unlink : Socket -> String -> IO Unit
+ */
+lean_obj_res cleanode_unix_close_and_unlink(lean_obj_arg sock_obj, lean_obj_arg path_obj, lean_obj_arg world) {
+    int sockfd = (int)socket_get_fd(sock_obj);
+    const char* path = lean_string_cstr(path_obj);
+    CLOSESOCKET(sockfd);
+    unlink(path);
+    return lean_io_result_mk_ok(lean_box(0));
+}
+#endif /* !_WIN32 */

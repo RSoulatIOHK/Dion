@@ -502,10 +502,13 @@ static int ed25519_sign_impl(uint8_t *sm, uint64_t *smlen_p,
     for (int i = 0; i < 32; i++)
         for (int j = 0; j < 32; j++)
             x[i+j] += h[i] * (uint64_t)d[j];
-    /* Reduce x mod l and store in sm+32 */
+    /* Carry-propagate x into byte range before calling reduce */
+    for (int i = 0; i < 63; i++) {
+        x[i+1] += x[i] >> 8;
+        x[i] &= 255;
+    }
     uint8_t s_bytes[64];
-    memset(s_bytes, 0, 64);
-    for (int i = 0; i < 64; i++) s_bytes[i] = (uint8_t)x[i];
+    for (int i = 0; i < 64; i++) s_bytes[i] = (uint8_t)(x[i] & 255);
     reduce(s_bytes);
     memcpy(sm + 32, s_bytes, 32);
 
@@ -907,4 +910,33 @@ LEAN_EXPORT lean_obj_res cleanode_vrf_proof_to_hash(
     lean_obj_res arr = lean_alloc_sarray(1, 64, 64);
     memcpy(lean_sarray_cptr(arr), hash, 64);
     return lean_io_result_mk_ok(arr);
+}
+
+/* ========================
+ * Non-static wrappers for use by kes.c
+ * ======================== */
+
+/* Derive Ed25519 key pair from a 32-byte seed */
+void cleanode_ed25519_seed_to_keypair(uint8_t *pk, uint8_t *sk, const uint8_t *seed) {
+    memcpy(sk, seed, 32);
+    uint8_t d[64];
+    sha512(d, seed, 32);
+    d[0] &= 248;
+    d[31] &= 127;
+    d[31] |= 64;
+    gf p[4], base[4];
+    set25519(base[0], X);
+    set25519(base[1], Y);
+    set25519(base[2], gf1);
+    M(base[3], X, Y);
+    scalarmult(p, base, d);
+    pack(pk, p);
+    memcpy(sk + 32, pk, 32);
+}
+
+/* Ed25519 sign: sm must have room for mlen + 64 bytes */
+int cleanode_ed25519_sign_raw(uint8_t *sm, uint64_t *smlen_p,
+                               const uint8_t *m, uint64_t mlen,
+                               const uint8_t *sk) {
+    return ed25519_sign_impl(sm, smlen_p, m, mlen, sk);
 }

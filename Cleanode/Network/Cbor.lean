@@ -77,9 +77,32 @@ def encodeHead (major : MajorType) (n : Nat) : ByteArray :=
 def encodeUInt (n : Nat) : ByteArray :=
   encodeHead .UnsignedInt n
 
+/-- Convert a Nat to big-endian byte array (for bignum encoding) -/
+partial def natToBigEndianBytes (n : Nat) : ByteArray :=
+  if n == 0 then ByteArray.mk #[]
+  else
+    let rec go (n : Nat) (acc : List UInt8) : List UInt8 :=
+      if n == 0 then acc
+      else go (n / 256) (UInt8.ofNat (n % 256) :: acc)
+    ByteArray.mk (go n []).toArray
+
+/-- Encode a large non-negative integer in CBOR format.
+    Uses standard uint for values ≤ 2^64-1, CBOR bignum (tag 2) for larger values. -/
+def encodeBigUInt (n : Nat) : ByteArray :=
+  if n ≤ 18446744073709551615 then
+    encodeUInt n
+  else
+    -- Positive bignum: tag(2) + byte string (big-endian)
+    encodeHead .Tag 2 ++ encodeHead .ByteString (natToBigEndianBytes n).size ++ natToBigEndianBytes n
+
 /-- Encode byte string in CBOR format -/
 def encodeBytes (bs : ByteArray) : ByteArray :=
   encodeHead .ByteString bs.size ++ bs
+
+/-- Encode a CBOR text string (major type 3) from UTF-8 bytes -/
+def encodeTextString (s : String) : ByteArray :=
+  let utf8 := s.toUTF8
+  encodeHead .TextString utf8.size ++ utf8
 
 /-- Encode array header (number of items) -/
 def encodeArrayHeader (n : Nat) : ByteArray :=

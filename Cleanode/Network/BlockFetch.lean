@@ -139,12 +139,18 @@ def decodeBlockFetchMessage (bs : ByteArray) : Option (DecodeResult BlockFetchMe
 -- = Client API =
 -- ==============
 
-/-- Send BlockFetch message over socket -/
+/-- Send BlockFetch message over socket (client/initiator mode) -/
 def sendBlockFetch (sock : Socket) (msg : BlockFetchMessage) : IO (Except SocketError Unit) := do
   let payload := encodeBlockFetchMessage msg
   let frame ← createFrame .BlockFetch .Initiator payload
   let frameBytes := encodeMuxFrame frame
   socket_send sock frameBytes
+
+/-- Send BlockFetch message as server/responder (bit 15 set in mux frame) -/
+def sendBlockFetchResponder (sock : Socket) (msg : BlockFetchMessage) : IO (Except SocketError Unit) := do
+  let payload := encodeBlockFetchMessage msg
+  let frame ← createFrame .BlockFetch .Responder payload
+  socket_send sock (encodeMuxFrame frame)
 
 /-- Result of receiving a BlockFetch message, including any leftover bytes -/
 structure BlockFetchReceiveResult where
@@ -164,7 +170,8 @@ private def handleKeepAlive (sock : Socket) (payload : ByteArray) : IO Unit := d
     pure ()
 
 /-- Read a single MUX frame from the socket, responding to KeepAlive transparently.
-    Returns the header and payload of the first non-KeepAlive frame. -/
+    Skips non-BlockFetch frames (TxSubmission2, ChainSync, PeerSharing, etc.)
+    to avoid protocol interference. Returns only BlockFetch frames. -/
 private partial def receiveMuxFrame (sock : Socket) : IO (Except SocketError (MuxHeader × ByteArray)) := do
   match ← socket_receive_exact sock 8 with
   | .error e => return .error e
@@ -179,8 +186,11 @@ private partial def receiveMuxFrame (sock : Socket) : IO (Except SocketError (Mu
               if header.protocolId == .KeepAlive then
                 handleKeepAlive sock payload
                 receiveMuxFrame sock
-              else
+              else if header.protocolId == .BlockFetch then
                 return .ok (header, payload)
+              else
+                -- Skip non-BlockFetch frames (TxSubmission2, PeerSharing, etc.)
+                receiveMuxFrame sock
 
 /-- Receive BlockFetch message from socket, handling multi-frame messages and KeepAlive.
     If leftoverBytes is provided, starts decoding from those bytes. -/

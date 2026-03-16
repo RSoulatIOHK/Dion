@@ -58,6 +58,11 @@ opaque socket_receive (sock : @& Socket) (maxBytes : @& UInt32) : IO (Except Soc
 @[extern "cleanode_socket_receive_exact"]
 opaque socket_receive_exact (sock : @& Socket) (numBytes : @& UInt32) : IO (Except SocketError ByteArray)
 
+/-- Receive exactly numBytes with a timeout in milliseconds.
+    Returns `some bytes` on success, `none` on clean timeout (no data arrived). -/
+@[extern "cleanode_socket_receive_exact_timeout"]
+opaque socket_receive_exact_timeout (sock : @& Socket) (numBytes : @& UInt32) (timeoutMs : @& UInt32) : IO (Except SocketError (Option ByteArray))
+
 /-- Close socket -/
 @[extern "cleanode_socket_close"]
 opaque socket_close (sock : @& Socket) : IO Unit
@@ -73,6 +78,23 @@ opaque socket_accept (listenSock : @& Socket) : IO (Except SocketError Socket)
 /-- Resolve hostname to all IP addresses via DNS -/
 @[extern "cleanode_dns_resolve"]
 opaque dns_resolve (host : @& String) : IO (Array String)
+
+-- ====================
+-- = Unix Sockets     =
+-- ====================
+
+/-- Create a listening Unix domain socket at the given path.
+    Unlinks any stale socket file before binding. -/
+@[extern "cleanode_unix_listen"]
+opaque unix_listen (path : @& String) : IO (Except SocketError Socket)
+
+/-- Accept one connection from a Unix domain listening socket -/
+@[extern "cleanode_unix_accept"]
+opaque unix_accept (listenSock : @& Socket) : IO (Except SocketError Socket)
+
+/-- Close a Unix socket and unlink the socket file from the filesystem -/
+@[extern "cleanode_unix_close_and_unlink"]
+opaque unix_close_and_unlink (sock : @& Socket) (path : @& String) : IO Unit
 
 /-- High-level connection helper -/
 def connect (host : String) (port : UInt16) : IO (Except SocketError Socket) := do

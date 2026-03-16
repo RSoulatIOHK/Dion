@@ -157,7 +157,12 @@ def parseCertificateMetadata (j : Json) : Option CertificateMetadata := do
   let parameters ← parseStmParameters paramsJson
   let initiatedAt ← (j.getObjValAs? String "initiated_at").toOption
   let sealedAt ← (j.getObjValAs? String "sealed_at").toOption
-  let totalSigners ← (j.getObjValAs? Nat "total_signers").toOption
+  -- total_signers is derived from the signers array (API doesn't have a total_signers field)
+  let totalSigners := match (j.getObjVal? "signers").toOption with
+    | some signersJson => match signersJson.getArr? with
+      | .ok arr => arr.size
+      | .error _ => 0
+    | none => 0
   some { network, version, parameters, initiatedAt, sealedAt, totalSigners }
 
 /-- Parse protocol message parts from JSON -/

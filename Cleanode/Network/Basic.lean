@@ -61,6 +61,12 @@ def previewBootstrapPeers : List (String × UInt16) := [
   ("preview-node.play.dev.cardano.org", 3001)
 ]
 
+/-- Known Cardano SanchoNet bootstrap peers -/
+def sanchonetBootstrapPeers : List (String × UInt16) := [
+  ("sanchonet-node.world.dev.cardano.org", 30004),
+  ("sanchonet-node.play.dev.cardano.org", 3001)
+]
+
 /-- Default to mainnet peers for backward compatibility -/
 def bootstrapPeers : List (String × UInt16) := mainnetBootstrapPeers
 

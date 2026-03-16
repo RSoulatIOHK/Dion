@@ -38,6 +38,18 @@ import Cleanode.Network.PeerConnection
 import Cleanode.Network.ConnectionManager
 import Cleanode.Network.Http
 
+-- Node-to-Client (N2C) protocol
+import Cleanode.Network.N2C.MiniProtocolId
+import Cleanode.Network.N2C.Mux
+import Cleanode.Network.N2C.Handshake
+import Cleanode.Network.N2C.LocalTxSubmission
+import Cleanode.Network.N2C.StateQueryCodec
+import Cleanode.Network.N2C.PParamsCodec
+import Cleanode.Network.N2C.UTxOCodec
+import Cleanode.Network.N2C.LocalStateQuery
+import Cleanode.Network.N2C.LocalTxMonitor
+import Cleanode.Network.N2C.Server
+
 -- Configuration
 import Cleanode.Config
 import Cleanode.Config.Topology
@@ -70,6 +82,13 @@ import Cleanode.Ledger.Rewards
 
 -- Tests
 import Cleanode.Test.CryptoTest
+import Cleanode.Test.TestHarness
+import Cleanode.Test.Blake2bTest
+import Cleanode.Test.Ed25519Test
+import Cleanode.Test.VRFTest
+import Cleanode.Test.CborTest
+import Cleanode.Test.KESTest
+import Cleanode.Test.Benchmark
 
 -- TUI
 import Cleanode.TUI.Ansi
@@ -87,12 +106,19 @@ import Cleanode.Crypto.Sign.Ed25519.Point
 import Cleanode.Crypto.Sign.Ed25519.Signature
 import Cleanode.Crypto.VRF.ECVRF
 import Cleanode.Crypto.Sign.KES
+import Cleanode.Crypto.Sign.KESSign
+import Cleanode.Crypto.TextEnvelope
 
 -- Consensus
 import Cleanode.Consensus.Praos.LeaderElection
 import Cleanode.Consensus.Praos.ConsensusState
 import Cleanode.Consensus.Praos.TxSelection
 import Cleanode.Consensus.Praos.BlockForge
+import Cleanode.Consensus.Praos.SPOKeys
+import Cleanode.Consensus.Praos.StakeDistribution
+import Cleanode.Consensus.Praos.ForgeLoop
+import Cleanode.Consensus.Praos.BlockAnnounce
+import Cleanode.Consensus.Praos.PreprodTest
 
 -- Mithril
 import Cleanode.Mithril.Types

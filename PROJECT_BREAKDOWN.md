@@ -276,22 +276,73 @@
 **I want** formally verified transaction validation
 **So that** we can prove only valid transactions are accepted
 
-- [ ] **Task 2.3.3.1:** Implement input validation (inputs exist in UTxO)
-- [ ] **Task 2.3.3.2:** Implement balance validation (inputs ≥ outputs + fees)
-- [ ] **Task 2.3.3.3:** Implement signature validation
-- [ ] **Task 2.3.3.4:** Implement script validation (Plutus)
-- [ ] **Task 2.3.3.5:** Implement native script validation
-- [ ] **Task 2.3.3.6:** Prove validation correctness
+- [x] **Task 2.3.3.1:** Implement input validation (inputs exist in UTxO)
+- [x] **Task 2.3.3.2:** Implement balance validation (inputs ≥ outputs + fees)
+- [ ] **Task 2.3.3.3:** Implement signature validation → expanded in **Story 2.3.5**
+- [ ] **Task 2.3.3.4:** Implement script validation (Plutus) → expanded in **Story 2.3.6**
+- [ ] **Task 2.3.3.5:** Implement native script validation → expanded in **Story 2.3.6**
+- [ ] **Task 2.3.3.6:** Prove validation correctness → expanded in **Story 2.3.8**
 
 #### Story 2.3.4: Fee Calculation
 **As a** ledger implementer
 **I want** formally verified fee calculation
 **So that** we can prove fee rules are correctly enforced
 
-- [ ] **Task 2.3.4.1:** Define fee calculation formula per era
-- [ ] **Task 2.3.4.2:** Implement minFee calculation
-- [ ] **Task 2.3.4.3:** Implement script execution cost calculation
-- [ ] **Task 2.3.4.4:** Prove fee calculation properties
+- [x] **Task 2.3.4.1:** Define fee calculation formula per era
+- [x] **Task 2.3.4.2:** Implement minFee calculation
+- [x] **Task 2.3.4.3:** Implement script execution cost calculation
+- [x] **Task 2.3.4.4:** Prove fee calculation properties (monotonicity, non-negativity)
+
+#### Story 2.3.5: Witness Set Extension & Signature Validation
+**As a** ledger implementer
+**I want** complete witness set parsing and Ed25519 signature verification
+**So that** only properly signed transactions are accepted
+
+- [ ] **Task 2.3.5.1:** Extend WitnessSet with vkey witnesses, scripts, datums
+- [ ] **Task 2.3.5.2:** Implement CBOR decoder for extended WitnessSet
+- [ ] **Task 2.3.5.3:** Implement transaction hash computation (Blake2b-256 of body CBOR)
+- [ ] **Task 2.3.5.4:** Implement vkey witness verification (Ed25519 over tx hash)
+- [ ] **Task 2.3.5.5:** Extract required signers from input addresses
+- [ ] **Task 2.3.5.6:** Wire signature validation into validateTransaction (replace stub)
+- [ ] **Task 2.3.5.7:** Implement bootstrap witness validation (Byron-era addresses)
+
+#### Story 2.3.6: Script Validation Pipeline
+**As a** ledger implementer
+**I want** native script evaluation and Plutus script validation
+**So that** script-locked UTxOs can only be spent when scripts succeed
+
+- [ ] **Task 2.3.6.1:** Wire native script evaluation into validation pipeline
+- [ ] **Task 2.3.6.2:** Validate script data hash matches witness content
+- [ ] **Task 2.3.6.3:** Implement collateral input validation
+- [ ] **Task 2.3.6.4:** Implement execution budget enforcement
+- [ ] **Task 2.3.6.5:** Design UPLC interpreter integration strategy
+- [ ] **Task 2.3.6.6:** Implement Plutus script context construction
+- [ ] **Task 2.3.6.7:** Implement Plutus V1/V2/V3 script execution
+
+#### Story 2.3.7: Extended Transaction Body & Validation Rules
+**As a** ledger implementer
+**I want** the full transaction body fields and remaining validation rules
+**So that** all Cardano ledger rules are enforced
+
+- [ ] **Task 2.3.7.1:** Extend TransactionBody with all Conway-era fields
+- [ ] **Task 2.3.7.2:** Implement min-ADA per output validation
+- [ ] **Task 2.3.7.3:** Implement multi-asset balance validation
+- [ ] **Task 2.3.7.4:** Implement validity interval (TTL) validation
+- [ ] **Task 2.3.7.5:** Implement required signers validation (Alonzo+)
+- [ ] **Task 2.3.7.6:** Implement reference input validation (Babbage+)
+- [ ] **Task 2.3.7.7:** Implement mint/burn policy validation
+- [ ] **Task 2.3.7.8:** Implement certificate validation in state application
+
+#### Story 2.3.8: Transaction Validation Formal Proofs
+**As a** protocol implementer
+**I want** formal proofs that validation preserves ledger invariants
+**So that** we can guarantee correctness of the validation pipeline
+
+- [ ] **Task 2.3.8.1:** Prove balance validation ensures value conservation
+- [ ] **Task 2.3.8.2:** Prove UTxO set consistency after transaction application
+- [ ] **Task 2.3.8.3:** Prove state transition correctness
+- [ ] **Task 2.3.8.4:** Prove state invariants are preserved across transitions
+- [ ] **Task 2.3.8.5:** Prove fee monotonicity and bounds
 
 ---
 
@@ -359,6 +410,16 @@
 - [ ] **Task 3.1.2.3:** Implement transaction removal (after inclusion)
 - [ ] **Task 3.1.2.4:** Implement mempool pruning (size limits)
 - [ ] **Task 3.1.2.5:** Prove mempool invariants
+
+#### Story 3.1.3: Mempool Validation Hardening
+**As a** relay node operator
+**I want** the mempool to properly validate and track transactions
+**So that** only valid transactions are relayed to peers
+
+- [ ] **Task 3.1.3.1:** Parse transactions from CBOR in addTxRaw (currently creates dummy tx)
+- [ ] **Task 3.1.3.2:** Implement proper timestamp tracking (currently hardcoded to 0)
+- [ ] **Task 3.1.3.3:** Track mempool-internal UTxO dependencies
+- [ ] **Task 3.1.3.4:** Add proper mempool capacity error types (not reusing TxTooLarge)
 
 ---
 

@@ -34,17 +34,19 @@ open Cleanode.Network.Socket
 
 /-- Cardano network magic numbers -/
 inductive NetworkMagic where
-  | Mainnet    -- 764824073
-  | Preprod    -- 1
-  | Preview    -- 2
+  | Mainnet     -- 764824073
+  | Preprod     -- 1
+  | Preview     -- 2
+  | SanchoNet   -- 4
   | Custom (n : Nat)
   deriving Repr, BEq
 
 def NetworkMagic.toNat : NetworkMagic → Nat
-  | .Mainnet => 764824073
-  | .Preprod => 1
-  | .Preview => 2
-  | .Custom n => n
+  | .Mainnet   => 764824073
+  | .Preprod   => 1
+  | .Preview   => 2
+  | .SanchoNet => 4
+  | .Custom n  => n
 
 /-- Protocol version number -/
 structure VersionNumber where
@@ -250,6 +252,10 @@ def createPreprodProposal : HandshakeMessage :=
 /-- Create a preview handshake proposal -/
 def createPreviewProposal : HandshakeMessage :=
   createProposal .Preview
+
+/-- Create a sanchonet handshake proposal -/
+def createSanchoNetProposal : HandshakeMessage :=
+  createProposal .SanchoNet
 
 /-- Send handshake message over a socket -/
 def sendHandshake (sock : Socket) (msg : HandshakeMessage) : IO (Except SocketError Unit) := do

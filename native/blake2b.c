@@ -168,3 +168,17 @@ lean_obj_res cleanode_blake2b_256(lean_obj_arg data_obj, lean_obj_arg world) {
 
     return lean_io_result_mk_ok(result);
 }
+
+/*
+ * General-purpose Blake2b — called by kes.c and other native modules.
+ * Matches the reference blake2b() signature.
+ */
+int blake2b(void *out, size_t outlen, const void *in, size_t inlen,
+            const void *key, size_t keylen) {
+    (void)key; (void)keylen;  /* Keyed hashing not used */
+    blake2b_state S;
+    blake2b_init(&S, outlen);
+    blake2b_update(&S, (const uint8_t *)in, inlen);
+    blake2b_final(&S, (uint8_t *)out);
+    return 0;
+}

@@ -207,6 +207,7 @@ structure LedgerState where
   epochBoundary : Option EpochBoundaryState
   lastSlot : Nat
   lastBlockNo : Nat
+  lastBlockHash : ByteArray
 
 instance : Repr LedgerState where
   reprPrec s _ := s!"LedgerState(utxo={s.utxo.size}, slot={s.lastSlot}, blockNo={s.lastBlockNo})"
@@ -219,7 +220,8 @@ def LedgerState.initial : LedgerState :=
     protocolParams := ProtocolParamsState.mainnetDefaults,
     epochBoundary := none,
     lastSlot := 0,
-    lastBlockNo := 0 }
+    lastBlockNo := 0,
+    lastBlockHash := ByteArray.mk (Array.replicate 32 0) }
 
 -- ====================
 -- = State Transitions =
@@ -259,14 +261,14 @@ def applyTransaction (state : LedgerState) (txHash : ByteArray) (tx : Transactio
   return { state with utxo := newUtxo }
 
 /-- Apply all transactions in a block -/
-def applyBlock (state : LedgerState) (slot blockNo : Nat)
+def applyBlock (state : LedgerState) (slot blockNo : Nat) (blockHash : ByteArray)
     (txs : List (ByteArray × Transaction))
     : Except TxApplicationError LedgerState := do
   let mut s := state
   for pair in txs do
     let (txHash, tx) := pair
     s ← applyTransaction s txHash tx
-  return { s with lastSlot := slot, lastBlockNo := blockNo }
+  return { s with lastSlot := slot, lastBlockNo := blockNo, lastBlockHash := blockHash }
 
 /-- Process epoch boundary transition -/
 def processEpochBoundary (state : LedgerState) (newEpoch : Nat) : LedgerState :=

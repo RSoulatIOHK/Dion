@@ -35,6 +35,13 @@ import Cleanode.Mithril.Client
 import Cleanode.CLI.Args
 import Cleanode.CLI.Query
 import Cleanode.Monitoring.Server
+import Cleanode.Consensus.Praos.SPOKeys
+import Cleanode.Consensus.Praos.ForgeLoop
+import Cleanode.Consensus.Praos.BlockAnnounce
+import Cleanode.Network.N2C.Server
+import Cleanode.Ledger.State
+import Cleanode.Ledger.Certificate
+import Cleanode.Consensus.Praos.StakeDistribution
 
 open Cleanode.Network
 open Cleanode.Network.Socket
@@ -66,6 +73,27 @@ open Cleanode.Consensus.Praos.ConsensusState
 open Pigment
 open Cleanode.TUI.State
 open Cleanode.TUI.Render
+
+/-- Convert a RawCertificate (from block parser) to a ledger Certificate.
+    Pool registrations use a simplified FullPoolParams. -/
+def rawCertToLedger : RawCertificate → Option Cleanode.Ledger.Certificate.Certificate
+  | .stakeKeyRegistration kh => some (.stakeKeyRegistration kh)
+  | .stakeKeyDeregistration kh => some (.stakeKeyDeregistration kh)
+  | .stakeDelegation kh pid => some (.stakeDelegation kh pid)
+  | .poolRegistration pid vrfKH pledge cost _margin rewardAcct owners =>
+      some (.poolRegistration {
+        poolId := pid
+        vrfKeyHash := vrfKH
+        pledge := pledge
+        cost := cost
+        margin := 0
+        rewardAccount := rewardAcct
+        owners := owners
+        relays := []
+        metadata := none
+      })
+  | .poolRetirement pid epoch => some (.poolRetirement pid epoch)
+  | .unknown _ => none
 
 /-- Atomically check if a key is in the set; if not, add it.
     Returns true if the key was already present (= duplicate).
@@ -741,7 +769,8 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
     (tuiRef : Option (IO.Ref TUIState) := none)
     (peerAddr : String := "")
     (mempoolRef : Option (IO.Ref Mempool) := none)
-    (consensusRef : Option (IO.Ref ConsensusState) := none) : IO Bool := do
+    (consensusRef : Option (IO.Ref ConsensusState) := none)
+    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none) : IO Bool := do
   -- Extract the actual block point from the header (not the tip)
   -- The headerBytes is tag24-wrapped: d8 18 <bytestring>
   -- Block hash in Cardano = blake2b_256(content inside tag24 bytestring)
@@ -830,6 +859,17 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
               let pool ← mpRef.get
               ref.modify (·.updateMempool pool.entries.length pool.totalBytes)
         | none => displayBlock header tip blockPoint blockBytes
+        -- Update ledger state: apply certificates and UTxO changes from block
+        if let some lsRef := ledgerStateRef then
+          let parsedBody ← Cleanode.Network.ConwayBlock.parseConwayBlockBodyIO blockBytes
+          if let some body := parsedBody then
+            let ls ← lsRef.get
+            let s := body.transactions.foldl (init := ls) fun s tx =>
+              let certs := tx.body.certificates.filterMap rawCertToLedger
+              let s := Cleanode.Ledger.Certificate.applyCertificates s certs
+              let txHash := ByteArray.mk (tx.body.rawBytes.toList.take 32).toArray
+              { s with utxo := s.utxo.applyTx txHash tx.body }
+            lsRef.set { s with lastSlot := blockPoint.slot.toNat, lastBlockNo := blockNo, lastBlockHash := blockHash }
         -- Store block in SQLite if ChainDB is available
         if let some cdb := chainDb then
           let slot := blockPoint.slot.toNat
@@ -842,12 +882,18 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
         -- Update consensus state: epoch boundary detection and nonce evolution
         if let some csRef := consensusRef then
           let slot := blockPoint.slot.toNat
+          -- At epoch boundary, build real stake snapshot from ledger state
+          let freshSnapshot ← match ledgerStateRef with
+            | some lsRef => do
+                let ls ← lsRef.get
+                pure (Cleanode.Consensus.Praos.StakeDistribution.buildSnapshotFromLedger ls)
+            | none => do
+                let cs ← csRef.get
+                pure cs.stakeSnapshot
           csRef.modify fun cs =>
             let newEpoch := slotToEpoch cs slot
             let cs := if needsEpochTransition cs slot then
-              -- Epoch boundary: rotate nonces and take stake snapshot
-              let snapshot := cs.stakeSnapshot  -- retain current (no new UTxO scan mid-sync)
-              processEpochTransition cs newEpoch snapshot
+              processEpochTransition cs newEpoch freshSnapshot
             else cs
             -- Update evolving nonce with VRF output from block header
             if header.era >= 1 then
@@ -901,18 +947,6 @@ def extractKeepAliveCookie (payload : ByteArray) : Option UInt16 :=
 structure DiscoveryState where
   discovered : List (String × UInt16)  -- Queue of newly found peers
   known      : List (String × UInt16)  -- All peers we've seen
-
-/-- Poll mempool for new tx IDs to announce, sleeping between checks.
-    Used for blocking MsgRequestTxIds. Returns when txs are available. -/
-partial def pollForTxIds (mempoolRef : IO.Ref Mempool) (peerRef : IO.Ref TxSubmPeerState)
-    (count : Nat) : IO (List TxId) := do
-  let pool ← mempoolRef.get
-  let peerSt ← peerRef.get
-  let txIds := pool.getNewTxIds peerSt.announcedTxIds count
-  if txIds.isEmpty then
-    IO.sleep 500
-    pollForTxIds mempoolRef peerRef count
-  else return txIds
 
 /-- Poll a responder queue until a frame payload arrives -/
 partial def pollResponderQueue (q : IO.Ref (List ByteArray)) : IO ByteArray := do
@@ -1000,9 +1034,39 @@ partial def receiveChainSyncFrame (sock : Socket)
     (txSubmPeerRef : Option (IO.Ref TxSubmPeerState) := none)
     (txSubmResponderQueue : Option (IO.Ref (List ByteArray)) := none)
     : IO (Except String MuxFrame) := do
-  -- Read MUX header (exactly 8 bytes)
-  match ← socket_receive_exact sock 8 with
-  | .error e => return .error s!"Failed to receive MUX header: {e}"
+  -- Check if there's a pending blocking MsgRequestTxIds to flush
+  let hasPending ← match mempoolRef, txSubmPeerRef with
+    | some mpRef, some peerRef => do
+      let peerSt ← peerRef.get
+      match peerSt.pendingBlockingReq with
+      | some reqCount => do
+        let pool ← mpRef.get
+        let txIds := pool.getNewTxIds peerSt.announcedTxIds reqCount
+        if !txIds.isEmpty then
+          IO.eprintln s!"[TxSub] → Flushing deferred blocking reply ({txIds.length} txs)"
+          let _ ← sendTxSubmission2 sock (.MsgReplyTxIds txIds)
+          let hashes := txIds.map (·.hash)
+          peerRef.modify fun s =>
+            { s with announcedTxIds := s.announcedTxIds ++ hashes, pendingBlockingReq := none }
+          pure false
+        else pure true  -- still pending
+      | none => pure false
+    | _, _ => pure false
+  -- Read MUX header: use 1s timeout when there's a pending tx request so we
+  -- can re-check the mempool periodically, otherwise block indefinitely
+  let headerResult ← if hasPending then
+    match ← socket_receive_exact_timeout sock 8 1000 with
+    | .error e => pure (Except.error s!"Failed to receive MUX header: {e}")
+    | .ok none => do
+      -- Timeout: loop back to re-check mempool
+      return ← receiveChainSyncFrame sock discoveryRef mempoolRef txSubmPeerRef txSubmResponderQueue
+    | .ok (some bytes) => pure (Except.ok bytes)
+  else
+    match ← socket_receive_exact sock 8 with
+    | .error e => pure (Except.error s!"Failed to receive MUX header: {e}")
+    | .ok bytes => pure (Except.ok bytes)
+  match headerResult with
+  | .error e => return .error e
   | .ok headerBytes => do
       match decodeMuxHeader headerBytes with
       | none =>
@@ -1043,32 +1107,54 @@ partial def receiveChainSyncFrame (sock : Socket)
                         -- Peer is mini-protocol responder (instance A ack) — no action
                         IO.eprintln "[TxSub] → Instance A ack, ignoring"
                   | some (.MsgRequestTxIds blocking ack req) => do
-                      IO.eprintln s!"[TxSub] → Peer requesting our txs (mode={modeStr})"
+                      IO.eprintln s!"[TxSub] → Peer requesting our txs (mode={modeStr}, mpRef={mempoolRef.isSome}, peerRef={txSubmPeerRef.isSome})"
                       match mempoolRef, txSubmPeerRef with
                       | some mpRef, some peerRef => do
                           let acked := ack.toNat
                           peerRef.modify fun s =>
                             { s with announcedTxIds := s.announcedTxIds.drop acked }
                           let reqCount := req.toNat
-                          -- NEVER block here — this is the shared receive loop.
+                          let pool ← mpRef.get
+                          IO.eprintln s!"[TxSub] → Mempool has {pool.entries.length} txs, blocking={blocking}, req={reqCount}"
                           if blocking then
-                            let pool ← mpRef.get
                             let peerSt ← peerRef.get
                             let txIds := pool.getNewTxIds peerSt.announcedTxIds reqCount
                             if !txIds.isEmpty then
+                              -- Debug: dump the encoded payload
+                              let payload := encodeTxSubmission2Message (.MsgReplyTxIds txIds)
+                              let hexPayload := payload.toList.take 48 |>.map fun b =>
+                                let hi := b.toNat / 16
+                                let lo := b.toNat % 16
+                                let toHex := fun n => if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
+                                String.mk [toHex hi, toHex lo]
+                              IO.eprintln s!"[TxSub] → Replying with {txIds.length} tx IDs immediately"
+                              for tid in txIds do
+                                let hh := tid.hash.toList.take 8 |>.map fun b =>
+                                  let hi := b.toNat / 16
+                                  let lo := b.toNat % 16
+                                  let toHex := fun n => if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
+                                  String.mk [toHex hi, toHex lo]
+                                IO.eprintln s!"[TxSub]   txId hash={String.join hh}... size={tid.size}"
+                              IO.eprintln s!"[TxSub]   CBOR({payload.size}B): {String.intercalate " " hexPayload}"
                               let _ ← sendTxSubmission2 sock (.MsgReplyTxIds txIds)
                               let hashes := txIds.map (·.hash)
                               peerRef.modify fun s =>
                                 { s with announcedTxIds := s.announcedTxIds ++ hashes }
+                            else
+                              -- Mempool empty: store pending request, will be flushed by receive loop
+                              IO.eprintln s!"[TxSub] → Blocking request deferred (mempool empty, need {reqCount})"
+                              peerRef.modify fun s =>
+                                { s with pendingBlockingReq := some reqCount }
                           else
-                            let pool ← mpRef.get
                             let peerSt ← peerRef.get
                             let txIds := pool.getNewTxIds peerSt.announcedTxIds reqCount
+                            IO.eprintln s!"[TxSub] → Non-blocking reply with {txIds.length} tx IDs"
                             let _ ← sendTxSubmission2 sock (.MsgReplyTxIds txIds)
                             let hashes := txIds.map (·.hash)
                             peerRef.modify fun s =>
                               { s with announcedTxIds := s.announcedTxIds ++ hashes }
                       | _, _ =>
+                          IO.eprintln s!"[TxSub] → WARNING: no mempool/peer refs! blocking={blocking}"
                           if !blocking then
                             let _ ← sendTxSubmission2 sock (.MsgReplyTxIds [])
                             pure ()
@@ -1160,7 +1246,8 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
     (mempoolRef : Option (IO.Ref Mempool) := none)
     (txSubmPeerRef : Option (IO.Ref TxSubmPeerState) := none)
     (txSubmResponderQueue : Option (IO.Ref (List ByteArray)) := none)
-    (consensusRef : Option (IO.Ref ConsensusState) := none) : IO SyncExit := do
+    (consensusRef : Option (IO.Ref ConsensusState) := none)
+    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none) : IO SyncExit := do
   -- Request next block header
   match ← sendChainSync sock requestNext with
   | .error e =>
@@ -1174,9 +1261,9 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
           | none => do
               return .protocolError "Failed to decode ChainSync message"
           | some (.MsgRollForward header tip) => do
-              let ok ← fetchAndDisplayBlock sock header tip chainDb seenBlocks tuiRef peerAddr mempoolRef consensusRef
+              let ok ← fetchAndDisplayBlock sock header tip chainDb seenBlocks tuiRef peerAddr mempoolRef consensusRef ledgerStateRef
               if ok then
-                syncLoop sock (blockCount + 1) chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef
+                syncLoop sock (blockCount + 1) chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef ledgerStateRef
               else
                 return .protocolError "Failed to fetch block"
           | some (.MsgRollBackward rollbackPoint _) => do
@@ -1195,7 +1282,7 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
                       ("↩ Rollback to slot ".style |> yellow),
                       (s!"{rollbackPoint.slot}".style |> yellow |> bold)
                     ]
-              syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef
+              syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef ledgerStateRef
           | some (.MsgAwaitReply) => do
               -- Dedup: only print once across peers (encode as blockCount + 2B offset)
               let shouldPrint ← do
@@ -1219,9 +1306,9 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
               | .ok frame => do
                   match decodeChainSyncMessage frame.payload with
                   | some (.MsgRollForward header tip) => do
-                      let ok ← fetchAndDisplayBlock sock header tip chainDb seenBlocks tuiRef peerAddr mempoolRef consensusRef
+                      let ok ← fetchAndDisplayBlock sock header tip chainDb seenBlocks tuiRef peerAddr mempoolRef consensusRef ledgerStateRef
                       if ok then
-                        syncLoop sock (blockCount + 1) chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef
+                        syncLoop sock (blockCount + 1) chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef ledgerStateRef
                       else
                         return .protocolError "Failed to fetch block"
                   | some (.MsgRollBackward rollbackPoint2 _) => do
@@ -1239,15 +1326,15 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
                               ("↩ Rollback to slot ".style |> yellow),
                               (s!"{rollbackPoint2.slot}".style |> yellow |> bold)
                             ]
-                      syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef
+                      syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef ledgerStateRef
                   | some other => do
                       IO.println s!"Unexpected message: {repr other}"
-                      syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef
+                      syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef ledgerStateRef
                   | none =>
                       return .protocolError "Failed to decode ChainSync message"
           | some other => do
               IO.println s!"Unexpected message: {repr other}"
-              syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef
+              syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef ledgerStateRef
 
 /-- Connect, handshake, find tip, intersect, and enter sync loop.
     Returns a SyncExit indicating why the session ended. -/
@@ -1378,8 +1465,34 @@ def peerFindTipAndSync (sock : Socket) (addrStr : String) (chainDb : ChainDB)
     (mempoolRef : Option (IO.Ref Mempool) := none)
     (txSubmPeerRef : Option (IO.Ref TxSubmPeerState) := none)
     (txSubmResponderQueue : Option (IO.Ref (List ByteArray)) := none)
-    (consensusRef : Option (IO.Ref ConsensusState) := none) : IO SyncExit := do
-  -- Find chain tip
+    (consensusRef : Option (IO.Ref ConsensusState) := none)
+    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none) : IO SyncExit := do
+  -- Check for saved sync state (e.g., from Mithril fast-sync or previous run)
+  let savedPoint ← chainDb.getLastSyncedPoint
+
+  -- If we have a saved point, try to intersect there first (with tip as fallback)
+  let intersectPoints : List Point := match savedPoint with
+    | some pt => [pt, Point.genesis]
+    | none => []
+  if let some pt := savedPoint then
+    tuiLog tuiRef s!"Peer {addrStr}: resuming from saved sync state at slot {pt.slot}"
+
+  if intersectPoints.length > 0 then
+    -- Try to intersect at saved point
+    match ← sendChainSync sock (.MsgFindIntersect intersectPoints) with
+    | .error e => return .connectionLost s!"Failed to find intersection: {e}"
+    | .ok _ => do
+        match ← receiveChainSyncFrame sock discoveryRef mempoolRef txSubmPeerRef txSubmResponderQueue with
+        | .error e => return .connectionLost e
+        | .ok frame => do
+            match decodeChainSyncMessage frame.payload with
+            | some (.MsgIntersectFound point _) => do
+                tuiLog tuiRef s!"Peer {addrStr}: intersected at saved point slot {point.slot}"
+                return ← syncLoop sock 0 (some chainDb) discoveryRef seenBlocks tuiRef addrStr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef ledgerStateRef
+            | _ =>
+                tuiLog tuiRef s!"Peer {addrStr}: saved point not found, falling back to tip"
+
+  -- Default: find tip, intersect there, sync forward
   match ← sendChainSync sock findIntersectTip with
   | .error e => return .connectionLost s!"Failed to query tip: {e}"
   | .ok _ => do
@@ -1399,7 +1512,7 @@ def peerFindTipAndSync (sock : Socket) (addrStr : String) (chainDb : ChainDB)
                       match decodeChainSyncMessage frame2.payload with
                       | some (.MsgIntersectFound point _) => do
                           tuiLog tuiRef s!"Peer {addrStr}: intersected at slot {point.slot}"
-                          syncLoop sock 0 (some chainDb) discoveryRef seenBlocks tuiRef addrStr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef
+                          syncLoop sock 0 (some chainDb) discoveryRef seenBlocks tuiRef addrStr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef ledgerStateRef
                       | _ => return .protocolError "Failed to intersect"
           | _ => return .protocolError "Failed to find tip"
 
@@ -1411,7 +1524,8 @@ def peerConnectAndSync (host : String) (port : UInt16) (addrStr : String)
     (seenBlocks : Option (IO.Ref (Option (List Nat))) := none)
     (tuiRef : Option (IO.Ref TUIState) := none)
     (mempoolRef : Option (IO.Ref Mempool) := none)
-    (consensusRef : Option (IO.Ref ConsensusState) := none) : IO SyncExit := do
+    (consensusRef : Option (IO.Ref ConsensusState) := none)
+    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none) : IO SyncExit := do
   match ← socket_connect host port with
   | .error e => return .connectionLost s!"Connection failed: {e}"
   | .ok sock => do
@@ -1469,7 +1583,7 @@ def peerConnectAndSync (host : String) (port : UInt16) (addrStr : String)
                   if peerSharingEnabled && discoveryRef.isSome then
                     tuiLog tuiRef s!"Peer {addrStr}: PeerSharing enabled, requesting peers..."
                     let _ ← sendPeerSharing sock (.MsgShareRequest 10)
-                  let result ← peerFindTipAndSync sock addrStr chainDb discoveryRef seenBlocks tuiRef mempoolRef (some txSubmPeerRef) (some responderQueue) consensusRef
+                  let result ← peerFindTipAndSync sock addrStr chainDb discoveryRef seenBlocks tuiRef mempoolRef (some txSubmPeerRef) (some responderQueue) consensusRef ledgerStateRef
                   socket_close sock
                   return result
 
@@ -1481,6 +1595,7 @@ partial def peerReconnectLoop (host : String) (port : UInt16)
     (tuiRef : Option (IO.Ref TUIState) := none)
     (mempoolRef : Option (IO.Ref Mempool) := none)
     (consensusRef : Option (IO.Ref ConsensusState) := none)
+    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none)
     (attempt : Nat := 0) : IO Unit := do
   let addrStr := s!"{host}:{port}"
   if attempt > 0 then
@@ -1491,19 +1606,19 @@ partial def peerReconnectLoop (host : String) (port : UInt16)
       IO.println s!"  ⟳ Peer {addrStr}: reconnecting in {delaySec}s (attempt {attempt + 1})..."
     IO.sleep (UInt32.ofNat (delaySec * 1000))
 
-  match ← peerConnectAndSync host port addrStr proposal chainDb discoveryRef seenBlocks tuiRef mempoolRef consensusRef with
+  match ← peerConnectAndSync host port addrStr proposal chainDb discoveryRef seenBlocks tuiRef mempoolRef consensusRef ledgerStateRef with
   | .connectionLost reason => do
       if let some ref := tuiRef then
         ref.modify (·.updatePeer addrStr "disconnected")
       else
         IO.println s!"  ⚡ Peer {addrStr}: {reason}"
-      peerReconnectLoop host port proposal chainDb discoveryRef seenBlocks tuiRef mempoolRef consensusRef (attempt + 1)
+      peerReconnectLoop host port proposal chainDb discoveryRef seenBlocks tuiRef mempoolRef consensusRef ledgerStateRef (attempt + 1)
   | .protocolError reason => do
       if let some ref := tuiRef then
         ref.modify (·.updatePeer addrStr "error")
       else
         IO.println s!"  ✗ Peer {addrStr}: {reason}"
-      peerReconnectLoop host port proposal chainDb discoveryRef seenBlocks tuiRef mempoolRef consensusRef (attempt + 1)
+      peerReconnectLoop host port proposal chainDb discoveryRef seenBlocks tuiRef mempoolRef consensusRef ledgerStateRef (attempt + 1)
   | .done => pure ()
 
 /-- Peer spawner loop: drains discovered peers and spawns new connection tasks -/
@@ -1513,12 +1628,13 @@ partial def peerSpawnerLoop (discoveryRef : IO.Ref DiscoveryState)
     (tuiRef : Option (IO.Ref TUIState) := none)
     (mempoolRef : Option (IO.Ref Mempool) := none)
     (consensusRef : Option (IO.Ref ConsensusState) := none)
+    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none)
     (maxPeers : Nat := 20) : IO Unit := do
   IO.sleep 30000  -- Check every 30 seconds
   let newPeers ← discoveryRef.modifyGet fun ds =>
     (ds.discovered, { ds with discovered := [], known := ds.known ++ ds.discovered })
   if newPeers.isEmpty then
-    peerSpawnerLoop discoveryRef proposal chainDb seenBlocks tuiRef mempoolRef consensusRef maxPeers
+    peerSpawnerLoop discoveryRef proposal chainDb seenBlocks tuiRef mempoolRef consensusRef ledgerStateRef maxPeers
   else do
     let knownCount := (← discoveryRef.get).known.length
     let budget := if knownCount >= maxPeers then 0 else maxPeers - knownCount
@@ -1527,13 +1643,14 @@ partial def peerSpawnerLoop (discoveryRef : IO.Ref DiscoveryState)
       tuiLog tuiRef s!"Connecting to discovered peer {host}:{port}"
       let _ ← IO.asTask (do
         try
-          peerReconnectLoop host port proposal chainDb (some discoveryRef) seenBlocks tuiRef mempoolRef consensusRef
+          peerReconnectLoop host port proposal chainDb (some discoveryRef) seenBlocks tuiRef mempoolRef consensusRef ledgerStateRef
         catch e =>
           tuiLog tuiRef s!"Discovered peer {host}:{port}: {e}")
-    peerSpawnerLoop discoveryRef proposal chainDb seenBlocks tuiRef mempoolRef consensusRef maxPeers
+    peerSpawnerLoop discoveryRef proposal chainDb seenBlocks tuiRef mempoolRef consensusRef ledgerStateRef maxPeers
 
 -- ============================================================
--- = Inbound Connection Handling (for mempool population)     =
+-- = Inbound Connection Handling                              =
+-- = Serves: TxSubmission2, ChainSync (server), BlockFetch   =
 -- ============================================================
 
 /-- Send KeepAlive response as responder (for inbound connections) -/
@@ -1543,81 +1660,128 @@ def sendKeepAliveResponseInbound (sock : Socket) (cookie : UInt16) : IO Unit := 
   let _ ← socket_send sock (encodeMuxFrame frame)
   pure ()
 
+open Cleanode.Consensus.Praos.BlockAnnounce in
 /-- Inbound peer loop: handle a single inbound connection.
-    We act as the TxSubmission2 server, requesting txs from the connecting peer.
-    Also handles KeepAlive to keep the connection alive. -/
+    Serves ChainSync (server mode), BlockFetch (server mode),
+    TxSubmission2 (server mode), and KeepAlive. -/
 partial def inboundPeerLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
     (tuiRef : Option (IO.Ref TUIState))
+    (registryRef : IO.Ref PeerRegistry)
+    (peerId : String)
+    (pendingBlocks : IO.Ref (Array Cleanode.Consensus.Praos.BlockForge.ForgedBlock))
     (ackedSoFar : Nat := 0) : IO Unit := do
   -- Read mux header (8 bytes)
   match ← socket_receive_exact sock 8 with
-  | .error _ => let _ ← socket_close sock; return
+  | .error _ =>
+      registryRef.modify (·.removeSubscriber peerId)
+      let _ ← socket_close sock; return
   | .ok headerBytes =>
       match decodeMuxHeader headerBytes with
-      | none => let _ ← socket_close sock; return
+      | none =>
+          registryRef.modify (·.removeSubscriber peerId)
+          let _ ← socket_close sock; return
       | some header => do
           -- Read payload
           match ← socket_receive_exact sock header.payloadLength.toNat.toUInt32 with
-          | .error _ => let _ ← socket_close sock; return
+          | .error _ =>
+              registryRef.modify (·.removeSubscriber peerId)
+              let _ ← socket_close sock; return
           | .ok payload => do
               -- Route by protocol
               if header.protocolId == .KeepAlive then
-                -- Peer sent KeepAlive — respond with cookie
                 match extractKeepAliveCookie payload with
                 | some cookie => sendKeepAliveResponseInbound sock cookie
                 | none => pure ()
-                inboundPeerLoop sock mempoolRef tuiRef ackedSoFar
+                inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+
+              else if header.protocolId == .ChainSync then
+                match decodeChainSyncMessage payload with
+                | some (.MsgFindIntersect points) =>
+                    -- Peer wants to find intersection — register as subscriber
+                    let reg ← registryRef.get
+                    let tip ← match reg.forgedBlocks.back? with
+                      | some block => forgedBlockToTip block
+                      | none => pure { point := Point.genesis, blockNo := 0 }
+                    handleFindIntersect sock points tip
+                    -- Register peer as ChainSync subscriber
+                    let sub : ChainSyncSubscriber := {
+                      socket := sock
+                      peerId := peerId
+                      isWaiting := false
+                      lastSentSlot := 0
+                    }
+                    registryRef.modify (·.addSubscriber sub)
+                    tuiLog tuiRef s!"Inbound peer {peerId} subscribed to ChainSync"
+                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+                | some .MsgRequestNext =>
+                    handleRequestNext registryRef sock peerId pendingBlocks
+                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+                | some .MsgDone =>
+                    registryRef.modify (·.removeSubscriber peerId)
+                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+                | _ =>
+                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+
+              else if header.protocolId == .BlockFetch then
+                match decodeBlockFetchMessage payload with
+                | some result => match result.value with
+                  | .MsgRequestRange fromPt toPt =>
+                      handleBlockFetchRequest registryRef sock fromPt toPt
+                      inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+                  | .MsgClientDone =>
+                      -- Peer is done fetching, continue loop
+                      inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+                  | _ =>
+                      inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+                | none =>
+                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+
               else if header.protocolId == .TxSubmission2 then
                 match decodeTxSubmission2Message payload with
                 | some .MsgInit =>
-                    -- Peer initialized TxSubmission2; we are server, send our MsgInit then request txs
                     let _ ← sendTxSubmission2Responder sock .MsgInit
                     let _ ← sendTxSubmission2Responder sock (.MsgRequestTxIds true 0 10)
-                    inboundPeerLoop sock mempoolRef tuiRef 0
+                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks 0
                 | some (.MsgReplyTxIds txIds) =>
                     if txIds.isEmpty then
-                      -- Peer has no txs; request again (blocking)
                       let _ ← sendTxSubmission2Responder sock (.MsgRequestTxIds true 0 10)
-                      inboundPeerLoop sock mempoolRef tuiRef 0
+                      inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks 0
                     else
-                      -- Filter: only request txs we don't already have
                       let pool ← mempoolRef.get
                       let wanted := txIds.filter fun tid => !pool.contains tid.hash
                       if wanted.isEmpty then
-                        -- Already have all, ack and request more
                         let _ ← sendTxSubmission2Responder sock
                           (.MsgRequestTxIds false (UInt16.ofNat txIds.length) 10)
-                        inboundPeerLoop sock mempoolRef tuiRef txIds.length
+                        inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks txIds.length
                       else
-                        -- Request full tx bodies
                         let _ ← sendTxSubmission2Responder sock (.MsgRequestTxs (wanted.map (·.hash)))
-                        inboundPeerLoop sock mempoolRef tuiRef ackedSoFar
+                        inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
                 | some (.MsgReplyTxs txBodies) =>
-                    -- Add received txs to mempool
                     let now ← Cleanode.TUI.Render.nowMs
                     for txBytes in txBodies do
                       let pool ← mempoolRef.get
                       match ← pool.addTxRaw txBytes now with
                       | .ok newPool => mempoolRef.set newPool
                       | .error _ => pure ()
-                    -- Update TUI mempool stats
                     if let some tRef := tuiRef then
                       let pool ← mempoolRef.get
                       tRef.modify (·.updateMempool pool.entries.length pool.totalBytes)
-                    -- Ack and request more
                     let _ ← sendTxSubmission2Responder sock
                       (.MsgRequestTxIds false (UInt16.ofNat txBodies.length) 10)
-                    inboundPeerLoop sock mempoolRef tuiRef txBodies.length
+                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks txBodies.length
                 | _ =>
-                    -- Unknown TxSubmission2 message, ignore
-                    inboundPeerLoop sock mempoolRef tuiRef ackedSoFar
-              else
-                -- Ignore other protocols (ChainSync, BlockFetch, etc.)
-                inboundPeerLoop sock mempoolRef tuiRef ackedSoFar
+                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
 
+              else
+                -- Unknown protocol, continue
+                inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+
+open Cleanode.Consensus.Praos.BlockAnnounce in
 /-- Handle a single inbound peer: handshake then enter mux loop -/
 partial def handleInboundPeer (sock : Socket) (mempoolRef : IO.Ref Mempool)
-    (tuiRef : Option (IO.Ref TUIState)) (network : NetworkMagic := .Mainnet) : IO Unit := do
+    (tuiRef : Option (IO.Ref TUIState))
+    (registryRef : IO.Ref PeerRegistry)
+    (network : NetworkMagic := .Mainnet) : IO Unit := do
   IO.eprintln "[Inbound] New connection, starting handshake..."
   match ← receiveAndRespondHandshake sock (network := network) with
   | .error e =>
@@ -1629,27 +1793,35 @@ partial def handleInboundPeer (sock : Socket) (mempoolRef : IO.Ref Mempool)
   | .ok (some _version) =>
       IO.eprintln "[Inbound] Handshake OK, entering mux loop"
       tuiLog tuiRef "Inbound peer connected (handshake OK)"
-      inboundPeerLoop sock mempoolRef tuiRef
+      -- Generate a peer ID from the connection
+      let reg ← registryRef.get
+      let peerId := s!"inbound-{reg.subscribers.size}"
+      let pendingBlocks ← IO.mkRef (#[] : Array Cleanode.Consensus.Praos.BlockForge.ForgedBlock)
+      inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks
 
+open Cleanode.Consensus.Praos.BlockAnnounce in
 /-- Accept loop: listen for inbound connections, spawn handler per peer -/
 partial def acceptLoop (listenSock : Socket) (mempoolRef : IO.Ref Mempool)
-    (tuiRef : Option (IO.Ref TUIState)) (network : NetworkMagic := .Mainnet) : IO Unit := do
+    (tuiRef : Option (IO.Ref TUIState))
+    (registryRef : IO.Ref PeerRegistry)
+    (network : NetworkMagic := .Mainnet) : IO Unit := do
   match ← socket_accept listenSock with
   | .error _ =>
       IO.sleep 1000
-      acceptLoop listenSock mempoolRef tuiRef network
+      acceptLoop listenSock mempoolRef tuiRef registryRef network
   | .ok clientSock => do
       let _ ← IO.asTask (do
-        try handleInboundPeer clientSock mempoolRef tuiRef network
+        try handleInboundPeer clientSock mempoolRef tuiRef registryRef network
         catch _ => let _ ← socket_close clientSock; pure ())
-      acceptLoop listenSock mempoolRef tuiRef network
+      acceptLoop listenSock mempoolRef tuiRef registryRef network
 
 /-- Multi-peer relay node mode -/
 def relayNode (proposal : HandshakeMessage) (networkName : String)
     (tuiMode : Bool := false) (listenPort : UInt16 := 3001)
-    (metricsPort : Option UInt16 := none) : IO Unit := do
-  -- Open ChainDB
-  let chainDb ← ChainDB.open {}
+    (metricsPort : Option UInt16 := none)
+    (forgeParams : Option Cleanode.Consensus.Praos.BlockForge.ForgeParams := none)
+    (socketPath : Option String := none)
+    (chainDb : ChainDB) : IO Unit := do
 
   -- Build topology from bootstrap peers
   let bootstrapPeers := match networkName with
@@ -1677,6 +1849,9 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
 
   -- Shared mempool (all peers read/write via IO.Ref)
   let mempoolRef ← IO.mkRef (Mempool.empty {})
+
+  -- Shared ledger state (for N2C queries from cardano-cli)
+  let ledgerStateRef ← IO.mkRef Cleanode.Ledger.State.LedgerState.initial
 
   -- Shared consensus state (epoch nonces, stake snapshots, chain selection)
   let genesis : Cleanode.Config.Genesis.ShelleyGenesis := {
@@ -1730,6 +1905,9 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
     | "Preview"   => .Preview
     | "SanchoNet" => .SanchoNet
     | _           => .Mainnet
+  -- Shared peer registry for ChainSync/BlockFetch server + announcement loop
+  let registryRef ← IO.mkRef Cleanode.Consensus.Praos.BlockAnnounce.PeerRegistry.empty
+
   let mut tasks : List (Task (Except IO.Error Unit)) := []
   IO.eprintln s!"[Listen] Creating listener task for port {listenPort}..."
   let listenTask ← IO.asTask (do
@@ -1741,17 +1919,28 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
     | .ok listenSock => do
         IO.eprintln s!"[Listen] OK — listening on port {listenPort}"
         tuiLog tuiStateRef s!"Listening for inbound peers on port {listenPort}"
-        try acceptLoop listenSock mempoolRef tuiStateRef network
+        try acceptLoop listenSock mempoolRef tuiStateRef registryRef network
         catch e =>
           IO.eprintln s!"[Listen] acceptLoop crashed: {e}"
           tuiLog tuiStateRef s!"Listener: {e}")
   tasks := tasks ++ [listenTask]
 
+  -- Launch N2C server BEFORE peer tasks (peer tasks can exhaust the thread pool)
+  if let some sockPath := socketPath then
+    let n2cTask ← IO.asTask (do
+      try
+        Cleanode.Network.N2C.Server.n2cServerLoop sockPath ledgerStateRef mempoolRef network tuiMode
+      catch e =>
+        IO.eprintln s!"[n2c] Server crashed: {e}")
+    tasks := tasks ++ [n2cTask]
+    if !tuiMode then
+      IO.println s!"  [n2c] Unix socket server started on {sockPath}"
+
   -- Launch per-peer reconnect loops — each task owns its connection lifecycle
   for (host, port) in peerAddrs do
     let task ← IO.asTask (do
       try
-        peerReconnectLoop host port proposal chainDb (some discoveryRef) (some seenBlocksRef) tuiStateRef (some mempoolRef) (some consensusRef)
+        peerReconnectLoop host port proposal chainDb (some discoveryRef) (some seenBlocksRef) tuiStateRef (some mempoolRef) (some consensusRef) (some ledgerStateRef)
       catch e =>
         tuiLog tuiStateRef s!"Peer {host}:{port}: {e}")
     tasks := tasks ++ [task]
@@ -1759,10 +1948,26 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
   -- Launch peer discovery spawner
   let spawnerTask ← IO.asTask (do
     try
-      peerSpawnerLoop discoveryRef proposal chainDb (some seenBlocksRef) tuiStateRef (some mempoolRef) (some consensusRef)
+      peerSpawnerLoop discoveryRef proposal chainDb (some seenBlocksRef) tuiStateRef (some mempoolRef) (some consensusRef) (some ledgerStateRef)
     catch e =>
       tuiLog tuiStateRef s!"Peer spawner: {e}")
   tasks := tasks ++ [spawnerTask]
+
+  -- Start block production forge loop if SPO keys are configured
+  if let some fp := forgeParams then
+    let clock := match networkName with
+      | "Preprod" => Cleanode.Consensus.Praos.ForgeLoop.SlotClock.preprod
+      | "Preview" => Cleanode.Consensus.Praos.ForgeLoop.SlotClock.preview
+      | _ => Cleanode.Consensus.Praos.ForgeLoop.SlotClock.mainnet
+    let cs ← consensusRef.get
+    let prevHash := ByteArray.mk (Array.replicate 32 0)
+    let (forgeTask, _forgeStateRef, forgedBlocksRef) ←
+      Cleanode.Consensus.Praos.ForgeLoop.startForgeLoop fp clock cs mempoolRef prevHash 0
+    tasks := tasks ++ [forgeTask]
+    -- Start block announcement loop (broadcasts forged blocks to shared registry)
+    let announceTask ← Cleanode.Consensus.Praos.BlockAnnounce.startAnnouncementLoop registryRef forgedBlocksRef
+    tasks := tasks ++ [announceTask]
+    IO.println "  [spo] Block production + announcement loops started"
 
   if !tuiMode then
     IO.println s!"  Syncing from {peerAddrs.length} bootstrap peers (discovering more)...\n"
@@ -1789,6 +1994,9 @@ def runNode (config : NodeConfig) : IO Unit := do
     | .sanchonet => createSanchoNetProposal
     | .mainnet   => createMainnetProposal
 
+  -- Open ChainDB early so Mithril can save sync state into it
+  let chainDb ← ChainDB.open {}
+
   -- Mithril fast-sync if requested
   if config.mithrilSync then
     let mithrilNetwork := match config.network with
@@ -1805,10 +2013,29 @@ def runNode (config : NodeConfig) : IO Unit := do
       IO.eprintln "[mithril] Falling back to normal peer sync..."
     | .ok syncResult =>
       IO.println s!"[mithril] Restored to epoch={syncResult.snapshot.beacon.epoch}, immutable={syncResult.snapshot.beacon.immutableFileNumber}"
-      IO.println s!"[mithril] DB at: {syncResult.dbPath}"
+      IO.println s!"[mithril] Chain tip: slot={syncResult.tipSlot}, hash={syncResult.tipPoint.hash.size}B"
+      -- Save the Mithril tip as sync state so peer sync resumes from here
+      chainDb.saveSyncState syncResult.tipSlot 0 syncResult.tipPoint.hash
+      IO.println "[mithril] Sync state saved — peer sync will resume from snapshot tip"
 
-  -- Run as multi-peer relay node
-  relayNode proposal networkName config.tui config.port config.metricsPort
+  -- Load SPO keys if block production is configured
+  let mut spoForgeParams : Option Cleanode.Consensus.Praos.BlockForge.ForgeParams := none
+  if let some keyDir := config.spoKeyDir then
+    let paths := Cleanode.Consensus.Praos.SPOKeys.SPOKeyPaths.default keyDir
+    Cleanode.Consensus.Praos.SPOKeys.printKeyInfo paths
+    let keysResult ← Cleanode.Consensus.Praos.SPOKeys.loadSPOKeys paths
+    match keysResult with
+    | .error e =>
+      IO.eprintln s!"[spo] Failed to load SPO keys: {e}"
+      IO.eprintln "[spo] Running as relay-only node."
+    | .ok fp =>
+      IO.println s!"[spo] SPO keys loaded successfully."
+      IO.println s!"[spo] Pool ID: {fp.poolId.size} bytes"
+      IO.println s!"[spo] OpCert sequence: {fp.operationalCert.sequenceNumber}, KES period: {fp.operationalCert.kesPeriod}"
+      spoForgeParams := some fp
+
+  -- Run as multi-peer relay node (with optional block production)
+  relayNode proposal networkName config.tui config.port config.metricsPort spoForgeParams config.socketPath chainDb
 
 /-- Handle query subcommands (reads status file from a running node) -/
 def runQuery (target : QueryTarget) : IO Unit := do

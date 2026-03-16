@@ -108,15 +108,37 @@ structure WitnessSet where
   -- We could add more fields here: vkey_witnesses, scripts, datums, etc.
   deriving Repr
 
+/-- Raw certificate parsed from block CBOR.
+    Kept lightweight to avoid circular dependencies with Ledger.Certificate.
+    Convert to `Cleanode.Ledger.Certificate.Certificate` at the call site. -/
+inductive RawCertificate where
+  | stakeKeyRegistration (keyHash : ByteArray)
+  | stakeKeyDeregistration (keyHash : ByteArray)
+  | stakeDelegation (keyHash : ByteArray) (poolId : ByteArray)
+  | poolRegistration (poolId : ByteArray) (vrfKeyHash : ByteArray)
+      (pledge cost margin : Nat) (rewardAccount : ByteArray)
+      (owners : List ByteArray)
+  | poolRetirement (poolId : ByteArray) (epoch : Nat)
+  | unknown (certType : Nat)  -- Conway-era certs (types 7-14) we don't handle yet
+
+instance : Repr RawCertificate where
+  reprPrec
+    | .stakeKeyRegistration _, _ => "StakeKeyReg"
+    | .stakeKeyDeregistration _, _ => "StakeKeyDereg"
+    | .stakeDelegation _ _, _ => "StakeDelegation"
+    | .poolRegistration _ _ _ _ _ _ _, _ => "PoolRegistration"
+    | .poolRetirement _ e, _ => s!"PoolRetirement(epoch={e})"
+    | .unknown t, _ => s!"UnknownCert({t})"
+
 structure TransactionBody where
   inputs : List TxInput
   outputs : List TxOutput
   fee : Nat
+  certificates : List RawCertificate
   rawBytes : ByteArray  -- Raw CBOR bytes for computing TxId
-  -- Simplified for now - full structure has many more fields
 
 instance : Repr TransactionBody where
-  reprPrec tx _ := s!"TxBody(inputs={tx.inputs.length}, outputs={tx.outputs.length}, fee={tx.fee})"
+  reprPrec tx _ := s!"TxBody(inputs={tx.inputs.length}, outputs={tx.outputs.length}, fee={tx.fee}, certs={tx.certificates.length})"
 
 /-- Complete transaction with witnesses -/
 structure Transaction where
@@ -330,6 +352,69 @@ partial def parseWitnessSetC (c : Cursor) : Option (CResult WitnessSet) := do
   | some r => some { value := { redeemers := r.value }, cursor := r.cursor }
   | none => none
 
+/-- Parse a single certificate from CBOR array [certType, ...params].
+    Shelley-era types 0-4 are parsed; Conway types 5+ are returned as `unknown`. -/
+partial def parseCertificateC (c : Cursor) : Option (CResult RawCertificate) := do
+  let r1 ← CborCursor.decodeArrayHeader c
+  let arrLen := r1.value
+  if arrLen < 1 then none
+  let r2 ← CborCursor.decodeUInt r1.cursor
+  let certType := r2.value
+  let mut cur := r2.cursor
+  match certType with
+  | 0 => do  -- stake_registration: [0, stake_credential]
+      -- stake_credential = [0, key_hash] or [1, script_hash]
+      let credR ← CborCursor.decodeArrayHeader cur
+      let _credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes _credType.cursor
+      some { value := .stakeKeyRegistration hashR.value, cursor := hashR.cursor }
+  | 1 => do  -- stake_deregistration: [1, stake_credential]
+      let credR ← CborCursor.decodeArrayHeader cur
+      let _credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes _credType.cursor
+      some { value := .stakeKeyDeregistration hashR.value, cursor := hashR.cursor }
+  | 2 => do  -- stake_delegation: [2, stake_credential, pool_keyhash]
+      let credR ← CborCursor.decodeArrayHeader cur
+      let _credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes _credType.cursor
+      let poolR ← CborCursor.decodeBytes hashR.cursor
+      some { value := .stakeDelegation hashR.value poolR.value, cursor := poolR.cursor }
+  | 3 => do  -- pool_registration: [3, pool_params...]
+      -- pool_params: operator(bytes), vrf_keyhash(bytes), pledge(uint), cost(uint),
+      --   margin(tag30 rational), reward_account(bytes), pool_owners(set), relays, metadata
+      let operR ← CborCursor.decodeBytes cur          -- operator (pool ID)
+      let vrfR ← CborCursor.decodeBytes operR.cursor  -- VRF key hash
+      let pledgeR ← CborCursor.decodeUInt vrfR.cursor  -- pledge
+      let costR ← CborCursor.decodeUInt pledgeR.cursor  -- cost
+      -- margin is a tag 30 rational [num, den] — skip it
+      let afterMargin ← skipValue costR.cursor
+      let rewardR ← CborCursor.decodeBytes afterMargin  -- reward account
+      -- owners is a set (tag 258 array or plain array)
+      let afterOwnersTag := match CborCursor.skipTag rewardR.cursor with
+        | some tagR => tagR.cursor
+        | none => rewardR.cursor
+      let ownersArrR ← CborCursor.decodeArrayHeader afterOwnersTag
+      let mut ownersCur := ownersArrR.cursor
+      let mut owners : List ByteArray := []
+      for _ in [0:ownersArrR.value] do
+        match CborCursor.decodeBytes ownersCur with
+        | some owR => owners := owR.value :: owners; ownersCur := owR.cursor
+        | none => break
+      -- Skip relays and metadata
+      let afterRelays ← skipValue ownersCur
+      let afterMeta ← skipValue afterRelays
+      some { value := .poolRegistration operR.value vrfR.value pledgeR.value costR.value 0 rewardR.value owners, cursor := afterMeta }
+  | 4 => do  -- pool_retirement: [4, pool_keyhash, epoch]
+      let poolR ← CborCursor.decodeBytes cur
+      let epochR ← CborCursor.decodeUInt poolR.cursor
+      some { value := .poolRetirement poolR.value epochR.value, cursor := epochR.cursor }
+  | _ => do  -- Conway-era certs (7-14) or unknown — skip remaining fields
+      for _ in [1:arrLen] do
+        match skipValue cur with
+        | some after => cur := after
+        | none => break
+      some { value := .unknown certType, cursor := cur }
+
 /-- Parse transaction body from CBOR map (Babbage+) -/
 partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionBody) := do
   let bodyStart := c
@@ -340,6 +425,7 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
   let mut inputs : List TxInput := []
   let mut outputs : List TxOutput := []
   let mut fee : Nat := 0
+  let mut certs : List RawCertificate := []
 
   for _ in [0:mapSize] do
     match CborCursor.decodeUInt cur with
@@ -380,6 +466,24 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
             | some feeResult => do
                 fee := feeResult.value
                 cur := feeResult.cursor
+        | 4 => do  -- Certificates array (may be wrapped in tag 258)
+            let afterTag := match CborCursor.skipTag cur with
+              | some tagResult => tagResult.cursor
+              | none => cur
+            match CborCursor.decodeArrayHeader afterTag with
+            | none => break
+            | some arrResult => do
+                cur := arrResult.cursor
+                for _ in [0:arrResult.value] do
+                  match parseCertificateC cur with
+                  | none =>
+                      -- If cert parsing fails, skip the value and continue
+                      match skipValue cur with
+                      | some after => cur := after
+                      | none => break
+                  | some certResult => do
+                      certs := certResult.value :: certs
+                      cur := certResult.cursor
         | _ => do
             match skipValue cur with
             | none => break
@@ -388,7 +492,7 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
   let rawBytes := extractBetween bodyStart cur
 
   some {
-    value := { inputs := inputs.reverse, outputs := outputs.reverse, fee, rawBytes },
+    value := { inputs := inputs.reverse, outputs := outputs.reverse, fee, certificates := certs.reverse, rawBytes },
     cursor := cur
   }
 
@@ -443,7 +547,7 @@ partial def parseTransactionBodyArrayC (c : Cursor) : Option (CResult Transactio
               let rawBytes := extractBetween bodyStart cur
 
               some {
-                value := { inputs := inputs.reverse, outputs := outputs.reverse, fee := feeResult.value, rawBytes },
+                value := { inputs := inputs.reverse, outputs := outputs.reverse, fee := feeResult.value, certificates := [], rawBytes },
                 cursor := cur
               }
 

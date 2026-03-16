@@ -2,8 +2,10 @@ import Cleanode.Consensus.Praos.ConsensusState
 import Cleanode.Consensus.Praos.LeaderElection
 import Cleanode.Consensus.Praos.TxSelection
 import Cleanode.Crypto.Sign.KES
+import Cleanode.Crypto.Sign.KESSign
 import Cleanode.Crypto.VRF.ECVRF
 import Cleanode.Network.Cbor
+import Cleanode.Network.Crypto
 
 /-!
 # Block Forging
@@ -194,5 +196,64 @@ def forgeBlock (params : ForgeParams) (consensusState : ConsensusState)
   let blockBody := selectTransactions mempool maxBlockSize
   -- Attempt to forge
   tryForgeBlock params consensusState blockNumber slot prevHash blockBody
+
+-- ==========================
+-- = IO Forge (Production)  =
+-- ==========================
+
+open Cleanode.Network.Crypto in
+open Cleanode.Crypto.Sign.KESSign in
+/-- Production block forging with real Blake2b body hash and KES signing.
+    Returns none if not elected leader, or an error string on failure. -/
+def tryForgeBlockIO (params : ForgeParams) (consensusState : ConsensusState)
+    (blockNumber : Nat) (slot : Nat) (prevHash : ByteArray)
+    (blockBody : BlockBody) (kesPeriod : Nat)
+    : IO (Except String (Option ForgedBlock)) := do
+  -- Check leader election (pure)
+  let poolStake := getPoolStake consensusState params.poolId
+  let totalStake := consensusState.stakeSnapshot.totalStake
+  match checkLeader params.vrfSecretKey consensusState.epochNonce
+    slot consensusState.activeSlotsCoeff poolStake totalStake with
+  | .notLeader => return .ok none
+  | .invalidPool => return .ok none
+  | .isLeader vrfProof vrfOutput =>
+    -- Encode the block body
+    let bodyBytes := encodeBlockBody blockBody.transactions
+    -- Compute body hash via Blake2b-256 FFI
+    let bodyHash ← blake2b_256 bodyBytes
+    -- Encode header body
+    let vrfVKey := ByteArray.mk params.vrfPublicKey.toArray
+    let headerBodyBytes := encodeHeaderBody blockNumber slot prevHash
+      params.poolId vrfVKey vrfProof vrfOutput
+      bodyBytes.size bodyHash
+      params.operationalCert params.protocolMajor params.protocolMinor
+    -- Sign header body with KES
+    let kesKey := ByteArray.mk params.kesSigningKey.toArray
+    let kesSigResult ← kesSign kesKey (UInt32.ofNat kesPeriod) headerBodyBytes
+    match kesSigResult with
+    | .error e => return .error s!"KES signing failed: {e}"
+    | .ok kesSig =>
+      let headerBytes := encodeBlockHeader headerBodyBytes kesSig
+      return .ok (some {
+        blockNumber := blockNumber
+        slot := slot
+        prevHash := prevHash
+        headerBytes := headerBytes
+        bodyBytes := bodyBytes
+        vrfProof := vrfProof
+        vrfOutput := vrfOutput
+        selectedTxs := blockBody
+      })
+
+open Cleanode.Network.Crypto in
+open Cleanode.Crypto.Sign.KESSign in
+/-- Production forge pipeline with IO: leader check → tx selection → sign -/
+def forgeBlockIO (params : ForgeParams) (consensusState : ConsensusState)
+    (blockNumber : Nat) (slot : Nat) (prevHash : ByteArray)
+    (mempool : Cleanode.Network.Mempool.Mempool) (maxBlockSize : Nat)
+    (kesPeriod : Nat)
+    : IO (Except String (Option ForgedBlock)) := do
+  let blockBody := selectTransactions mempool maxBlockSize
+  tryForgeBlockIO params consensusState blockNumber slot prevHash blockBody kesPeriod
 
 end Cleanode.Consensus.Praos.BlockForge

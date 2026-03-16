@@ -64,6 +64,8 @@ structure NodeConfig where
   tui : Bool := false
   mithrilSync : Bool := false
   metricsPort : Option UInt16 := none
+  spoKeyDir : Option String := none   -- Path to SPO key directory for block production
+  socketPath : Option String := none  -- Unix socket path for cardano-cli (N2C)
   deriving Repr
 
 /-- Top-level CLI command -/
@@ -102,6 +104,10 @@ private def parseRunFlags (args : List String) (config : NodeConfig) : NodeConfi
   | "--metrics-port" :: n :: rest =>
     let mp := parsePort n
     parseRunFlags rest { config with metricsPort := mp }
+  | "--spo-keys" :: dir :: rest =>
+    parseRunFlags rest { config with spoKeyDir := some dir }
+  | "--socket-path" :: path :: rest =>
+    parseRunFlags rest { config with socketPath := some path }
   | _ :: rest => parseRunFlags rest config
 
 /-- Parse CLI arguments into a Command -/
@@ -142,6 +148,8 @@ def printUsage : IO Unit := do
   IO.println "  --tui              Enable terminal UI mode"
   IO.println "  --mithril-sync     Fast-sync via Mithril snapshot before peer sync"
   IO.println "  --metrics-port <n> Enable Prometheus metrics on given port"
+  IO.println "  --spo-keys <dir>   Path to SPO key directory for block production"
+  IO.println "  --socket-path <p>  Unix socket path for cardano-cli (default: ./cleanode.socket)"
   IO.println ""
   IO.println "QUERY TARGETS:"
   IO.println "  tip                Show current chain tip"

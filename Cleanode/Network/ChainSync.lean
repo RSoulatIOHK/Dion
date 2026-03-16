@@ -238,9 +238,17 @@ def decodeChainSyncMessage (bs : ByteArray) : Option ChainSyncMessage := do
       some (.MsgRollBackward r3.value r4.value)
   | 4 => do  -- MsgFindIntersect
       if r1.value != 2 then none
-      let _ ← decodeArrayHeader r2.remaining
-      -- TODO: Decode list of points properly
-      some (.MsgFindIntersect [])
+      let r3 ← decodeArrayHeader r2.remaining
+      let numPoints := r3.value
+      let mut points : List Point := []
+      let mut remaining := r3.remaining
+      for _ in List.range numPoints do
+        match decodePoint remaining with
+        | some result =>
+            points := points ++ [result.value]
+            remaining := result.remaining
+        | none => break
+      some (.MsgFindIntersect points)
   | 5 => do  -- MsgIntersectFound
       if r1.value != 3 then none
       let r3 ← decodePoint r2.remaining

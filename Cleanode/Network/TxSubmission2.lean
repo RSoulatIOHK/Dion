@@ -75,12 +75,16 @@ instance : Repr TxSubmission2Message where
 -- = Encoding   =
 -- ==============
 
-/-- Encode a TxId as CBOR array [hash, size] -/
+/-- Conway era index for HardFork NS encoding -/
+def conwayEraIndex : Nat := 6
+
+/-- Encode a TxId as CBOR: [[eraIndex, hash], size]
+    The hash is wrapped in HardFork flat NS encoding [eraIndex, rawTxId]. -/
 def encodeTxId (txId : TxId) : ByteArray :=
+  let eraWrappedId := encodeArrayHeader 2 ++ encodeUInt conwayEraIndex ++ encodeBytes txId.hash
   let header := encodeArrayHeader 2
-  let hashEnc := encodeBytes txId.hash
   let sizeEnc := encodeUInt txId.size.toNat
-  header ++ hashEnc ++ sizeEnc
+  header ++ eraWrappedId ++ sizeEnc
 
 /-- Encode TxSubmission2 message -/
 def encodeTxSubmission2Message : TxSubmission2Message → ByteArray
@@ -109,9 +113,13 @@ def encodeTxSubmission2Message : TxSubmission2Message → ByteArray
       arr ++ msgId ++ encodeIndefiniteArrayHeader ++ idsEnc ++ encodeBreak
   | .MsgReplyTxs txs =>
       -- Spec requires indefinite-length list for txList
+      -- Each tx is HardFork NS-encoded: [eraIndex, rawTxCBOR]
       let arr := encodeArrayHeader 2
       let msgId := encodeUInt 3
-      let txsEnc := ByteArrayBuilder.foldEncode txs encodeBytes
+      -- Each GenTx is [eraIndex, tag24(bstr(txCBOR))] per wrapCBORinCBOR
+      let encodeTxGenTx (txBytes : ByteArray) : ByteArray :=
+        encodeArrayHeader 2 ++ encodeUInt conwayEraIndex ++ encodeTagged 24 (encodeBytes txBytes)
+      let txsEnc := ByteArrayBuilder.foldEncode txs encodeTxGenTx
       arr ++ msgId ++ encodeIndefiniteArrayHeader ++ txsEnc ++ encodeBreak
   | .MsgDone =>
       let arr := encodeArrayHeader 1
@@ -122,39 +130,107 @@ def encodeTxSubmission2Message : TxSubmission2Message → ByteArray
 -- = Decoding   =
 -- ==============
 
-/-- Decode a TxId from CBOR -/
+/-- Decode a TxId from CBOR: [[eraIndex, hash], size]
+    The hash is HardFork NS-encoded. -/
 def decodeTxId (bs : ByteArray) : Option (DecodeResult TxId) := do
   let r1 ← decodeArrayHeader bs
   if r1.value != 2 then none
-  let r2 ← decodeBytes r1.remaining
-  let hash := r2.value
-  let r3 ← decodeUInt r2.remaining
-  let size := UInt32.ofNat r3.value
-  some { value := { hash := hash, size := size }, remaining := r3.remaining }
+  -- First element: NS-encoded txId [eraIndex, hash]
+  let r2 ← decodeArrayHeader r1.remaining
+  if r2.value != 2 then none
+  let r3 ← decodeUInt r2.remaining  -- eraIndex (skip)
+  let r4 ← decodeBytes r3.remaining -- raw hash
+  let hash := r4.value
+  -- Second element: size
+  let r5 ← decodeUInt r4.remaining
+  let size := UInt32.ofNat r5.value
+  some { value := { hash := hash, size := size }, remaining := r5.remaining }
 
-/-- Decode a list of TxIds -/
-def decodeTxIdList (bs : ByteArray) : Option (DecodeResult (List TxId)) := do
-  let r1 ← decodeArrayHeader bs
-  let count := r1.value
-  let mut remaining := r1.remaining
-  let mut txIds : List TxId := []
-  for _ in List.range count do
-    let r ← decodeTxId remaining
-    txIds := txIds ++ [r.value]
-    remaining := r.remaining
-  some { value := txIds, remaining := remaining }
+/-- Decode a list of TxIds (supports both definite and indefinite-length arrays) -/
+partial def decodeTxIdList (bs : ByteArray) : Option (DecodeResult (List TxId)) := do
+  if bs.size == 0 then none
+  let first := bs[0]!
+  if first == 0x9f then
+    -- Indefinite-length array
+    let mut remaining := bs.extract 1 bs.size
+    let mut txIds : List TxId := []
+    while remaining.size > 0 && remaining[0]! != 0xff do
+      let r ← decodeTxId remaining
+      txIds := txIds ++ [r.value]
+      remaining := r.remaining
+    if remaining.size > 0 && remaining[0]! == 0xff then
+      remaining := remaining.extract 1 remaining.size
+    some { value := txIds, remaining := remaining }
+  else
+    let r1 ← decodeArrayHeader bs
+    let count := r1.value
+    let mut remaining := r1.remaining
+    let mut txIds : List TxId := []
+    for _ in List.range count do
+      let r ← decodeTxId remaining
+      txIds := txIds ++ [r.value]
+      remaining := r.remaining
+    some { value := txIds, remaining := remaining }
 
-/-- Decode a list of ByteArrays (tx hashes or full txs) -/
-def decodeByteArrayList (bs : ByteArray) : Option (DecodeResult (List ByteArray)) := do
+/-- Decode a list of ByteArrays (tx hashes or full txs, supports indefinite-length) -/
+partial def decodeByteArrayList (bs : ByteArray) : Option (DecodeResult (List ByteArray)) := do
+  if bs.size == 0 then none
+  let first := bs[0]!
+  if first == 0x9f then
+    let mut remaining := bs.extract 1 bs.size
+    let mut items : List ByteArray := []
+    while remaining.size > 0 && remaining[0]! != 0xff do
+      let r ← decodeBytes remaining
+      items := items ++ [r.value]
+      remaining := r.remaining
+    if remaining.size > 0 && remaining[0]! == 0xff then
+      remaining := remaining.extract 1 remaining.size
+    some { value := items, remaining := remaining }
+  else
+    let r1 ← decodeArrayHeader bs
+    let count := r1.value
+    let mut remaining := r1.remaining
+    let mut items : List ByteArray := []
+    for _ in List.range count do
+      let r ← decodeBytes remaining
+      items := items ++ [r.value]
+      remaining := r.remaining
+    some { value := items, remaining := remaining }
+
+/-- Decode a HardFork NS-encoded txId: [eraIndex, hash] → extract hash -/
+def decodeNSTxId (bs : ByteArray) : Option (DecodeResult ByteArray) := do
   let r1 ← decodeArrayHeader bs
-  let count := r1.value
-  let mut remaining := r1.remaining
-  let mut items : List ByteArray := []
-  for _ in List.range count do
-    let r ← decodeBytes remaining
-    items := items ++ [r.value]
-    remaining := r.remaining
-  some { value := items, remaining := remaining }
+  if r1.value != 2 then none
+  let r2 ← decodeUInt r1.remaining   -- eraIndex (skip)
+  let r3 ← decodeBytes r2.remaining  -- raw hash
+  some { value := r3.value, remaining := r3.remaining }
+
+/-- Decode a list of HardFork NS-encoded txId hashes (supports both definite and indefinite-length arrays) -/
+partial def decodeNSTxIdList (bs : ByteArray) : Option (DecodeResult (List ByteArray)) := do
+  if bs.size == 0 then none
+  let first := bs[0]!
+  if first == 0x9f then
+    -- Indefinite-length array: 0x9f ... 0xff
+    let mut remaining := bs.extract 1 bs.size
+    let mut items : List ByteArray := []
+    while remaining.size > 0 && remaining[0]! != 0xff do
+      let r ← decodeNSTxId remaining
+      items := items ++ [r.value]
+      remaining := r.remaining
+    if remaining.size > 0 && remaining[0]! == 0xff then
+      remaining := remaining.extract 1 remaining.size  -- skip break byte
+    some { value := items, remaining := remaining }
+  else
+    -- Fixed-length array
+    let r1 ← decodeArrayHeader bs
+    let count := r1.value
+    let mut remaining := r1.remaining
+    let mut items : List ByteArray := []
+    for _ in List.range count do
+      let r ← decodeNSTxId remaining
+      items := items ++ [r.value]
+      remaining := r.remaining
+    some { value := items, remaining := remaining }
 
 /-- Decode TxSubmission2 message -/
 def decodeTxSubmission2Message (bs : ByteArray) : Option TxSubmission2Message := do
@@ -180,14 +256,21 @@ def decodeTxSubmission2Message (bs : ByteArray) : Option TxSubmission2Message :=
       if r1.value != 2 then none
       let r3 ← decodeTxIdList r2.remaining
       some (.MsgReplyTxIds r3.value)
-  | 2 => do  -- MsgRequestTxs
+  | 2 => do  -- MsgRequestTxs: hashes are HardFork NS-encoded [eraIndex, hash]
       if r1.value != 2 then none
-      let r3 ← decodeByteArrayList r2.remaining
+      let r3 ← decodeNSTxIdList r2.remaining
       some (.MsgRequestTxs r3.value)
-  | 3 => do  -- MsgReplyTxs
+  | 3 => do  -- MsgReplyTxs: tx bodies are HardFork NS-encoded [eraIndex, rawTxCBOR]
       if r1.value != 2 then none
-      let r3 ← decodeByteArrayList r2.remaining
-      some (.MsgReplyTxs r3.value)
+      -- For now, try to decode as byte array list (works for simple cases)
+      -- TODO: proper NS unwrapping for inline CBOR
+      match decodeByteArrayList r2.remaining with
+      | some r3 => some (.MsgReplyTxs r3.value)
+      | none =>
+        -- Fallback: try NS-encoded list [eraIndex, bytes]
+        match decodeNSTxIdList r2.remaining with
+        | some r3 => some (.MsgReplyTxs r3.value)
+        | none => none
   | 4 => if r1.value == 1 then some .MsgDone else none
   | _ => none
 

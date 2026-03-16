@@ -15,3 +15,7 @@ lean_lib Cleanode
 lean_exe cleanode where
   root := `Main
   supportInterpreter := true
+
+lean_exe test where
+  root := `TestMain
+  supportInterpreter := true

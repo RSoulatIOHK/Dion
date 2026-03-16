@@ -15,6 +15,10 @@ open Cleanode.Network.Bech32
 @[extern "cleanode_blake2b_256"]
 opaque blake2b_256 (data : @& ByteArray) : IO ByteArray
 
+/-- Compute Blake2b-224 hash (28 bytes) — used for Cardano key hashes -/
+@[extern "cleanode_blake2b_224"]
+opaque blake2b_224 (data : @& ByteArray) : IO ByteArray
+
 /-- Convert ByteArray to hex string -/
 def bytesToHex (bs : ByteArray) : String :=
   String.join (bs.toList.map fun b =>

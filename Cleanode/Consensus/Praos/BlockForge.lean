@@ -56,16 +56,40 @@ structure ForgeParams where
 -- = Forged Block     =
 -- ====================
 
+/-- The 4 independently-encoded CBOR components of a block body.
+    bodyHash = blake2b_256(txBodies ++ witnessSets ++ auxData ++ invalidTxs)
+    The full block is a 5-element CBOR array: [header, txBodies, witnessSets, auxData, invalidTxs] -/
+structure BlockBodyComponents where
+  txBodies    : ByteArray  -- CBOR-encoded array of tx bodies
+  witnessSets : ByteArray  -- CBOR-encoded array of witness sets
+  auxData     : ByteArray  -- CBOR-encoded map of auxiliary data
+  invalidTxs  : ByteArray  -- CBOR-encoded array of invalid tx indices
+
+/-- Concatenation of body components (used for hashing and size) -/
+def BlockBodyComponents.serialize (c : BlockBodyComponents) : ByteArray :=
+  c.txBodies ++ c.witnessSets ++ c.auxData ++ c.invalidTxs
+
 /-- A forged block ready for network propagation -/
 structure ForgedBlock where
   blockNumber : Nat
   slot : Nat
   prevHash : ByteArray
   headerBytes : ByteArray       -- CBOR-encoded header (for hashing and sending)
-  bodyBytes : ByteArray         -- CBOR-encoded block body
+  bodyComponents : BlockBodyComponents  -- 4 body components (separately encoded)
   vrfProof : VRFProof
   vrfOutput : List UInt8
   selectedTxs : BlockBody
+
+/-- Encode the full block as a 5-element CBOR array for BlockFetch serving:
+    [header, tx_bodies, witness_sets, aux_data, invalid_txs] -/
+def ForgedBlock.encodeFullBlock (block : ForgedBlock) : ByteArray :=
+  open Cleanode.Network.Cbor in
+  encodeArrayHeader 5
+    ++ block.headerBytes
+    ++ block.bodyComponents.txBodies
+    ++ block.bodyComponents.witnessSets
+    ++ block.bodyComponents.auxData
+    ++ block.bodyComponents.invalidTxs
 
 -- ==========================
 -- = Header CBOR Encoding   =
@@ -137,10 +161,27 @@ def encodeBlockHeader (headerBodyBytes kesSig : ByteArray) : ByteArray :=
   encodeTagged 24 innerArray
 
 open Cleanode.Network.Cbor in
-/-- Encode the block body as CBOR array of transaction byte strings -/
-def encodeBlockBody (txs : List SelectedTx) : ByteArray :=
-  let arr := encodeArrayHeader txs.length
-  txs.foldl (fun acc tx => acc ++ encodeBytes tx.rawBytes) arr
+/-- Encode the block body as 4 independently-encoded CBOR components:
+    tx_bodies[], witness_sets[], {idx: aux_data}, invalid_txs[]
+
+    These are stored separately because:
+    - bodyHash = blake2b_256(txBodies ++ witnessSets ++ auxData ++ invalidTxs)
+    - The full block is a flat 5-element array: [header, txBodies, witnessSets, auxData, invalidTxs] -/
+def encodeBlockBody (txs : List SelectedTx) : BlockBodyComponents :=
+  -- tx_bodies array
+  let txBodies := txs.foldl (fun acc tx => acc ++ tx.bodyRawBytes)
+    (encodeArrayHeader txs.length)
+  -- witness_sets array
+  let witnessSets := txs.foldl (fun acc tx => acc ++ tx.witnessRawBytes)
+    (encodeArrayHeader txs.length)
+  -- auxiliary_data map {index => auxData}
+  let auxPairs := (List.range txs.length).zip txs |>.filterMap fun (idx, tx) =>
+    tx.auxDataRawBytes.map (idx, ·)
+  let auxDataMap := auxPairs.foldl (fun acc (idx, auxBytes) => acc ++ encodeUInt idx ++ auxBytes)
+    (encodeMapHeader auxPairs.length)
+  -- invalid_txs (always empty — we only include valid txs)
+  let invalidTxs := encodeArrayHeader 0
+  { txBodies, witnessSets, auxData := auxDataMap, invalidTxs }
 
 -- ====================
 -- = Forge Logic      =
@@ -159,8 +200,9 @@ def tryForgeBlock (params : ForgeParams) (consensusState : ConsensusState)
   | .notLeader => none
   | .invalidPool => none
   | .isLeader vrfProof vrfOutput =>
-    -- Encode the block body
-    let bodyBytes := encodeBlockBody blockBody.transactions
+    -- Encode the block body components
+    let bodyComponents := encodeBlockBody blockBody.transactions
+    let bodySerialized := bodyComponents.serialize
     -- Compute body hash (placeholder — in production use blake2b_256 via IO)
     let bodyHash := ByteArray.mk #[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
                                      0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
@@ -168,7 +210,7 @@ def tryForgeBlock (params : ForgeParams) (consensusState : ConsensusState)
     let vrfVKey := ByteArray.mk params.vrfPublicKey.toArray
     let headerBodyBytes := encodeHeaderBody blockNumber slot prevHash
       params.poolId vrfVKey vrfProof vrfOutput
-      bodyBytes.size bodyHash
+      bodySerialized.size bodyHash
       params.operationalCert params.protocolMajor params.protocolMinor
     -- KES signature placeholder (would be signed via IO in production)
     let kesSig := ByteArray.mk (Array.replicate 448 0)  -- Sum-KES depth 6: 448 bytes
@@ -178,7 +220,7 @@ def tryForgeBlock (params : ForgeParams) (consensusState : ConsensusState)
       slot := slot
       prevHash := prevHash
       headerBytes := headerBytes
-      bodyBytes := bodyBytes
+      bodyComponents := bodyComponents
       vrfProof := vrfProof
       vrfOutput := vrfOutput
       selectedTxs := blockBody
@@ -217,15 +259,22 @@ def tryForgeBlockIO (params : ForgeParams) (consensusState : ConsensusState)
   | .notLeader => return .ok none
   | .invalidPool => return .ok none
   | .isLeader vrfProof vrfOutput =>
-    -- Encode the block body
-    let bodyBytes := encodeBlockBody blockBody.transactions
+    -- KES period range check: opcert.kesPeriod <= currentKesPeriod < opcert.kesPeriod + 62
+    let opcertKesPeriod := params.operationalCert.kesPeriod
+    if kesPeriod < opcertKesPeriod then
+      return .error s!"KES period {kesPeriod} is before opcert start period {opcertKesPeriod}"
+    if kesPeriod >= opcertKesPeriod + 62 then
+      return .error s!"KES period {kesPeriod} is past opcert max period {opcertKesPeriod + 62}"
+    -- Encode the block body components
+    let bodyComponents := encodeBlockBody blockBody.transactions
+    let bodySerialized := bodyComponents.serialize
     -- Compute body hash via Blake2b-256 FFI
-    let bodyHash ← blake2b_256 bodyBytes
+    let bodyHash ← blake2b_256 bodySerialized
     -- Encode header body
     let vrfVKey := ByteArray.mk params.vrfPublicKey.toArray
     let headerBodyBytes := encodeHeaderBody blockNumber slot prevHash
       params.poolId vrfVKey vrfProof vrfOutput
-      bodyBytes.size bodyHash
+      bodySerialized.size bodyHash
       params.operationalCert params.protocolMajor params.protocolMinor
     -- Sign header body with KES
     let kesKey := ByteArray.mk params.kesSigningKey.toArray
@@ -239,7 +288,7 @@ def tryForgeBlockIO (params : ForgeParams) (consensusState : ConsensusState)
         slot := slot
         prevHash := prevHash
         headerBytes := headerBytes
-        bodyBytes := bodyBytes
+        bodyComponents := bodyComponents
         vrfProof := vrfProof
         vrfOutput := vrfOutput
         selectedTxs := blockBody

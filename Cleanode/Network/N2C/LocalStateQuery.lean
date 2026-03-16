@@ -116,6 +116,32 @@ def handleGetFilteredUTxO (state : LedgerState) (queryPayload : ByteArray) : Byt
     -- Return empty map on decode failure
     encodeMapHeader 0
 
+/-- Handle GetUTxOByTxIn query -/
+def handleGetUTxOByTxIn (state : LedgerState) (queryPayload : ByteArray) : ByteArray :=
+  match decodeTxInSet queryPayload with
+  | some txIns =>
+    let filtered := filterByTxIns state.utxo txIns
+    encodeFilteredUTxOResult filtered
+  | none =>
+    encodeMapHeader 0
+
+/-- Handle GetStakePools query — returns tag258 set of pool key hashes -/
+def handleGetStakePools (state : LedgerState) : ByteArray :=
+  -- Return pool IDs from epoch boundary stake distribution if available
+  match state.epochBoundary with
+  | some eb =>
+    let poolIds := eb.stakeDistribution.map (·.1)
+    let items := poolIds.foldl (fun acc pid => acc ++ encodeBytes pid) ByteArray.empty
+    encodeTagged 258 (encodeArrayHeader poolIds.length ++ items)
+  | none =>
+    -- Empty set: tag258([])
+    encodeTagged 258 (encodeArrayHeader 0)
+
+/-- Handle GetStakePoolParams query — returns map from pool ID to pool params -/
+def handleGetStakePoolParams (_state : LedgerState) (_queryPayload : ByteArray) : ByteArray :=
+  -- Return empty map for now (we don't track full pool params)
+  encodeMapHeader 0
+
 /-- Handle GetStakeDistribution query -/
 def handleGetStakeDistribution (state : LedgerState) : ByteArray :=
   match state.epochBoundary with
@@ -138,8 +164,13 @@ def dispatchQuery (state : LedgerState) (query : ShelleyQuery)
   | .GetCurrentPParams => handleGetCurrentPParams state
   | .GetEpochNo => handleGetEpochNo state
   | .GetUTxOByAddress => handleGetFilteredUTxO state queryPayload
+  | .GetUTxOByTxIn => handleGetUTxOByTxIn state queryPayload
+  | .GetStakePools => handleGetStakePools state
+  | .GetStakePoolParams => handleGetStakePoolParams state queryPayload
+  | .GetDRepState => encodeMapHeader 0  -- empty DRep state map
+  | .GetAccountState => encodeArrayHeader 2 ++ encodeUInt state.treasury ++ encodeUInt state.reserves
   | .GetStakeDistribution => handleGetStakeDistribution state
-  | .Unknown _ => encodeArrayHeader 0  -- empty result for unknown queries
+  | .Unknown _ => encodeMapHeader 0  -- default: empty map (most queries expect map or set)
 
 -- ====================
 -- = Frame Handler    =

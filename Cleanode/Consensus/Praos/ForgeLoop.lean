@@ -1,6 +1,7 @@
 import Cleanode.Consensus.Praos.BlockForge
 import Cleanode.Consensus.Praos.ConsensusState
 import Cleanode.Consensus.Praos.StakeDistribution
+import Cleanode.Network.Crypto
 import Cleanode.Network.Mempool
 
 /-!
@@ -162,9 +163,11 @@ inductive ForgeStepResult where
   | epochTransition (epoch : Nat)        -- Crossed epoch boundary
 
 /-- Run one iteration of the forge loop.
-    Returns the updated state and the step result. -/
+    Returns the updated state and the step result.
+    Reads live consensus state from `consensusRef` (updated by sync loop). -/
 def forgeStep (stateRef : IO.Ref ForgeState)
     (mempoolRef : IO.Ref Cleanode.Network.Mempool.Mempool)
+    (consensusRef : IO.Ref ConsensusState)
     (prevHash : ByteArray) (blockNumber : Nat)
     : IO ForgeStepResult := do
   let state ← stateRef.get
@@ -176,14 +179,13 @@ def forgeStep (stateRef : IO.Ref ForgeState)
 
   stateRef.modify fun s => { s with lastCheckedSlot := currentSlot }
 
+  -- Pull live consensus state from the sync loop
+  let cs ← consensusRef.get
+
   -- Check for epoch transition
   let currentEpoch := state.clock.slotEpoch currentSlot
-  if currentEpoch > state.consensusState.currentEpoch then
-    IO.println s!"[forge] Epoch transition: {state.consensusState.currentEpoch} → {currentEpoch}"
-    -- In production, we'd rotate the snapshot ring here with fresh ledger state
-    stateRef.modify fun s => { s with
-      consensusState := { s.consensusState with currentEpoch := currentEpoch }
-    }
+  if currentEpoch > cs.currentEpoch then
+    IO.println s!"[forge] Epoch transition detected: {cs.currentEpoch} → {currentEpoch}"
     return .epochTransition currentEpoch
 
   -- Compute KES period
@@ -195,8 +197,8 @@ def forgeStep (stateRef : IO.Ref ForgeState)
 
   stateRef.modify fun s => { s with leaderChecks := s.leaderChecks + 1 }
 
-  -- Attempt to forge (IO version with real crypto)
-  let result ← tryForgeBlockIO state.forgeParams state.consensusState
+  -- Attempt to forge (IO version with real crypto) using live consensus state
+  let result ← tryForgeBlockIO state.forgeParams cs
     blockNumber currentSlot prevHash blockBody kesPeriod
 
   match result with
@@ -221,6 +223,7 @@ def forgeStep (stateRef : IO.Ref ForgeState)
     Forged blocks are pushed to `forgedBlocksRef` for the announcement layer. -/
 partial def runForgeLoop (stateRef : IO.Ref ForgeState)
     (mempoolRef : IO.Ref Cleanode.Network.Mempool.Mempool)
+    (consensusRef : IO.Ref ConsensusState)
     (prevHashRef : IO.Ref ByteArray)
     (blockNoRef : IO.Ref Nat)
     (forgedBlocksRef : IO.Ref (Array ForgedBlock))
@@ -229,7 +232,9 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
   let state ← stateRef.get
   IO.println s!"[forge] Pool ID: {state.forgeParams.poolId.size} bytes"
   IO.println s!"[forge] Slot clock: system start={state.clock.systemStart}"
+  IO.println "[forge] Waiting for chain sync to provide stake snapshot..."
 
+  let mut snapshotReady := false
   while true do
     -- Sleep until next slot
     let state ← stateRef.get
@@ -237,10 +242,20 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
     if msToWait > 0 then
       IO.sleep (UInt32.ofNat msToWait)
 
+    -- Check if consensus state has real stake data
+    let cs ← consensusRef.get
+    if cs.stakeSnapshot.totalStake == 0 then
+      IO.sleep 5000  -- no stake yet, wait for sync to catch up
+      continue
+    if !snapshotReady then
+      IO.println s!"[forge] Stake snapshot ready: {cs.stakeSnapshot.poolStakes.length} pools, total stake {cs.stakeSnapshot.totalStake}"
+      IO.println s!"[forge] Epoch nonce: {cs.epochNonce.size} bytes, epoch {cs.currentEpoch}"
+      snapshotReady := true
+
     let prevHash ← prevHashRef.get
     let blockNo ← blockNoRef.get
 
-    let result ← forgeStep stateRef mempoolRef prevHash blockNo
+    let result ← forgeStep stateRef mempoolRef consensusRef prevHash blockNo
     match result with
     | .notYet _ => pure ()
     | .notLeader slot =>
@@ -248,13 +263,14 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
       pure ()
     | .forged block => do
       IO.println s!"[forge] BLOCK FORGED at slot {block.slot}, block #{block.blockNumber}"
-      IO.println s!"[forge]   header: {block.headerBytes.size} bytes, body: {block.bodyBytes.size} bytes"
+      IO.println s!"[forge]   header: {block.headerBytes.size} bytes, body: {block.bodyComponents.serialize.size} bytes"
       IO.println s!"[forge]   txs: {block.selectedTxs.transactions.length}"
       -- Push to announcement queue
       forgedBlocksRef.modify fun arr => arr.push block
-      -- Advance block number and prev hash
+      -- Advance block number and prev hash to our forged block
       blockNoRef.set (blockNo + 1)
-      -- In production, prevHash would be the hash of the new block header
+      let blockHash ← Cleanode.Network.Crypto.blake2b_256 block.headerBytes
+      prevHashRef.set blockHash
     | .forgeError slot err =>
       IO.eprintln s!"[forge] Error at slot {slot}: {err}"
     | .epochTransition epoch =>
@@ -262,18 +278,17 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
 
 /-- Start the forge loop as a background IO task. -/
 def startForgeLoop (forgeParams : ForgeParams) (clock : SlotClock)
-    (consensusState : ConsensusState)
+    (consensusRef : IO.Ref ConsensusState)
     (mempoolRef : IO.Ref Cleanode.Network.Mempool.Mempool)
-    (prevHash : ByteArray) (blockNo : Nat)
+    (prevHashRef : IO.Ref ByteArray) (blockNoRef : IO.Ref Nat)
     : IO (Task (Except IO.Error Unit) × IO.Ref ForgeState × IO.Ref (Array ForgedBlock)) := do
-  let forgeState := ForgeState.initial forgeParams clock consensusState
+  let cs ← consensusRef.get
+  let forgeState := ForgeState.initial forgeParams clock cs
   let stateRef ← IO.mkRef forgeState
-  let prevHashRef ← IO.mkRef prevHash
-  let blockNoRef ← IO.mkRef blockNo
   let forgedBlocksRef ← IO.mkRef (#[] : Array ForgedBlock)
 
   let task ← IO.asTask (prio := .dedicated) do
-    runForgeLoop stateRef mempoolRef prevHashRef blockNoRef forgedBlocksRef
+    runForgeLoop stateRef mempoolRef consensusRef prevHashRef blockNoRef forgedBlocksRef
 
   return (task, stateRef, forgedBlocksRef)
 

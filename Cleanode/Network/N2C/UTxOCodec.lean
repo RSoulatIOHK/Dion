@@ -63,4 +63,10 @@ def filterByAddresses (utxo : UTxOSet) (addresses : List ByteArray) : List UTxOE
   utxo.toList.filter fun entry =>
     addresses.any (· == entry.output.address)
 
+/-- Filter UTxO entries by a set of TxIns (txHash, outputIndex) -/
+def filterByTxIns (utxo : UTxOSet) (txIns : List (ByteArray × Nat)) : List UTxOEntry :=
+  txIns.filterMap fun (txHash, idx) =>
+    let id : UTxOId := { txHash, outputIndex := idx }
+    (utxo.lookup id).map fun output => { id, output }
+
 end Cleanode.Network.N2C.UTxOCodec

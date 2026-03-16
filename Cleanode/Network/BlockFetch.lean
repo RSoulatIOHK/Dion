@@ -2,6 +2,8 @@ import Cleanode.Network.Cbor
 import Cleanode.Network.Multiplexer
 import Cleanode.Network.Socket
 import Cleanode.Network.ChainSync
+import Cleanode.Network.TxSubmission2
+import Cleanode.Network.Mempool
 
 /-!
 # BlockFetch Mini-Protocol
@@ -169,10 +171,49 @@ private def handleKeepAlive (sock : Socket) (payload : ByteArray) : IO Unit := d
   else
     pure ()
 
-/-- Read a single MUX frame from the socket, responding to KeepAlive transparently.
-    Skips non-BlockFetch frames (TxSubmission2, ChainSync, PeerSharing, etc.)
-    to avoid protocol interference. Returns only BlockFetch frames. -/
-private partial def receiveMuxFrame (sock : Socket) : IO (Except SocketError (MuxHeader × ByteArray)) := do
+/-- Handle TxSubmission2 MsgRequestTxs inline during BlockFetch.
+    When a peer requests tx bodies, we reply immediately from the mempool. -/
+private def handleTxSubmission2Inline (sock : Socket) (payload : ByteArray)
+    (mempoolRef : Option (IO.Ref Cleanode.Network.Mempool.Mempool)) : IO Unit := do
+  match Cleanode.Network.TxSubmission2.decodeTxSubmission2Message payload with
+  | some (.MsgRequestTxs hashes) => do
+      IO.eprintln s!"[TxSub] MsgRequestTxs received during BlockFetch ({hashes.length} hashes)"
+      match mempoolRef with
+      | some mpRef => do
+          let pool ← mpRef.get
+          let txBodies := pool.getTxsByHash hashes
+          IO.eprintln s!"[TxSub] → Replying with {txBodies.length} tx bodies"
+          let _ ← Cleanode.Network.TxSubmission2.sendTxSubmission2 sock (.MsgReplyTxs txBodies)
+          pure ()
+      | none =>
+          let _ ← Cleanode.Network.TxSubmission2.sendTxSubmission2 sock (.MsgReplyTxs [])
+          pure ()
+  | some (.MsgRequestTxIds blocking ack req) => do
+      IO.eprintln s!"[TxSub] MsgRequestTxIds during BlockFetch (blk={blocking},ack={ack},req={req})"
+      match mempoolRef with
+      | some mpRef => do
+          let pool ← mpRef.get
+          let txIds := pool.getTxIds req.toNat
+          IO.eprintln s!"[TxSub] → Replying with {txIds.length} tx IDs from mempool (inline)"
+          let _ ← Cleanode.Network.TxSubmission2.sendTxSubmission2 sock (.MsgReplyTxIds txIds)
+          pure ()
+      | none =>
+          -- No mempool ref — reply empty (non-blocking only; blocking + empty is a protocol violation)
+          if !blocking then
+            let _ ← Cleanode.Network.TxSubmission2.sendTxSubmission2 sock (.MsgReplyTxIds [])
+            pure ()
+          else
+            -- For blocking requests with no mempool, we have no choice but to reply empty
+            -- This is technically a protocol violation but avoids hanging
+            let _ ← Cleanode.Network.TxSubmission2.sendTxSubmission2 sock (.MsgReplyTxIds [])
+            pure ()
+  | _ => pure ()  -- Ignore other TxSubmission2 messages during BlockFetch
+
+/-- Read a single MUX frame from the socket, responding to KeepAlive and
+    TxSubmission2 transparently. Returns only BlockFetch frames. -/
+private partial def receiveMuxFrame (sock : Socket)
+    (mempoolRef : Option (IO.Ref Cleanode.Network.Mempool.Mempool) := none)
+    : IO (Except SocketError (MuxHeader × ByteArray)) := do
   match ← socket_receive_exact sock 8 with
   | .error e => return .error e
   | .ok headerBytes => do
@@ -185,16 +226,21 @@ private partial def receiveMuxFrame (sock : Socket) : IO (Except SocketError (Mu
           | .ok payload =>
               if header.protocolId == .KeepAlive then
                 handleKeepAlive sock payload
-                receiveMuxFrame sock
+                receiveMuxFrame sock mempoolRef
+              else if header.protocolId == .TxSubmission2 then
+                handleTxSubmission2Inline sock payload mempoolRef
+                receiveMuxFrame sock mempoolRef
               else if header.protocolId == .BlockFetch then
                 return .ok (header, payload)
               else
-                -- Skip non-BlockFetch frames (TxSubmission2, PeerSharing, etc.)
-                receiveMuxFrame sock
+                -- Skip other frames (ChainSync, PeerSharing)
+                receiveMuxFrame sock mempoolRef
 
-/-- Receive BlockFetch message from socket, handling multi-frame messages and KeepAlive.
-    If leftoverBytes is provided, starts decoding from those bytes. -/
-def receiveBlockFetch (sock : Socket) (leftoverBytes : ByteArray := ⟨#[]⟩) (maxSize : UInt32 := 65535) : IO (Except SocketError (Option BlockFetchReceiveResult)) := do
+/-- Receive BlockFetch message from socket, handling multi-frame messages, KeepAlive,
+    and TxSubmission2 transparently. If leftoverBytes is provided, starts decoding from those. -/
+def receiveBlockFetch (sock : Socket) (leftoverBytes : ByteArray := ⟨#[]⟩) (maxSize : UInt32 := 65535)
+    (mempoolRef : Option (IO.Ref Cleanode.Network.Mempool.Mempool) := none)
+    : IO (Except SocketError (Option BlockFetchReceiveResult)) := do
   -- Start with leftover bytes from previous decode (if any)
   let mut completePayload := leftoverBytes
 
@@ -204,8 +250,8 @@ def receiveBlockFetch (sock : Socket) (leftoverBytes : ByteArray := ⟨#[]⟩) (
     | some result => return .ok (some { message := result.value, leftoverBytes := result.remaining })
     | none => pure ()  -- Fall through to read more frames
 
-  -- Read first frame (KeepAlive handled transparently)
-  match ← receiveMuxFrame sock with
+  -- Read first frame (KeepAlive and TxSubmission2 handled transparently)
+  match ← receiveMuxFrame sock mempoolRef with
   | .error e => return .error e
   | .ok (firstHeader, firstPayload) => do
       let payloadSize := firstHeader.payloadLength.toNat.toUInt32
@@ -220,7 +266,7 @@ def receiveBlockFetch (sock : Socket) (leftoverBytes : ByteArray := ⟨#[]⟩) (
           -- Message incomplete - likely a multi-frame MsgBlock
           -- Keep reading frames until we can decode or hit limit
           for _ in [0:100] do  -- Max 100 additional frames (blocks can be large)
-            match ← receiveMuxFrame sock with
+            match ← receiveMuxFrame sock mempoolRef with
             | .error _ => break
             | .ok (nextHeader, nextPayload) => do
                 if nextHeader.protocolId != .BlockFetch then break

@@ -1,4 +1,5 @@
 import Cleanode.Ledger.State
+import Cleanode.Ledger.Governance
 
 /-!
 # Cardano Certificates
@@ -25,6 +26,7 @@ Certificates appear in transaction body field key 4 as a list of
 namespace Cleanode.Ledger.Certificate
 
 open Cleanode.Ledger.State
+open Cleanode.Ledger.Governance
 
 -- ====================
 -- = Certificate Types =
@@ -65,13 +67,29 @@ structure FullPoolParams where
 instance : Repr FullPoolParams where
   reprPrec p _ := s!"FullPoolParams(poolId={p.poolId.size}B, pledge={p.pledge}, cost={p.cost})"
 
-/-- Cardano certificate -/
+/-- Cardano certificate (Shelley + Conway) -/
 inductive Certificate where
-  | stakeKeyRegistration (keyHash : ByteArray)
-  | stakeKeyDeregistration (keyHash : ByteArray)
-  | stakeDelegation (keyHash : ByteArray) (poolId : ByteArray)
-  | poolRegistration (params : FullPoolParams)
-  | poolRetirement (poolId : ByteArray) (epoch : Nat)
+  -- Shelley (types 0-4)
+  | stakeKeyRegistration (keyHash : ByteArray)        -- 0
+  | stakeKeyDeregistration (keyHash : ByteArray)      -- 1
+  | stakeDelegation (keyHash : ByteArray) (poolId : ByteArray) -- 2
+  | poolRegistration (params : FullPoolParams)         -- 3
+  | poolRetirement (poolId : ByteArray) (epoch : Nat) -- 4
+  -- Conway (types 7-15)
+  | conwayRegistration (keyHash : ByteArray) (deposit : Nat)         -- 7
+  | conwayDeregistration (keyHash : ByteArray) (refund : Nat)        -- 8
+  | voteDelegation (keyHash : ByteArray) (drep : DRepCredential)     -- 9
+  | stakeVoteDelegation (keyHash : ByteArray) (poolId : ByteArray)
+      (drep : DRepCredential)                                         -- 10
+  | stakeRegDelegation (keyHash : ByteArray) (poolId : ByteArray)
+      (deposit : Nat)                                                 -- 11
+  | voteRegDelegation (keyHash : ByteArray) (drep : DRepCredential)
+      (deposit : Nat)                                                 -- 12
+  | stakeVoteRegDelegation (keyHash : ByteArray) (poolId : ByteArray)
+      (drep : DRepCredential) (deposit : Nat)                         -- 13
+  | authCommitteeHot (coldCredHash : ByteArray)
+      (hotCredHash : ByteArray)                                       -- 14
+  | resignCommitteeCold (coldCredHash : ByteArray)                    -- 15
 
 instance : Repr Certificate where
   reprPrec
@@ -80,6 +98,15 @@ instance : Repr Certificate where
     | .stakeDelegation _ pid, _ => s!"StakeDelegation(pool={pid.size}B)"
     | .poolRegistration p, _ => s!"PoolRegistration({repr p})"
     | .poolRetirement _ e, _ => s!"PoolRetirement(epoch={e})"
+    | .conwayRegistration _ d, _ => s!"ConwayRegistration(deposit={d})"
+    | .conwayDeregistration _ r, _ => s!"ConwayDeregistration(refund={r})"
+    | .voteDelegation _ d, _ => s!"VoteDelegation({repr d})"
+    | .stakeVoteDelegation _ _ d, _ => s!"StakeVoteDelegation({repr d})"
+    | .stakeRegDelegation _ _ d, _ => s!"StakeRegDelegation(deposit={d})"
+    | .voteRegDelegation _ d _, _ => s!"VoteRegDelegation({repr d})"
+    | .stakeVoteRegDelegation _ _ d _, _ => s!"StakeVoteRegDelegation({repr d})"
+    | .authCommitteeHot _ _, _ => "AuthCommitteeHot"
+    | .resignCommitteeCold _, _ => "ResignCommitteeCold"
 
 -- ====================
 -- = Certificate      =
@@ -110,6 +137,24 @@ def applyCertificate (state : LedgerState) (cert : Certificate) : LedgerState :=
     { state with pools := state.pools.register (toPoolParams params) }
   | .poolRetirement poolId epoch =>
     { state with pools := state.pools.retire poolId epoch }
+  -- Conway certificates
+  | .conwayRegistration keyHash _ =>
+    { state with delegation := state.delegation.registerStakeKey keyHash }
+  | .conwayDeregistration keyHash _ =>
+    { state with delegation := state.delegation.deregisterStakeKey keyHash }
+  | .voteDelegation _ _ => state  -- DRep delegation tracked in governance state
+  | .stakeVoteDelegation keyHash poolId _ =>
+    { state with delegation := state.delegation.delegate keyHash poolId }
+  | .stakeRegDelegation keyHash poolId _ =>
+    let s := { state with delegation := state.delegation.registerStakeKey keyHash }
+    { s with delegation := s.delegation.delegate keyHash poolId }
+  | .voteRegDelegation keyHash _ _ =>
+    { state with delegation := state.delegation.registerStakeKey keyHash }
+  | .stakeVoteRegDelegation keyHash poolId _ _ =>
+    let s := { state with delegation := state.delegation.registerStakeKey keyHash }
+    { s with delegation := s.delegation.delegate keyHash poolId }
+  | .authCommitteeHot _ _ => state  -- Tracked in governance state
+  | .resignCommitteeCold _ => state  -- Tracked in governance state
 
 /-- Apply all certificates from a transaction to the ledger state -/
 def applyCertificates (state : LedgerState) (certs : List Certificate) : LedgerState :=
@@ -155,5 +200,23 @@ def validateCertificate (state : LedgerState) (cert : Certificate)
     let maxEpoch := state.protocolParams.epoch + 18  -- eMax from protocol params
     if epoch > maxEpoch then
       throw (.retirementTooFar epoch maxEpoch)
+  -- Conway certificates: validate stake key preconditions
+  | .conwayRegistration keyHash _ =>
+    if state.delegation.registeredStakeKeys.any (· == keyHash) then
+      throw .stakeKeyAlreadyRegistered
+  | .conwayDeregistration keyHash _ =>
+    if !state.delegation.registeredStakeKeys.any (· == keyHash) then
+      throw .stakeKeyNotRegistered
+  | .voteDelegation keyHash _ =>
+    if !state.delegation.registeredStakeKeys.any (· == keyHash) then
+      throw .stakeKeyNotRegistered
+  | .stakeVoteDelegation keyHash _ _ =>
+    if !state.delegation.registeredStakeKeys.any (· == keyHash) then
+      throw .stakeKeyNotRegistered
+  | .stakeRegDelegation _ _ _ => pure ()  -- Registration + delegation in one
+  | .voteRegDelegation _ _ _ => pure ()
+  | .stakeVoteRegDelegation _ _ _ _ => pure ()
+  | .authCommitteeHot _ _ => pure ()
+  | .resignCommitteeCold _ => pure ()
 
 end Cleanode.Ledger.Certificate

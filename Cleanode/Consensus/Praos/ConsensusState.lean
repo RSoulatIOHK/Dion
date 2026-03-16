@@ -1,6 +1,7 @@
 import Cleanode.Config.Genesis
 import Cleanode.Consensus.Praos.LeaderElection
 import Cleanode.Crypto.Hash.Sha512
+import Cleanode.Network.Crypto
 
 /-!
 # Consensus State
@@ -91,23 +92,40 @@ def slotToKESPeriod (slot : Nat) (slotsPerKESPeriod : Nat := 129600) : Nat :=
 def needsEpochTransition (state : ConsensusState) (slot : Nat) : Bool :=
   slotToEpoch state slot > state.currentEpoch
 
-/-- Pure SHA-512-based hash for nonce evolution.
-    evolvingNonce = SHA-512(evolvingNonce || vrfOutput) truncated to 32 bytes.
-    In production this should use Blake2b-256 via FFI; this pure version
-    ensures determinism without IO. -/
-private def hashNonce (a b : ByteArray) : ByteArray :=
+/-- Hash two byte arrays using Blake2b-256 for nonce evolution.
+    Per Praos spec, all nonce hashing uses Blake2b-256. -/
+private def hashNonceIO (a b : ByteArray) : IO ByteArray :=
+  Cleanode.Network.Crypto.blake2b_256 (a ++ b)
+
+/-- Pure SHA-512 fallback for nonce hashing (used only when IO is unavailable). -/
+private def hashNoncePure (a b : ByteArray) : ByteArray :=
   let input := a.toList ++ b.toList
   let hashOutput := Internal.hashMessage input
   let hashBytes := hashOutput.flatMap Cleanode.Crypto.Integer.UInt64.toUInt8BE
   ByteArray.mk (hashBytes.take 32).toArray
 
 /-- Process epoch transition: rotate nonces and snapshots.
-    New epoch nonce = hash(prevEpochNonce || evolvingNonce) per Praos spec. -/
+    New epoch nonce = Blake2b-256(prevEpochNonce || evolvingNonce) per Praos spec. -/
+def processEpochTransitionIO (state : ConsensusState) (newEpoch : Nat)
+    (newSnapshot : StakeSnapshot) : IO ConsensusState := do
+  let newEpochNonce ←
+    if state.evolvingNonce.size > 0 then
+      hashNonceIO state.epochNonce state.evolvingNonce
+    else pure state.epochNonce
+  return { state with
+    prevEpochNonce := state.epochNonce
+    epochNonce := newEpochNonce
+    evolvingNonce := ByteArray.mk #[]
+    stakeSnapshot := newSnapshot
+    currentEpoch := newEpoch
+    epochFirstSlot := newEpoch * state.epochLength }
+
+/-- Pure version for backward compatibility (uses SHA-512 fallback) -/
 def processEpochTransition (state : ConsensusState) (newEpoch : Nat)
     (newSnapshot : StakeSnapshot) : ConsensusState :=
   let newEpochNonce :=
     if state.evolvingNonce.size > 0 then
-      hashNonce state.epochNonce state.evolvingNonce
+      hashNoncePure state.epochNonce state.evolvingNonce
     else state.epochNonce
   { state with
     prevEpochNonce := state.epochNonce
@@ -117,14 +135,22 @@ def processEpochTransition (state : ConsensusState) (newEpoch : Nat)
     currentEpoch := newEpoch
     epochFirstSlot := newEpoch * state.epochLength }
 
-/-- Update the evolving nonce with a new block's VRF output.
-    evolvingNonce' = hash(evolvingNonce || vrfOutput) -/
+/-- Update the evolving nonce with a new block's VRF output using Blake2b-256.
+    evolvingNonce' = Blake2b-256(evolvingNonce || vrfOutput) -/
+def updateEvolvingNonceIO (state : ConsensusState) (vrfOutput : ByteArray) : IO ConsensusState := do
+  let zeroNonce := ByteArray.mk #[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                                    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+  let base := if state.evolvingNonce.size == 0 then zeroNonce else state.evolvingNonce
+  let newNonce ← hashNonceIO base vrfOutput
+  return { state with evolvingNonce := newNonce }
+
+/-- Pure version for backward compatibility -/
 def updateEvolvingNonce (state : ConsensusState) (vrfOutput : ByteArray) : ConsensusState :=
   let newNonce := if state.evolvingNonce.size == 0 then
-    hashNonce (ByteArray.mk #[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    hashNoncePure (ByteArray.mk #[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
                                0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]) vrfOutput
   else
-    hashNonce state.evolvingNonce vrfOutput
+    hashNoncePure state.evolvingNonce vrfOutput
   { state with evolvingNonce := newNonce }
 
 /-- Look up a pool's stake in the current snapshot -/
@@ -132,5 +158,60 @@ def getPoolStake (state : ConsensusState) (poolId : ByteArray) : Nat :=
   match state.stakeSnapshot.poolStakes.find? (fun (pid, _) => pid == poolId) with
   | some (_, stake) => stake
   | none => 0
+
+-- ====================
+-- = Persistence      =
+-- ====================
+
+/-- Hex encoding helper -/
+private def bytesToHex (bs : ByteArray) : String :=
+  let hexChars := "0123456789abcdef"
+  bs.foldl (init := "") fun acc b =>
+    acc ++ ⟨[hexChars.get ⟨b.toNat / 16⟩, hexChars.get ⟨b.toNat % 16⟩]⟩
+
+/-- Hex decoding helper -/
+private def hexToBytes (s : String) : Option ByteArray := do
+  let chars := s.toList
+  if chars.length % 2 != 0 then none
+  let mut result := ByteArray.emptyWithCapacity (chars.length / 2)
+  let mut i := 0
+  while h : i + 1 < chars.length do
+    let hi ← hexNibble chars[i]
+    let lo ← hexNibble chars[i + 1]
+    result := result.push (hi * 16 + lo)
+    i := i + 2
+  some result
+where
+  hexNibble (c : Char) : Option UInt8 :=
+    if c >= '0' && c <= '9' then some (c.toNat - '0'.toNat).toUInt8
+    else if c >= 'a' && c <= 'f' then some (c.toNat - 'a'.toNat + 10).toUInt8
+    else if c >= 'A' && c <= 'F' then some (c.toNat - 'A'.toNat + 10).toUInt8
+    else none
+
+/-- Save consensus nonce state to a file for persistence across restarts.
+    Format: epoch epochNonce(hex) evolvingNonce(hex) -/
+def saveConsensusState (state : ConsensusState) (path : String := "data/consensus.state") : IO Unit := do
+  let content := s!"{state.currentEpoch} {bytesToHex state.epochNonce} {bytesToHex state.evolvingNonce}"
+  IO.FS.writeFile path content
+
+/-- Load consensus nonce state from file. Returns (epoch, epochNonce, evolvingNonce). -/
+def loadConsensusState (path : String := "data/consensus.state") : IO (Option (Nat × ByteArray × ByteArray)) := do
+  try
+    let content ← IO.FS.readFile path
+    let parts := content.trim.splitOn " "
+    match parts with
+    | [epochStr, nonceHex, evolvingHex] => do
+      let epoch ← match epochStr.toNat? with
+        | some n => pure n
+        | none => return none
+      let nonce ← match hexToBytes nonceHex with
+        | some bs => pure bs
+        | none => return none
+      let evolving ← match hexToBytes evolvingHex with
+        | some bs => pure bs
+        | none => return none
+      return some (epoch, nonce, evolving)
+    | _ => return none
+  catch _ => return none
 
 end Cleanode.Consensus.Praos.ConsensusState

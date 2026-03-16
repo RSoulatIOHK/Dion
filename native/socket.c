@@ -10,6 +10,8 @@
 #include <string.h>
 #include <errno.h>
 
+#include <signal.h>
+
 #ifdef _WIN32
   #include <winsock2.h>
   #include <ws2tcpip.h>
@@ -41,6 +43,13 @@
   #define CLOSESOCKET close
   static void ensure_wsa_init(void) {}
   static const char* sock_strerror(void) { return strerror(errno); }
+  static int sigpipe_ignored = 0;
+  static void ensure_sigpipe_ignored(void) {
+      if (!sigpipe_ignored) {
+          signal(SIGPIPE, SIG_IGN);
+          sigpipe_ignored = 1;
+      }
+  }
 #endif
 
 #include <lean/lean.h>
@@ -173,6 +182,9 @@ lean_obj_res cleanode_socket_connect(lean_obj_arg host_obj, uint16_t port, lean_
  * cleanode_socket_send : Socket -> ByteArray -> IO (Except SocketError Unit)
  */
 lean_obj_res cleanode_socket_send(lean_obj_arg sock_obj, lean_obj_arg data_obj, lean_obj_arg world) {
+#ifndef _WIN32
+    ensure_sigpipe_ignored();
+#endif
     int sockfd = (int)socket_get_fd(sock_obj);
 
     size_t len = lean_sarray_size(data_obj);

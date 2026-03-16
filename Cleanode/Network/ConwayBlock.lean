@@ -102,11 +102,26 @@ structure Redeemer where
 instance : Repr Redeemer where
   reprPrec r _ := s!"Redeemer({repr r.tag}, idx={r.index}, data={r.data.size}B, mem={r.exUnits.mem}, steps={r.exUnits.steps})"
 
+/-- VKey witness: Ed25519 public key + signature over the tx hash -/
+structure VKeyWitness where
+  vkey : ByteArray       -- Ed25519 public key (32 bytes)
+  signature : ByteArray  -- Ed25519 signature (64 bytes)
+
+instance : Repr VKeyWitness where
+  reprPrec w _ := s!"VKeyWitness(vkey={w.vkey.size}B, sig={w.signature.size}B)"
+
 /-- Witness set containing signatures, scripts, and redeemers -/
 structure WitnessSet where
-  redeemers : List Redeemer
-  -- We could add more fields here: vkey_witnesses, scripts, datums, etc.
-  deriving Repr
+  vkeyWitnesses : List VKeyWitness := []  -- Key 0
+  nativeScripts : List ByteArray := []     -- Key 1 (raw CBOR per script)
+  bootstrapWitnesses : List ByteArray := [] -- Key 3 (raw CBOR per witness)
+  plutusV1Scripts : List ByteArray := []   -- Key 4 (raw script bytes)
+  redeemers : List Redeemer                -- Key 5
+  plutusV2Scripts : List ByteArray := []   -- Key 6 (raw script bytes)
+  plutusV3Scripts : List ByteArray := []   -- Key 7 (raw script bytes)
+
+instance : Repr WitnessSet where
+  reprPrec w _ := s!"WitnessSet(vkeys={w.vkeyWitnesses.length}, native={w.nativeScripts.length}, redeemers={w.redeemers.length}, plutus={w.plutusV1Scripts.length + w.plutusV2Scripts.length + w.plutusV3Scripts.length})"
 
 /-- Raw certificate parsed from block CBOR.
     Kept lightweight to avoid circular dependencies with Ledger.Certificate.
@@ -131,10 +146,25 @@ instance : Repr RawCertificate where
     | .unknown t, _ => s!"UnknownCert({t})"
 
 structure TransactionBody where
-  inputs : List TxInput
-  outputs : List TxOutput
-  fee : Nat
-  certificates : List RawCertificate
+  inputs : List TxInput                            -- Key 0
+  outputs : List TxOutput                          -- Key 1
+  fee : Nat                                        -- Key 2
+  ttl : Option Nat := none                         -- Key 3: time-to-live (upper slot bound)
+  certificates : List RawCertificate               -- Key 4
+  withdrawals : List (ByteArray × Nat) := []       -- Key 5: reward_account → lovelace
+  auxiliaryDataHash : Option ByteArray := none      -- Key 7
+  validityIntervalStart : Option Nat := none        -- Key 8: lower slot bound
+  mint : List NativeAsset := []                     -- Key 9: minting/burning
+  scriptDataHash : Option ByteArray := none         -- Key 10
+  collateralInputs : List TxInput := []             -- Key 11
+  requiredSigners : List ByteArray := []            -- Key 13
+  collateralReturn : Option TxOutput := none        -- Key 15
+  totalCollateral : Option Nat := none              -- Key 16
+  referenceInputs : List TxInput := []              -- Key 17
+  votingProcedures : Option ByteArray := none       -- Key 18 (raw CBOR)
+  proposalProcedures : Option ByteArray := none     -- Key 19 (raw CBOR)
+  currentTreasuryValue : Option Nat := none         -- Key 20
+  donation : Option Nat := none                     -- Key 21
   rawBytes : ByteArray  -- Raw CBOR bytes for computing TxId
 
 instance : Repr TransactionBody where
@@ -325,32 +355,126 @@ partial def parseRedeemersC (c : Cursor) : Option (CResult (List Redeemer)) := d
 
   parseLoop r1.cursor [] count
 
-/-- Parse witness set from CBOR map -/
+/-- Parse a single VKey witness: [vkey(32B), sig(64B)] -/
+partial def parseVKeyWitnessC (c : Cursor) : Option (CResult VKeyWitness) := do
+  let r1 ← CborCursor.decodeArrayHeader c
+  if r1.value != 2 then none
+  let vkeyR ← CborCursor.decodeBytes r1.cursor
+  let sigR ← CborCursor.decodeBytes vkeyR.cursor
+  some { value := { vkey := vkeyR.value, signature := sigR.value }, cursor := sigR.cursor }
+
+/-- Parse array of VKey witnesses -/
+partial def parseVKeyWitnessesC (c : Cursor) : Option (CResult (List VKeyWitness)) := do
+  let r1 ← CborCursor.decodeArrayHeader c
+  let count := r1.value
+  let rec go (cur : Cursor) (acc : List VKeyWitness) (n : Nat) : Option (CResult (List VKeyWitness)) :=
+    if n == 0 then some { value := acc.reverse, cursor := cur }
+    else match parseVKeyWitnessC cur with
+      | some r => go r.cursor (r.value :: acc) (n - 1)
+      | none => none
+  go r1.cursor [] count
+
+/-- Parse an array of raw CBOR items (each item stored as raw bytes) -/
+partial def parseRawArrayC (c : Cursor) : Option (CResult (List ByteArray)) := do
+  let r1 ← CborCursor.decodeArrayHeader c
+  let mut cur := r1.cursor
+  let mut items : List ByteArray := []
+  for _ in [0:r1.value] do
+    let start := cur
+    match skipValue cur with
+    | some after => do
+        items := extractBetween start after :: items
+        cur := after
+    | none => break
+  some { value := items.reverse, cursor := cur }
+
+/-- Parse witness set from CBOR map — handles all witness keys 0-7 -/
 partial def parseWitnessSetC (c : Cursor) : Option (CResult WitnessSet) := do
   let r1 ← CborCursor.decodeMapHeader c
   let mapSize := r1.value
 
-  let rec parseMapEntries (cur : Cursor) (redeemers : List Redeemer) (n : Nat) : Option (CResult (List Redeemer)) :=
-    if n == 0 then some { value := redeemers, cursor := cur }
-    else match CborCursor.decodeUInt cur with
-      | some keyResult =>
-          if keyResult.value == 5 then
-            match parseRedeemersC keyResult.cursor with
-            | some redResult =>
-                -- Skip past the redeemers value to advance cursor
-                match skipValue keyResult.cursor with
-                | some afterValue => parseMapEntries afterValue redResult.value (n - 1)
-                | none => none
-            | none => none
-          else
-            match skipValue keyResult.cursor with
-            | some afterValue => parseMapEntries afterValue redeemers (n - 1)
-            | none => none
-      | none => none
+  let mut cur := r1.cursor
+  let mut vkeys : List VKeyWitness := []
+  let mut nativeScripts : List ByteArray := []
+  let mut bootstrapWits : List ByteArray := []
+  let mut plutusV1 : List ByteArray := []
+  let mut redeemers : List Redeemer := []
+  let mut plutusV2 : List ByteArray := []
+  let mut plutusV3 : List ByteArray := []
 
-  match parseMapEntries r1.cursor [] mapSize with
-  | some r => some { value := { redeemers := r.value }, cursor := r.cursor }
-  | none => none
+  for _ in [0:mapSize] do
+    match CborCursor.decodeUInt cur with
+    | none => break
+    | some keyResult => do
+        let key := keyResult.value
+        cur := keyResult.cursor
+        match key with
+        | 0 => do  -- vkey_witnesses
+            match parseVKeyWitnessesC cur with
+            | some vkR => do
+                vkeys := vkR.value
+                -- Advance past the value using skipValue on original position
+                match skipValue cur with
+                | some after => cur := after
+                | none => break
+            | none =>
+                match skipValue cur with
+                | some after => cur := after
+                | none => break
+        | 1 => do  -- native_scripts
+            match parseRawArrayC cur with
+            | some r => do nativeScripts := r.value; cur := r.cursor
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+        | 3 => do  -- bootstrap_witnesses
+            match parseRawArrayC cur with
+            | some r => do bootstrapWits := r.value; cur := r.cursor
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+        | 4 => do  -- plutus_v1_scripts
+            match parseRawArrayC cur with
+            | some r => do plutusV1 := r.value; cur := r.cursor
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+        | 5 => do  -- redeemers
+            match parseRedeemersC cur with
+            | some redR => do
+                redeemers := redR.value
+                match skipValue cur with
+                | some after => cur := after
+                | none => break
+            | none =>
+                match skipValue cur with
+                | some after => cur := after
+                | none => break
+        | 6 => do  -- plutus_v2_scripts
+            match parseRawArrayC cur with
+            | some r => do plutusV2 := r.value; cur := r.cursor
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+        | 7 => do  -- plutus_v3_scripts
+            match parseRawArrayC cur with
+            | some r => do plutusV3 := r.value; cur := r.cursor
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+        | _ => do
+            match skipValue cur with
+            | some after => cur := after
+            | none => break
+
+  some {
+    value := {
+      vkeyWitnesses := vkeys, nativeScripts, bootstrapWitnesses := bootstrapWits,
+      plutusV1Scripts := plutusV1, redeemers,
+      plutusV2Scripts := plutusV2, plutusV3Scripts := plutusV3
+    },
+    cursor := cur
+  }
 
 /-- Parse a single certificate from CBOR array [certType, ...params].
     Shelley-era types 0-4 are parsed; Conway types 5+ are returned as `unknown`. -/
@@ -425,7 +549,22 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
   let mut inputs : List TxInput := []
   let mut outputs : List TxOutput := []
   let mut fee : Nat := 0
+  let mut ttl : Option Nat := none
   let mut certs : List RawCertificate := []
+  let mut withdrawals : List (ByteArray × Nat) := []
+  let mut auxDataHash : Option ByteArray := none
+  let mut validityStart : Option Nat := none
+  let mut mint : List NativeAsset := []
+  let mut scriptDataHash : Option ByteArray := none
+  let mut collateralInputs : List TxInput := []
+  let mut requiredSigners : List ByteArray := []
+  let mut collateralReturn : Option TxOutput := none
+  let mut totalCollateral : Option Nat := none
+  let mut referenceInputs : List TxInput := []
+  let mut votingProcs : Option ByteArray := none
+  let mut proposalProcs : Option ByteArray := none
+  let mut treasuryVal : Option Nat := none
+  let mut donation : Option Nat := none
 
   for _ in [0:mapSize] do
     match CborCursor.decodeUInt cur with
@@ -466,6 +605,14 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
             | some feeResult => do
                 fee := feeResult.value
                 cur := feeResult.cursor
+        | 3 => do  -- TTL
+            match CborCursor.decodeUInt cur with
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+            | some ttlResult => do
+                ttl := some ttlResult.value
+                cur := ttlResult.cursor
         | 4 => do  -- Certificates array (may be wrapped in tag 258)
             let afterTag := match CborCursor.skipTag cur with
               | some tagResult => tagResult.cursor
@@ -477,13 +624,172 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
                 for _ in [0:arrResult.value] do
                   match parseCertificateC cur with
                   | none =>
-                      -- If cert parsing fails, skip the value and continue
                       match skipValue cur with
                       | some after => cur := after
                       | none => break
                   | some certResult => do
                       certs := certResult.value :: certs
                       cur := certResult.cursor
+        | 5 => do  -- Withdrawals map: {reward_account => lovelace}
+            match CborCursor.decodeMapHeader cur with
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+            | some mapR => do
+                cur := mapR.cursor
+                for _ in [0:mapR.value] do
+                  match CborCursor.decodeBytes cur with
+                  | none => break
+                  | some addrR =>
+                      match CborCursor.decodeUInt addrR.cursor with
+                      | none => break
+                      | some amtR => do
+                          withdrawals := (addrR.value, amtR.value) :: withdrawals
+                          cur := amtR.cursor
+        | 7 => do  -- Auxiliary data hash
+            match CborCursor.decodeBytes cur with
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+            | some hashR => do
+                auxDataHash := some hashR.value
+                cur := hashR.cursor
+        | 8 => do  -- Validity interval start
+            match CborCursor.decodeUInt cur with
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+            | some startResult => do
+                validityStart := some startResult.value
+                cur := startResult.cursor
+        | 9 => do  -- Mint: {policy_id => {asset_name => int}}
+            match CborCursor.decodeMapHeader cur with
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+            | some policyMapR => do
+                cur := policyMapR.cursor
+                for _ in [0:policyMapR.value] do
+                  match CborCursor.decodeBytes cur with
+                  | none => break
+                  | some policyR =>
+                      match CborCursor.decodeMapHeader policyR.cursor with
+                      | none => break
+                      | some assetMapR => do
+                          cur := assetMapR.cursor
+                          for _ in [0:assetMapR.value] do
+                            match CborCursor.decodeBytes cur with
+                            | none => break
+                            | some nameR =>
+                                match CborCursor.decodeUInt nameR.cursor with
+                                | none => match skipValue nameR.cursor with
+                                    | some after => cur := after
+                                    | none => break
+                                | some amtR => do
+                                    mint := { policyId := policyR.value, assetName := nameR.value, amount := amtR.value } :: mint
+                                    cur := amtR.cursor
+        | 10 => do  -- Script data hash
+            match CborCursor.decodeBytes cur with
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+            | some hashR => do
+                scriptDataHash := some hashR.value
+                cur := hashR.cursor
+        | 11 => do  -- Collateral inputs (may be wrapped in tag 258)
+            let afterTag := match CborCursor.skipTag cur with
+              | some tagResult => tagResult.cursor
+              | none => cur
+            match CborCursor.decodeArrayHeader afterTag with
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+            | some arrResult => do
+                cur := arrResult.cursor
+                for _ in [0:arrResult.value] do
+                  match parseTxInputC cur with
+                  | none => break
+                  | some inputResult => do
+                      collateralInputs := inputResult.value :: collateralInputs
+                      cur := inputResult.cursor
+        | 13 => do  -- Required signers (may be wrapped in tag 258)
+            let afterTag := match CborCursor.skipTag cur with
+              | some tagResult => tagResult.cursor
+              | none => cur
+            match CborCursor.decodeArrayHeader afterTag with
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+            | some arrResult => do
+                cur := arrResult.cursor
+                for _ in [0:arrResult.value] do
+                  match CborCursor.decodeBytes cur with
+                  | none => break
+                  | some hashR => do
+                      requiredSigners := hashR.value :: requiredSigners
+                      cur := hashR.cursor
+        | 15 => do  -- Collateral return output
+            match parseTxOutputC cur with
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+            | some outResult => do
+                collateralReturn := some outResult.value
+                cur := outResult.cursor
+        | 16 => do  -- Total collateral
+            match CborCursor.decodeUInt cur with
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+            | some colR => do
+                totalCollateral := some colR.value
+                cur := colR.cursor
+        | 17 => do  -- Reference inputs (may be wrapped in tag 258)
+            let afterTag := match CborCursor.skipTag cur with
+              | some tagResult => tagResult.cursor
+              | none => cur
+            match CborCursor.decodeArrayHeader afterTag with
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+            | some arrResult => do
+                cur := arrResult.cursor
+                for _ in [0:arrResult.value] do
+                  match parseTxInputC cur with
+                  | none => break
+                  | some inputResult => do
+                      referenceInputs := inputResult.value :: referenceInputs
+                      cur := inputResult.cursor
+        | 18 => do  -- Voting procedures (store raw CBOR)
+            let start := cur
+            match skipValue cur with
+            | none => break
+            | some after => do
+                votingProcs := some (extractBetween start after)
+                cur := after
+        | 19 => do  -- Proposal procedures (store raw CBOR)
+            let start := cur
+            match skipValue cur with
+            | none => break
+            | some after => do
+                proposalProcs := some (extractBetween start after)
+                cur := after
+        | 20 => do  -- Current treasury value
+            match CborCursor.decodeUInt cur with
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+            | some tR => do
+                treasuryVal := some tR.value
+                cur := tR.cursor
+        | 21 => do  -- Donation
+            match CborCursor.decodeUInt cur with
+            | none => match skipValue cur with
+                | some after => cur := after
+                | none => break
+            | some dR => do
+                donation := some dR.value
+                cur := dR.cursor
         | _ => do
             match skipValue cur with
             | none => break
@@ -492,7 +798,18 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
   let rawBytes := extractBetween bodyStart cur
 
   some {
-    value := { inputs := inputs.reverse, outputs := outputs.reverse, fee, certificates := certs.reverse, rawBytes },
+    value := {
+      inputs := inputs.reverse, outputs := outputs.reverse, fee, ttl,
+      certificates := certs.reverse, withdrawals := withdrawals.reverse,
+      auxiliaryDataHash := auxDataHash, validityIntervalStart := validityStart,
+      mint := mint.reverse, scriptDataHash,
+      collateralInputs := collateralInputs.reverse,
+      requiredSigners := requiredSigners.reverse,
+      collateralReturn, totalCollateral,
+      referenceInputs := referenceInputs.reverse,
+      votingProcedures := votingProcs, proposalProcedures := proposalProcs,
+      currentTreasuryValue := treasuryVal, donation, rawBytes
+    },
     cursor := cur
   }
 
@@ -693,5 +1010,65 @@ partial def parseConwayBlockBody (bs : ByteArray) : Option ConwayBlockBody := do
 -- The old ByteArray-based API functions are kept for files that still
 -- import ConwayBlock types but don't call parse functions directly.
 -- The old Cbor.lean decode functions remain available via `open Cleanode.Network.Cbor`.
+
+-- ==========================
+-- = Tx CBOR Splitter       =
+-- ==========================
+
+/-- Components of a raw transaction CBOR, split for block body encoding.
+    A Conway tx is `[body, witnesses, isValid, auxData/null]`. -/
+structure TxComponents where
+  bodyRawBytes     : ByteArray   -- Raw CBOR of tx body (for tx_bodies array)
+  witnessRawBytes  : ByteArray   -- Raw CBOR of witness set (for witness_sets array)
+  auxDataRawBytes  : Option ByteArray  -- Raw CBOR of auxiliary data (if present, not null)
+  isValid          : Bool        -- true if tx is valid (field 2)
+
+/-- Split a raw transaction CBOR into its constituent parts.
+    tx = [body, witness_set, is_valid, auxiliary_data / null]
+    Returns none if the CBOR doesn't parse as a 4-element array. -/
+partial def splitTxCbor (rawTx : ByteArray) : Option TxComponents := do
+  let c0 := Cursor.mk' rawTx
+  let r1 ← CborCursor.decodeArrayHeader c0
+  if r1.value < 3 then none  -- Need at least body, witnesses, isValid
+
+  -- Element 0: tx body
+  let bodyStart := r1.cursor
+  let afterBody ← skipValue bodyStart
+  let bodyBytes := extractBetween bodyStart afterBody
+
+  -- Element 1: witness set
+  let witnessStart := afterBody
+  let afterWitness ← skipValue witnessStart
+  let witnessBytes := extractBetween witnessStart afterWitness
+
+  -- Element 2: isValid (CBOR bool: 0xf5=true, 0xf4=false; or uint 1/0)
+  let (valid, afterValid) ←
+    if afterWitness.remaining > 0 then
+      let b := afterWitness.peek
+      if b == 0xf5 then      -- CBOR true
+        some (true, afterWitness.advance 1)
+      else if b == 0xf4 then -- CBOR false
+        some (false, afterWitness.advance 1)
+      else
+        match CborCursor.decodeUInt afterWitness with
+        | some uintResult => some (uintResult.value != 0, uintResult.cursor)
+        | none => none
+    else none
+
+  -- Element 3: auxiliary data (may be null = 0xf6, or actual data)
+  let auxData ←
+    if r1.value >= 4 then do
+      let auxStart := afterValid
+      -- Check for CBOR null (simple value 22 = 0xf6)
+      if auxStart.remaining > 0 && auxStart.peek == 0xf6 then
+        some none  -- null auxiliary data
+      else
+        let afterAux ← skipValue auxStart
+        some (some (extractBetween auxStart afterAux))
+    else
+      some none
+
+  some { bodyRawBytes := bodyBytes, witnessRawBytes := witnessBytes,
+         auxDataRawBytes := auxData, isValid := valid }
 
 end Cleanode.Network.ConwayBlock

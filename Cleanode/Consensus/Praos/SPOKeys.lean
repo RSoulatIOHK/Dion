@@ -64,7 +64,7 @@ def SPOKeyPaths.default (keyDir : String) : SPOKeyPaths :=
 def loadSPOKeys (paths : SPOKeyPaths) : IO (Except String ForgeParams) := do
   -- Load VRF signing key (returns seed + public key)
   let vrfResult ← loadVrfSigningKey paths.vrfSigningKey
-  let (vrfSeed, _vrfPub) ← match vrfResult with
+  let (vrfSeed, vrfPub) ← match vrfResult with
     | .ok r => pure r
     | .error e => return .error s!"VRF signing key: {e}"
 
@@ -99,7 +99,7 @@ def loadSPOKeys (paths : SPOKeyPaths) : IO (Except String ForgeParams) := do
   -- Build ForgeParams
   return .ok {
     vrfSecretKey := vrfSeed.toList.map (·)
-    vrfPublicKey := []  -- Will be derived from secret key during VRF prove
+    vrfPublicKey := vrfPub.toList.map (·)
     kesSigningKey := kesBytes.toList.map (·)
     operationalCert := opCert
     poolId := poolId

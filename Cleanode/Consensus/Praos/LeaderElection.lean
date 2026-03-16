@@ -51,12 +51,18 @@ inductive LeaderCheckResult where
 -- = VRF Input        =
 -- ====================
 
-/-- Construct the VRF input for a given slot and epoch nonce.
-    vrfInput = epochNonce ++ slotNumber (as 8 bytes big-endian) -/
-def vrfInput (epochNonce : ByteArray) (slot : Nat) : List UInt8 :=
+/-- Construct VRF input with domain separator per Praos spec.
+    Leader VRF:  epochNonce || 0x4C || slotBytes (8 bytes big-endian)
+    Nonce VRF:   epochNonce || 0x4E || slotBytes (8 bytes big-endian)
+    `domainSep` is 0x4C for leader election, 0x4E for nonce contribution. -/
+def vrfInput (epochNonce : ByteArray) (slot : Nat) (domainSep : UInt8 := 0x4C) : List UInt8 :=
   let slotBytes := List.range 8 |>.reverse |>.map fun i =>
     ((slot >>> (i * 8)) % 256).toUInt8
-  epochNonce.toList ++ slotBytes
+  epochNonce.toList ++ [domainSep] ++ slotBytes
+
+/-- VRF input for nonce contribution (domain separator 0x4E) -/
+def vrfInputNonce (epochNonce : ByteArray) (slot : Nat) : List UInt8 :=
+  vrfInput epochNonce slot 0x4E
 
 -- ====================
 -- = Threshold        =

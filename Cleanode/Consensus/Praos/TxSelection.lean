@@ -1,4 +1,5 @@
 import Cleanode.Network.Mempool
+import Cleanode.Network.ConwayBlock
 import Cleanode.Ledger.State
 
 /-!
@@ -28,7 +29,10 @@ open Cleanode.Ledger.State
 /-- A selected transaction with its metadata -/
 structure SelectedTx where
   txHash : ByteArray
-  rawBytes : ByteArray
+  rawBytes : ByteArray           -- Full raw tx CBOR (for relay/hashing)
+  bodyRawBytes : ByteArray       -- Raw CBOR of tx body only (for block body encoding)
+  witnessRawBytes : ByteArray    -- Raw CBOR of witness set only (for block body encoding)
+  auxDataRawBytes : Option ByteArray  -- Raw CBOR of auxiliary data (if present)
   fee : Nat
   size : Nat
 
@@ -65,9 +69,17 @@ def selectTransactions (mempool : Mempool) (maxBodySize : Nat)
       (acc, curSize, curFees)  -- Skip: doesn't fit
     else
       let fee := entry.transaction.body.fee
+      -- Split raw tx CBOR into body/witness/auxdata components
+      let (bodyBytes, witnessBytes, auxBytes) :=
+        match Cleanode.Network.ConwayBlock.splitTxCbor entry.rawBytes with
+        | some components => (components.bodyRawBytes, components.witnessRawBytes, components.auxDataRawBytes)
+        | none => (entry.rawBytes, Cleanode.Network.Cbor.encodeMapHeader 0, none)  -- fallback
       let tx : SelectedTx := {
         txHash := entry.txHash
         rawBytes := entry.rawBytes
+        bodyRawBytes := bodyBytes
+        witnessRawBytes := witnessBytes
+        auxDataRawBytes := auxBytes
         fee := fee
         size := entry.size
       }

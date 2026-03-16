@@ -265,8 +265,8 @@ def handleBlockFetchRequest (registryRef : IO.Ref PeerRegistry)
   else
     let _ ← sendBlockFetchResponder sock .MsgStartBatch
     for block in blocks do
-      -- Send the full block (header + body) as a CBOR-wrapped bytestring
-      let fullBlock := block.headerBytes ++ block.bodyBytes
+      -- Send the full block as a proper 5-element CBOR array
+      let fullBlock := block.encodeFullBlock
       let _ ← sendBlockFetchResponder sock (.MsgBlock fullBlock)
     let _ ← sendBlockFetchResponder sock .MsgBatchDone
 

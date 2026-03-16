@@ -255,6 +255,11 @@ inductive ShelleyQuery where
   | GetCurrentPParams     -- tag 3: protocol parameters
   | GetStakeDistribution  -- tag 5: pool stake distribution
   | GetUTxOByAddress      -- tag 6: UTxOs for addresses [6, addrs]
+  | GetUTxOByTxIn         -- tag 15: UTxOs for specific TxIns [15, txins]
+  | GetStakePools         -- tag 16: set of registered pool IDs
+  | GetStakePoolParams    -- tag 17: pool parameters by pool ID
+  | GetDRepState          -- tag 25: DRep state (Conway governance)
+  | GetAccountState       -- tag 29: treasury + reserves
   | Unknown (tag : Nat)
   deriving Repr
 
@@ -272,23 +277,34 @@ partial def decodeShelleyQuery (bs : ByteArray) : Option (ShelleyQuery × ByteAr
   | 3 => some (.GetCurrentPParams, r2.remaining)
   | 5 => some (.GetStakeDistribution, r2.remaining)
   | 6 => some (.GetUTxOByAddress, r2.remaining)
+  | 15 => some (.GetUTxOByTxIn, r2.remaining)
+  | 16 => some (.GetStakePools, r2.remaining)
+  | 17 => some (.GetStakePoolParams, r2.remaining)
+  | 25 => some (.GetDRepState, r2.remaining)
+  | 29 => some (.GetAccountState, r2.remaining)
   | n => some (.Unknown n, r2.remaining)
 
 /-- Decode address set from GetFilteredUTxO query payload.
     Format: [tag258, [addr1, addr2, ...]] or just [addr1, addr2, ...] -/
 partial def decodeAddressSet (bs : ByteArray) : Option (List ByteArray) := do
-  -- Try to decode: could be a tagged set (tag 258) or direct array
-  -- tag 258 = CBOR tag for mathematical finite set
-  let firstByte := bs[0]?
-  match firstByte with
-  | some b =>
-    if b.toNat >= 0xC6 then do  -- CBOR tag
-      -- Skip the tag, decode the array inside
-      let r1 ← decodeUInt (bs.extract 1 bs.size)  -- tag number
-      decodeAddressArray r1.remaining
-    else
-      decodeAddressArray bs
-  | none => some []
+  if bs.size == 0 then return []
+  let firstByte := bs[0]!
+  let majorType := firstByte.toNat / 32
+  if majorType == 6 then do  -- CBOR tag (major type 6)
+    -- Compute tag header size based on additional info encoding
+    -- Tag 258 encodes as 0xD9 0x01 0x02 (3 bytes: initial byte + 2-byte value)
+    let additionalInfo := firstByte.toNat % 32
+    let tagHeaderSize :=
+      if additionalInfo <= 23 then 1        -- tag value inline
+      else if additionalInfo == 24 then 2   -- 1-byte follow
+      else if additionalInfo == 25 then 3   -- 2-byte follow (e.g. tag 258)
+      else if additionalInfo == 26 then 5   -- 4-byte follow
+      else if additionalInfo == 27 then 9   -- 8-byte follow
+      else 1
+    if bs.size < tagHeaderSize then none
+    decodeAddressArray (bs.extract tagHeaderSize bs.size)
+  else
+    decodeAddressArray bs
 where
   decodeAddressArray (bs : ByteArray) : Option (List ByteArray) := do
     let r ← decodeArrayHeader bs
@@ -300,5 +316,38 @@ where
       addrs := r2.value :: addrs
       remaining := r2.remaining
     some addrs.reverse
+
+/-- Decode a TxIn set from GetUTxOByTxIn query payload.
+    Format: [tag258, [txIn1, txIn2, ...]] where txIn = [txHash, txIx] -/
+partial def decodeTxInSet (bs : ByteArray) : Option (List (ByteArray × Nat)) := do
+  if bs.size == 0 then return []
+  let firstByte := bs[0]!
+  let majorType := firstByte.toNat / 32
+  -- Skip CBOR tag if present (e.g. tag 258 for finite set)
+  let skipBytes :=
+    if majorType == 6 then
+      let additionalInfo := firstByte.toNat % 32
+      if additionalInfo <= 23 then 1
+      else if additionalInfo == 24 then 2
+      else if additionalInfo == 25 then 3
+      else if additionalInfo == 26 then 5
+      else if additionalInfo == 27 then 9
+      else 1
+    else 0
+  if bs.size < skipBytes then none
+  let inner := if skipBytes > 0 then bs.extract skipBytes bs.size else bs
+  -- Decode array of TxIns
+  let r ← decodeArrayHeader inner
+  let count := r.value
+  let mut remaining := r.remaining
+  let mut txIns : List (ByteArray × Nat) := []
+  for _ in List.range count do
+    let r2 ← decodeArrayHeader remaining
+    if r2.value != 2 then none
+    let r3 ← decodeBytes r2.remaining   -- txHash
+    let r4 ← decodeUInt r3.remaining    -- txIx
+    txIns := (r3.value, r4.value) :: txIns
+    remaining := r4.remaining
+  some txIns.reverse
 
 end Cleanode.Network.N2C.StateQueryCodec

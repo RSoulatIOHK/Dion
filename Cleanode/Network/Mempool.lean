@@ -120,7 +120,7 @@ def Mempool.addTx (pool : Mempool) (state : LedgerState)
     return .ok pool  -- Already have it, no-op
   -- Validate against ledger state
   let era := Cleanode.Network.EraTx.CardanoEra.Conway  -- Default to current era
-  match validateTransaction state tx.body tx.witnesses era with
+  match ← validateTransaction state tx.body tx.witnesses era with
   | .error e => return .error e
   | .ok () => do
       -- Check capacity

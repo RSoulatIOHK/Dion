@@ -1,3 +1,4 @@
+import Cleanode.Ledger.Value
 import Cleanode.Network.ConwayBlock
 import Cleanode.Network.Crypto
 import Std.Data.HashMap
@@ -25,6 +26,7 @@ Uses `Std.HashMap` for O(1) lookup/insert/remove instead of List.
 
 namespace Cleanode.Ledger.UTxO
 
+open Cleanode.Ledger.Value
 open Cleanode.Network.ConwayBlock
 open Cleanode.Network.Crypto
 
@@ -171,26 +173,39 @@ def validateNoDoubleSpend (inputs : List TxInput) : Except UTxOError Unit := do
     seen := seen.insert id ()
   return ()
 
-/-- Calculate total input value from the UTxO set -/
-def totalInputValue (utxo : UTxOSet) (inputs : List TxInput) : Nat :=
+/-- Calculate total input value from the UTxO set (multi-asset) -/
+def totalInputValue (utxo : UTxOSet) (inputs : List TxInput) : Value :=
   inputs.foldl (fun acc inp =>
     let id : UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
     match utxo.lookup id with
-    | some output => acc + output.amount
+    | some output => acc + Value.fromTxOutput output
     | none => acc
-  ) 0
+  ) Value.zero
 
-/-- Calculate total output value -/
-def totalOutputValue (outputs : List TxOutput) : Nat :=
-  outputs.foldl (fun acc o => acc + o.amount) 0
+/-- Calculate total output value (multi-asset) -/
+def totalOutputValue (outputs : List TxOutput) : Value :=
+  outputs.foldl (fun acc o => acc + Value.fromTxOutput o) Value.zero
 
-/-- Validate balance: inputs >= outputs + fee -/
+/-- Calculate total input lovelace (convenience for ADA-only checks) -/
+def totalInputLovelace (utxo : UTxOSet) (inputs : List TxInput) : Nat :=
+  (totalInputValue utxo inputs).lovelace
+
+/-- Calculate total output lovelace (convenience for ADA-only checks) -/
+def totalOutputLovelace (outputs : List TxOutput) : Nat :=
+  (totalOutputValue outputs).lovelace
+
+/-- Validate balance: inputs + mint + withdrawals >= outputs + fee (multi-asset).
+    For ADA: inputAda + withdrawalAda >= outputAda + fee
+    For each native asset: inputAmt + mintAmt >= outputAmt -/
 def validateBalance (utxo : UTxOSet) (body : TransactionBody) : Except UTxOError Unit := do
   let inputVal := totalInputValue utxo body.inputs
+  let mintVal := Value.fromNativeAssets body.mint
+  let withdrawalVal := Value.fromWithdrawals body.withdrawals
+  let available := inputVal + mintVal + withdrawalVal
   let outputVal := totalOutputValue body.outputs
-  let required := outputVal + body.fee
-  if inputVal < required then
-    throw (.InsufficientFunds required inputVal)
+  let required := outputVal + Value.lovelaceOnly body.fee
+  if !Value.geq available required then
+    throw (.InsufficientFunds required.lovelace available.lovelace)
   return ()
 
 /-- Full UTxO validation for a transaction -/

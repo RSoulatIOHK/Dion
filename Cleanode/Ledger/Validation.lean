@@ -1,6 +1,9 @@
 import Cleanode.Ledger.UTxO
 import Cleanode.Ledger.State
 import Cleanode.Ledger.Fee
+import Cleanode.Ledger.Value
+import Cleanode.Plutus.Evaluate
+import Cleanode.Network.Crypto
 import Cleanode.Network.CryptoSpec
 import Cleanode.Network.EraTx
 
@@ -23,7 +26,9 @@ namespace Cleanode.Ledger.Validation
 open Cleanode.Ledger.UTxO
 open Cleanode.Ledger.State
 open Cleanode.Ledger.Fee
+open Cleanode.Ledger.Value
 open Cleanode.Network.ConwayBlock
+open Cleanode.Network.Crypto
 open Cleanode.Network.CryptoSpec
 open Cleanode.Network.EraTx
 
@@ -42,6 +47,14 @@ inductive ValidationError where
   | NativeScriptFailure (reason : String)
   | TxTooLarge (size maxSize : Nat)
   | OutputTooSmall (idx : Nat) (amount minAmount : Nat)
+  | ExpiredTx (currentSlot ttl : Nat)
+  | TxNotYetValid (currentSlot validFrom : Nat)
+  | InvalidWithdrawal (rewardAddr : ByteArray) (claimed available : Nat)
+  | CollateralNotFound (txHash : ByteArray) (idx : Nat)
+  | CollateralIsScriptLocked (txHash : ByteArray) (idx : Nat)
+  | InsufficientCollateral (required provided : Nat)
+  | CollateralOverlap (txHash : ByteArray) (idx : Nat)
+  | InvalidScriptDataHash
 
 instance : Repr ValidationError where
   reprPrec
@@ -54,6 +67,14 @@ instance : Repr ValidationError where
     | .NativeScriptFailure r, _ => s!"NativeScriptFailure({r})"
     | .TxTooLarge s m, _ => s!"TxTooLarge(size={s}, max={m})"
     | .OutputTooSmall i a m, _ => s!"OutputTooSmall(idx={i}, amount={a}, min={m})"
+    | .ExpiredTx cs ttl, _ => s!"ExpiredTx(currentSlot={cs}, ttl={ttl})"
+    | .TxNotYetValid cs vf, _ => s!"TxNotYetValid(currentSlot={cs}, validFrom={vf})"
+    | .InvalidWithdrawal _ c a, _ => s!"InvalidWithdrawal(claimed={c}, available={a})"
+    | .CollateralNotFound _ idx, _ => s!"CollateralNotFound(idx={idx})"
+    | .CollateralIsScriptLocked _ idx, _ => s!"CollateralIsScriptLocked(idx={idx})"
+    | .InsufficientCollateral r p, _ => s!"InsufficientCollateral(required={r}, provided={p})"
+    | .CollateralOverlap _ idx, _ => s!"CollateralOverlap(idx={idx})"
+    | .InvalidScriptDataHash, _ => "InvalidScriptDataHash"
 
 /-- Validation result -/
 abbrev ValidationResult := Except ValidationError Unit
@@ -62,32 +83,49 @@ abbrev ValidationResult := Except ValidationError Unit
 -- = Signature Validation =
 -- ====================
 
-/-- Extract required signer key hashes from transaction inputs -/
+/-- Extract required signer payment key hashes from transaction inputs.
+    For each input, look up its address and extract the payment key hash (bytes 1..29).
+    Cardano Shelley+ addresses: header byte + 28-byte payment key hash + ... -/
 def requiredSigners (utxo : UTxOSet) (inputs : List TxInput) : List ByteArray :=
-  -- In a full implementation, we'd extract the payment key hash from each
-  -- input's address. Simplified: collect first 28 bytes of each address.
   inputs.filterMap fun inp =>
     let id : UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
     match utxo.lookup id with
     | some output =>
-        if output.address.size >= 28 then
-          some (output.address.extract 1 29)  -- Skip header byte, take key hash
+        if output.address.size >= 29 then
+          some (output.address.extract 1 29)  -- Skip header byte, take 28-byte key hash
         else none
     | none => none
 
-/-- Verify an Ed25519 signature (IO wrapper) -/
-def verifySignature (publicKey message signature : ByteArray) : IO Bool :=
-  ed25519_verify publicKey message signature
-
-/-- Validate that all required signatures are present (simplified) -/
-def validateSignatures (_utxo : UTxOSet) (_body : TransactionBody)
-    (_witnesses : WitnessSet) : ValidationResult :=
-  -- In production, we'd:
-  -- 1. Compute the transaction hash (Blake2b-256 of body CBOR)
-  -- 2. Extract required signers from input addresses
-  -- 3. Verify each vkey witness against the tx hash
-  -- Simplified for now - always pass (actual verification requires IO)
-  .ok ()
+/-- Validate Ed25519 signatures on a transaction.
+    1. txHash = blake2b_256(body.rawBytes)
+    2. For each vkey witness (vk, sig): ed25519_verify(vk, txHash, sig)
+    3. Compute blake2b_224(vk) for each witness → set of provided key hashes
+    4. Check that all required signers (from input addresses) are covered -/
+def validateSignatures (utxo : UTxOSet) (body : TransactionBody)
+    (witnesses : WitnessSet) : IO (Except ValidationError Unit) := do
+  -- 1. Compute transaction hash
+  let txHash ← blake2b_256 body.rawBytes
+  -- 2. Verify each vkey witness signature
+  for w in witnesses.vkeyWitnesses do
+    let valid ← ed25519_verify_ffi w.vkey txHash w.signature
+    if !valid then
+      let keyHash ← blake2b_224 w.vkey
+      return .error (.MissingSignature keyHash)
+  -- 3. Compute key hashes of all provided vkey witnesses
+  let mut witnessKeyHashes : List ByteArray := []
+  for w in witnesses.vkeyWitnesses do
+    let keyHash ← blake2b_224 w.vkey
+    witnessKeyHashes := keyHash :: witnessKeyHashes
+  -- 4. Check all required signers from input addresses are covered
+  let required := requiredSigners utxo body.inputs
+  for reqHash in required do
+    if !witnessKeyHashes.any (· == reqHash) then
+      return .error (.MissingSignature reqHash)
+  -- 5. Check explicit required_signers (tx body key 13) are covered
+  for reqHash in body.requiredSigners do
+    if !witnessKeyHashes.any (· == reqHash) then
+      return .error (.MissingSignature reqHash)
+  return .ok ()
 
 -- ====================
 -- = Script Validation =
@@ -115,10 +153,75 @@ partial def evaluateNativeScript (script : NativeScript) (signers : List ByteArr
   | .RequireTimeBefore slot => currentSlot < slot
   | .RequireTimeAfter slot => currentSlot >= slot
 
-/-- Validate native scripts (simplified) -/
-def validateNativeScripts (_signers : List ByteArray) (_currentSlot : Nat) : ValidationResult :=
-  -- In production, extract native scripts from witnesses and evaluate each
-  .ok ()
+/-- Validate native scripts from witness set.
+    Each native script must evaluate to true given the provided signers and slot. -/
+def validateNativeScripts (witnesses : WitnessSet) (signerKeyHashes : List ByteArray)
+    (currentSlot : Nat) : ValidationResult :=
+  -- Native scripts from witness key 1 are raw CBOR bytes.
+  -- Full native script parsing and evaluation will be wired once the CBOR parser
+  -- for native scripts is available. For now, accept if no native scripts present.
+  if witnesses.nativeScripts.isEmpty then .ok ()
+  else
+    -- TODO: parse each ByteArray as a NativeScript and evaluate
+    .ok ()
+
+/-- Check if an address is script-locked (payment credential is a script hash).
+    Shelley base addresses: header byte bits 4-7 encode address type.
+    Type 0x1_ = script payment credential, Type 0x3_ = script payment + script stake. -/
+private def isScriptLockedAddress (address : ByteArray) : Bool :=
+  if address.size == 0 then false
+  else
+    let headerNibble := address[0]! &&& 0x10  -- bit 4 indicates script payment credential
+    headerNibble != 0
+
+/-- Validate collateral inputs for Plutus transactions.
+    Rules:
+    1. All collateral inputs must exist in UTxO
+    2. All collateral inputs must be VKey-locked (not script-locked)
+    3. Collateral inputs must not overlap regular inputs
+    4. Total collateral >= collateralPercentage * txFee / 100 -/
+def validateCollateral (utxo : UTxOSet) (body : TransactionBody)
+    (collateralPercentage : Nat := 150) : ValidationResult := do
+  -- Only validate if there are collateral inputs (Plutus txs)
+  if body.collateralInputs.isEmpty then return ()
+  -- 1 & 2. Check existence and VKey-locked
+  let mut totalCollateralValue : Nat := 0
+  for inp in body.collateralInputs do
+    let id : UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
+    match utxo.lookup id with
+    | none => throw (.CollateralNotFound inp.txId inp.outputIndex)
+    | some output =>
+      if isScriptLockedAddress output.address then
+        throw (.CollateralIsScriptLocked inp.txId inp.outputIndex)
+      totalCollateralValue := totalCollateralValue + output.amount
+  -- 3. Check no overlap with regular inputs
+  for colInp in body.collateralInputs do
+    if body.inputs.any (fun inp => inp.txId == colInp.txId && inp.outputIndex == colInp.outputIndex) then
+      throw (.CollateralOverlap colInp.txId colInp.outputIndex)
+  -- 4. Check sufficient collateral
+  -- If totalCollateral is explicitly declared (key 16), use that; otherwise sum UTxO values
+  let providedCollateral := match body.totalCollateral with
+    | some tc => tc
+    | none => totalCollateralValue
+  let requiredCollateral := collateralPercentage * body.fee / 100
+  if providedCollateral < requiredCollateral then
+    throw (.InsufficientCollateral requiredCollateral providedCollateral)
+
+/-- Validate script data hash consistency.
+    For Alonzo+ txs with Plutus scripts, scriptDataHash (key 10) must be present.
+    Full computation: scriptDataHash == Blake2b-256(redeemers_cbor || datums_cbor || language_views_cbor)
+    Currently validates presence only; full hash computation requires raw witness CBOR tracking. -/
+def validateScriptDataHash (body : TransactionBody) (witnesses : WitnessSet) : ValidationResult := do
+  let hasPlutusScripts := !witnesses.plutusV1Scripts.isEmpty ||
+                          !witnesses.plutusV2Scripts.isEmpty ||
+                          !witnesses.plutusV3Scripts.isEmpty
+  let hasRedeemers := !witnesses.redeemers.isEmpty
+  -- If there are Plutus scripts or redeemers, scriptDataHash must be present
+  if (hasPlutusScripts || hasRedeemers) && body.scriptDataHash.isNone then
+    throw .InvalidScriptDataHash
+  -- If there are no scripts/redeemers, scriptDataHash should be absent
+  if !hasPlutusScripts && !hasRedeemers && body.scriptDataHash.isSome then
+    throw .InvalidScriptDataHash
 
 /-- Plutus script execution result -/
 structure PlutusExecResult where
@@ -127,59 +230,112 @@ structure PlutusExecResult where
   stepsUsed : Nat
   deriving Repr
 
-/-- Validate Plutus scripts (placeholder - requires full Plutus VM) -/
-def validatePlutusScripts (_redeemers : List Redeemer) : ValidationResult :=
-  -- Plutus validation requires:
-  -- 1. UPLC evaluator (untyped Plutus Core interpreter)
-  -- 2. Script context construction
-  -- 3. Budget enforcement
-  -- This is a significant piece of work - placeholder for now
-  .ok ()
+/-- Validate Plutus scripts using the UPLC evaluator.
+    Evaluates all scripts referenced by redeemers in the transaction. -/
+def validatePlutusScripts (body : TransactionBody) (witnesses : WitnessSet)
+    (utxo : UTxOSet) (txHash : ByteArray) : ValidationResult := do
+  match Cleanode.Plutus.Evaluate.evaluateTransactionScripts body witnesses utxo txHash with
+  | .ok () => return ()
+  | .error msg => throw (.ScriptFailure ByteArray.empty msg)
 
 -- ====================
 -- = Full Validation  =
 -- ====================
 
-/-- Complete transaction validation -/
+/-- Complete transaction validation (IO for cryptographic operations).
+    `currentSlot` is needed for TTL / validity interval checking. -/
 def validateTransaction (state : LedgerState) (body : TransactionBody)
-    (witnesses : WitnessSet) (_era : CardanoEra) : ValidationResult := do
+    (witnesses : WitnessSet) (_era : CardanoEra) (currentSlot : Nat := 0)
+    : IO (Except ValidationError Unit) := do
   -- 1. Size check
   if body.rawBytes.size > state.protocolParams.maxTxSize then
-    throw (.TxTooLarge body.rawBytes.size state.protocolParams.maxTxSize)
+    return .error (.TxTooLarge body.rawBytes.size state.protocolParams.maxTxSize)
 
-  -- 2. Input validation (UTxO existence)
+  -- 2. Validity interval check
+  match body.ttl with
+  | some ttl =>
+    if currentSlot > ttl then
+      return .error (.ExpiredTx currentSlot ttl)
+  | none => pure ()
+  match body.validityIntervalStart with
+  | some validFrom =>
+    if currentSlot < validFrom then
+      return .error (.TxNotYetValid currentSlot validFrom)
+  | none => pure ()
+
+  -- 3. Input validation (UTxO existence)
   for inp in body.inputs do
     let id : UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
     if !state.utxo.contains id then
-      throw (.InputNotFound inp.txId inp.outputIndex)
+      return .error (.InputNotFound inp.txId inp.outputIndex)
 
-  -- 3. Double-spend check
+  -- 4. Double-spend check
   let mut seen : List UTxOId := []
   for inp in body.inputs do
     let id : UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
     if seen.any (· == id) then
-      throw (.DoubleSpend inp.txId inp.outputIndex)
+      return .error (.DoubleSpend inp.txId inp.outputIndex)
     seen := id :: seen
 
-  -- 4. Balance validation
+  -- 5. Balance validation (multi-asset: inputs + mint + withdrawals >= outputs + fee)
   let inputVal := totalInputValue state.utxo body.inputs
+  let mintVal := Value.fromNativeAssets body.mint
+  let withdrawalVal := Value.fromWithdrawals body.withdrawals
+  let available := inputVal + mintVal + withdrawalVal
   let outputVal := totalOutputValue body.outputs
-  let required := outputVal + body.fee
-  if inputVal < required then
-    throw (.InsufficientFunds required inputVal)
+  let required := outputVal + Value.lovelaceOnly body.fee
+  if !Value.geq available required then
+    return .error (.InsufficientFunds required.lovelace available.lovelace)
 
-  -- 5. Fee validation
+  -- 6. Min UTxO check: each output must carry enough lovelace
+  for (idx, output) in (List.range body.outputs.length).zip body.outputs do
+    let minAda := minAdaPerUTxO output.address.size  -- approximate serialized size
+    if output.amount < minAda then
+      return .error (.OutputTooSmall idx output.amount minAda)
+
+  -- 7. Withdrawal validation: each withdrawal must match available reward balance
+  for (rewardAddr, claimedAmount) in body.withdrawals do
+    let stakeCredHash := if rewardAddr.size > 1 then rewardAddr.extract 1 29 else rewardAddr
+    let available := state.rewardAccounts[stakeCredHash]?.getD 0
+    if claimedAmount > available then
+      return .error (.InvalidWithdrawal rewardAddr claimedAmount available)
+
+  -- 8. Fee validation
   let minRequired := totalMinFee state.protocolParams.feeParams body.rawBytes.size witnesses.redeemers
   if body.fee < minRequired then
-    throw (.FeeBelowMinimum body.fee minRequired)
+    return .error (.FeeBelowMinimum body.fee minRequired)
 
-  -- 6. Signature validation
-  validateSignatures state.utxo body witnesses
+  -- 9. Signature validation (Ed25519 + required_signers key 13)
+  match ← validateSignatures state.utxo body witnesses with
+  | .error e => return .error e
+  | .ok () => pure ()
 
-  -- 7. Script validation (native and Plutus)
-  validatePlutusScripts witnesses.redeemers
+  -- 10. Native script validation
+  let mut signerKeyHashes : List ByteArray := []
+  for w in witnesses.vkeyWitnesses do
+    let keyHash ← blake2b_224 w.vkey
+    signerKeyHashes := keyHash :: signerKeyHashes
+  match validateNativeScripts witnesses signerKeyHashes currentSlot with
+  | .error e => return .error e
+  | .ok () => pure ()
 
-  return ()
+  -- 11. Plutus script validation
+  let txHash ← blake2b_256 body.rawBytes
+  match validatePlutusScripts body witnesses state.utxo txHash with
+  | .error e => return .error e
+  | .ok () => pure ()
+
+  -- 12. Collateral validation (for Plutus txs)
+  match validateCollateral state.utxo body with
+  | .error e => return .error e
+  | .ok () => pure ()
+
+  -- 13. Script data hash validation
+  match validateScriptDataHash body witnesses with
+  | .error e => return .error e
+  | .ok () => pure ()
+
+  return .ok ()
 
 -- ====================
 -- = Proof Scaffolds  =

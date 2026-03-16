@@ -3,6 +3,7 @@ import Cleanode.Network.Multiplexer
 import Cleanode.Network.ChainSync
 import Cleanode.Network.BlockFetch
 import Cleanode.Network.ConwayBlock
+import Cleanode.Network.Mempool
 
 /-!
 # BlockFetch Client Helper
@@ -17,8 +18,11 @@ open Cleanode.Network.ChainSync
 open Cleanode.Network.BlockFetch
 open Cleanode.Network.ConwayBlock
 
-/-- Fetch a single block by point -/
-def fetchBlock (sock : Socket) (point : Point) : IO (Except SocketError (Option ByteArray)) := do
+/-- Fetch a single block by point. Passes mempoolRef so TxSubmission2
+    messages arriving during BlockFetch are handled inline (not dropped). -/
+def fetchBlock (sock : Socket) (point : Point)
+    (mempoolRef : Option (IO.Ref Cleanode.Network.Mempool.Mempool) := none)
+    : IO (Except SocketError (Option ByteArray)) := do
   -- Send request
   match ← sendBlockFetch sock (.MsgRequestRange point point) with
   | .error e => do
@@ -26,7 +30,7 @@ def fetchBlock (sock : Socket) (point : Point) : IO (Except SocketError (Option 
       return .error e
   | .ok () => do
       -- Receive StartBatch or NoBlocks
-      match ← receiveBlockFetch sock ⟨#[]⟩ 65535 with
+      match ← receiveBlockFetch sock ⟨#[]⟩ 65535 mempoolRef with
       | .error e => do
           IO.println s!"[ERR] BlockFetch receive error: {e}"
           return .error e
@@ -37,14 +41,14 @@ def fetchBlock (sock : Socket) (point : Point) : IO (Except SocketError (Option 
           match result.message with
           | .MsgStartBatch => do
               -- Receive block
-              match ← receiveBlockFetch sock result.leftoverBytes 2000000 with
+              match ← receiveBlockFetch sock result.leftoverBytes 2000000 mempoolRef with
               | .error e => return .error e
               | .ok none => return .ok none
               | .ok (some blockResult) =>
                   match blockResult.message with
                   | .MsgBlock blockBytes => do
                       -- Receive BatchDone
-                      match ← receiveBlockFetch sock blockResult.leftoverBytes 65535 with
+                      match ← receiveBlockFetch sock blockResult.leftoverBytes 65535 mempoolRef with
                       | .error e => return .error e
                       | .ok (some doneResult) =>
                           match doneResult.message with

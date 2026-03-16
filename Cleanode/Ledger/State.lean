@@ -1,6 +1,8 @@
 import Cleanode.Ledger.UTxO
 import Cleanode.Ledger.Fee
+import Cleanode.Ledger.Governance
 import Cleanode.Network.EraTx
+import Std.Data.HashMap
 
 /-!
 # Ledger State
@@ -22,6 +24,7 @@ namespace Cleanode.Ledger.State
 
 open Cleanode.Ledger.UTxO
 open Cleanode.Ledger.Fee
+open Cleanode.Ledger.Governance
 open Cleanode.Network.ConwayBlock
 open Cleanode.Network.EraTx
 
@@ -208,6 +211,12 @@ structure LedgerState where
   lastSlot : Nat
   lastBlockNo : Nat
   lastBlockHash : ByteArray
+  treasury : Nat := 0
+  reserves : Nat := 0
+  /-- Reward accounts: stakeCredentialHash (28B) → accumulated lovelace -/
+  rewardAccounts : Std.HashMap ByteArray Nat := Std.HashMap.emptyWithCapacity
+  /-- Conway governance state -/
+  governance : GovernanceState := GovernanceState.empty
 
 instance : Repr LedgerState where
   reprPrec s _ := s!"LedgerState(utxo={s.utxo.size}, slot={s.lastSlot}, blockNo={s.lastBlockNo})"
@@ -278,6 +287,30 @@ def processEpochBoundary (state : LedgerState) (newEpoch : Nat) : LedgerState :=
     pools := pools,
     epochBoundary := some snapshot,
     protocolParams := { state.protocolParams with epoch := newEpoch } }
+
+/-- Add rewards to a stake credential's reward account -/
+def LedgerState.addReward (state : LedgerState) (stakeCredHash : ByteArray) (amount : Nat) : LedgerState :=
+  let cur := state.rewardAccounts[stakeCredHash]?.getD 0
+  { state with rewardAccounts := state.rewardAccounts.insert stakeCredHash (cur + amount) }
+
+/-- Withdraw rewards from a reward account. Returns updated state, or none if insufficient. -/
+def LedgerState.withdrawReward (state : LedgerState) (rewardAddr : ByteArray) (amount : Nat)
+    : Option LedgerState :=
+  -- Reward address format: 0xe0/0xe1 header + 28-byte stake credential hash
+  let stakeCredHash := if rewardAddr.size > 1 then rewardAddr.extract 1 29 else rewardAddr
+  let available := state.rewardAccounts[stakeCredHash]?.getD 0
+  if amount > available then none
+  else
+    let remaining := available - amount
+    let newAccounts := if remaining == 0 then
+      state.rewardAccounts.erase stakeCredHash
+    else
+      state.rewardAccounts.insert stakeCredHash remaining
+    some { state with rewardAccounts := newAccounts }
+
+/-- Get the reward balance for a stake credential -/
+def LedgerState.rewardBalance (state : LedgerState) (stakeCredHash : ByteArray) : Nat :=
+  state.rewardAccounts[stakeCredHash]?.getD 0
 
 /-- Check if we've crossed an epoch boundary -/
 def epochForSlot (state : LedgerState) (slot : Nat) : Nat :=

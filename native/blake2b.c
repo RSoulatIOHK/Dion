@@ -170,6 +170,27 @@ lean_obj_res cleanode_blake2b_256(lean_obj_arg data_obj, lean_obj_arg world) {
 }
 
 /*
+ * Compute Blake2b-224 hash (28 bytes) — used for Cardano key hashes
+ * cleanode_blake2b_224 : ByteArray -> IO ByteArray
+ */
+lean_obj_res cleanode_blake2b_224(lean_obj_arg data_obj, lean_obj_arg world) {
+    size_t len = lean_sarray_size(data_obj);
+    const uint8_t* data = lean_sarray_cptr(data_obj);
+
+    blake2b_state S;
+    blake2b_init(&S, 28);  // 28 bytes = 224 bits
+    blake2b_update(&S, data, len);
+
+    uint8_t hash[28];
+    blake2b_final(&S, hash);
+
+    lean_object* result = lean_alloc_sarray(sizeof(uint8_t), 28, 28);
+    memcpy(lean_sarray_cptr(result), hash, 28);
+
+    return lean_io_result_mk_ok(result);
+}
+
+/*
  * General-purpose Blake2b — called by kes.c and other native modules.
  * Matches the reference blake2b() signature.
  */

@@ -177,7 +177,7 @@ def runDryForgeTest (keyDir : String) (network : String := "Preprod")
         match forgeResult with
         | .ok (some block) =>
           forged := forged + 1
-          IO.println s!"[test]   Forged block #{block.blockNumber}: header={block.headerBytes.size}B, body={block.bodyBytes.size}B"
+          IO.println s!"[test]   Forged block #{block.blockNumber}: header={block.headerBytes.size}B, body={block.bodyComponents.serialize.size}B"
         | .ok none =>
           IO.println s!"[test]   Forge returned none (unexpected)"
         | .error e =>

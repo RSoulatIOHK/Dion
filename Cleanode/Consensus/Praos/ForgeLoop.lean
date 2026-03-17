@@ -1,6 +1,9 @@
 import Cleanode.Consensus.Praos.BlockForge
 import Cleanode.Consensus.Praos.ConsensusState
 import Cleanode.Consensus.Praos.StakeDistribution
+import Cleanode.Ledger.State
+import Cleanode.Ledger.Validation
+import Cleanode.Network.ConwayBlock
 import Cleanode.Network.Crypto
 import Cleanode.Network.Mempool
 
@@ -212,6 +215,53 @@ def forgeStep (stateRef : IO.Ref ForgeState)
     }
     return .forged block
 
+-- ============================
+-- = Forged Block Validation  =
+-- ============================
+
+/-- Self-validate a forged block before announcing it to peers.
+    Parses the block CBOR back and runs all ledger validation rules on each tx.
+    Returns a list of validation errors (empty = all good). -/
+def validateForgedBlock (block : ForgedBlock) (ledgerState : Cleanode.Ledger.State.LedgerState)
+    : IO (List String) := do
+  let mut errors : List String := []
+
+  -- 1. Encode the full block and parse it back
+  let fullBlockCbor := block.encodeFullBlock
+  let parsed ← Cleanode.Network.ConwayBlock.parseConwayBlockBodyIO fullBlockCbor
+  match parsed with
+  | none =>
+    return ["CBOR round-trip FAILED: could not parse forged block back"]
+  | some body => do
+
+  -- 2. Check tx count matches
+  if body.transactions.length != block.selectedTxs.transactions.length then
+    errors := s!"Tx count mismatch: forged {block.selectedTxs.transactions.length}, parsed {body.transactions.length}" :: errors
+
+  -- 3. Validate each parsed transaction against ledger rules
+  for (idx, tx) in (List.range body.transactions.length).zip body.transactions do
+    let result ← Cleanode.Ledger.Validation.validateTransaction
+      ledgerState tx.body tx.witnesses .Conway block.slot
+    match result with
+    | .ok () => pure ()
+    | .error e =>
+      errors := s!"Tx {idx} validation FAILED: {repr e}" :: errors
+
+  -- 4. Check header structure: body hash matches
+  let bodyHash ← Cleanode.Network.Crypto.blake2b_256 block.bodyComponents.serialize
+  let headerHash ← Cleanode.Network.Crypto.blake2b_256 block.headerBytes
+  if bodyHash.size != 32 then
+    errors := "Body hash is not 32 bytes" :: errors
+  if headerHash.size != 32 then
+    errors := "Header hash is not 32 bytes" :: errors
+
+  -- 5. Check body size is within protocol limits (90112 bytes max block body)
+  let bodySize := block.bodyComponents.serialize.size
+  if bodySize > 90112 then
+    errors := s!"Block body too large: {bodySize} > 90112" :: errors
+
+  return errors
+
 -- ====================
 -- = Forge Loop       =
 -- ====================
@@ -224,6 +274,7 @@ def forgeStep (stateRef : IO.Ref ForgeState)
 partial def runForgeLoop (stateRef : IO.Ref ForgeState)
     (mempoolRef : IO.Ref Cleanode.Network.Mempool.Mempool)
     (consensusRef : IO.Ref ConsensusState)
+    (ledgerStateRef : IO.Ref Cleanode.Ledger.State.LedgerState)
     (prevHashRef : IO.Ref ByteArray)
     (blockNoRef : IO.Ref Nat)
     (forgedBlocksRef : IO.Ref (Array ForgedBlock))
@@ -265,6 +316,15 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
       IO.println s!"[forge] BLOCK FORGED at slot {block.slot}, block #{block.blockNumber}"
       IO.println s!"[forge]   header: {block.headerBytes.size} bytes, body: {block.bodyComponents.serialize.size} bytes"
       IO.println s!"[forge]   txs: {block.selectedTxs.transactions.length}"
+      -- Self-validate before announcing
+      let ls ← ledgerStateRef.get
+      let validationErrors ← validateForgedBlock block ls
+      if validationErrors.isEmpty then
+        IO.println s!"[forge]   ✓ self-validation PASSED"
+      else
+        IO.eprintln s!"[forge]   ✗ self-validation FAILED ({validationErrors.length} errors):"
+        for err in validationErrors do
+          IO.eprintln s!"[forge]     - {err}"
       -- Push to announcement queue
       forgedBlocksRef.modify fun arr => arr.push block
       -- Advance block number and prev hash to our forged block
@@ -280,6 +340,7 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
 def startForgeLoop (forgeParams : ForgeParams) (clock : SlotClock)
     (consensusRef : IO.Ref ConsensusState)
     (mempoolRef : IO.Ref Cleanode.Network.Mempool.Mempool)
+    (ledgerStateRef : IO.Ref Cleanode.Ledger.State.LedgerState)
     (prevHashRef : IO.Ref ByteArray) (blockNoRef : IO.Ref Nat)
     : IO (Task (Except IO.Error Unit) × IO.Ref ForgeState × IO.Ref (Array ForgedBlock)) := do
   let cs ← consensusRef.get
@@ -288,7 +349,7 @@ def startForgeLoop (forgeParams : ForgeParams) (clock : SlotClock)
   let forgedBlocksRef ← IO.mkRef (#[] : Array ForgedBlock)
 
   let task ← IO.asTask (prio := .dedicated) do
-    runForgeLoop stateRef mempoolRef consensusRef prevHashRef blockNoRef forgedBlocksRef
+    runForgeLoop stateRef mempoolRef consensusRef ledgerStateRef prevHashRef blockNoRef forgedBlocksRef
 
   return (task, stateRef, forgedBlocksRef)
 

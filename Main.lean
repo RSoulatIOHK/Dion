@@ -870,16 +870,55 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
               let pool ← mpRef.get
               ref.modify (·.updateMempool pool.entries.length pool.totalBytes)
         | none => displayBlock header tip blockPoint blockBytes
-        -- Update ledger state: apply certificates and UTxO changes from block
+        -- Update ledger state: validate each tx, apply certificates and UTxO changes
         if let some lsRef := ledgerStateRef then
           let parsedBody ← Cleanode.Network.ConwayBlock.parseConwayBlockBodyIO blockBytes
           if let some body := parsedBody then
             let mut s ← lsRef.get
+            let mut validationOk := 0
+            let mut validationFail := 0
+            let mut validationSkipped := 0
             for tx in body.transactions do
+              -- Check if all inputs exist in our UTxO set (skip tx if any missing)
+              let allInputsKnown := tx.body.inputs.all fun inp =>
+                let id : Cleanode.Ledger.UTxO.UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
+                s.utxo.contains id
+              if allInputsKnown && !tx.body.inputs.isEmpty then
+                let result ← Cleanode.Ledger.Validation.validateTransaction
+                  s tx.body tx.witnesses .Conway blockPoint.slot.toNat
+                match result with
+                | .ok () => validationOk := validationOk + 1
+                | .error e =>
+                  validationFail := validationFail + 1
+                  let msg := s!"[validate] Block #{blockNo} tx FAILED: {repr e}"
+                  match tuiRef with
+                  | some ref => ref.modify (·.addLog msg)
+                  | none => pure ()
+              else
+                validationSkipped := validationSkipped + 1
+              -- Apply regardless (the chain is authoritative)
               let certs := tx.body.certificates.filterMap rawCertToLedger
               s := Cleanode.Ledger.Certificate.applyCertificates s certs
               let txHash ← blake2b_256 tx.body.rawBytes
               s := { s with utxo := s.utxo.applyTx txHash tx.body }
+            -- Update TUI with validation results
+            let validated := validationOk + validationFail
+            match tuiRef with
+            | some ref =>
+              ref.modify fun tui =>
+                let blocks := tui.recentBlocks.map fun b =>
+                  if b.blockNo == blockNo then { b with validTxs := validationOk, failedTxs := validationFail } else b
+                let tui := { tui with recentBlocks := blocks }
+                if validated > 0 then
+                  let tui := { tui with
+                    totalTxsValidated := tui.totalTxsValidated + validationOk
+                    totalTxsFailed := tui.totalTxsFailed + validationFail }
+                  if validationFail == 0 then
+                    { tui with blocksFullyValid := tui.blocksFullyValid + 1 }
+                  else
+                    { tui with blocksWithFailures := tui.blocksWithFailures + 1 }
+                else tui
+            | none => pure ()
             lsRef.set { s with lastSlot := blockPoint.slot.toNat, lastBlockNo := blockNo, lastBlockHash := blockHash }
         -- Store block in SQLite if ChainDB is available
         if let some cdb := chainDb then
@@ -1941,20 +1980,17 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
   if tuiMode then
     let _ ← startTUI tuiStateRefInner
   else do
-    run do
-      println (("Dion: a Cardano LEAN 4 Relay Node".style |> cyan |> bold))
-      println (("====================================".style |> cyan))
-      println ("".style)
-      println ((s!"Network: {networkName}".style |> blue))
-      println ("".style)
-    IO.println "  💾 Chain database opened (data/chain.db)"
-    IO.println s!"  📡 Bootstrap peers: {bootstrapPeers.length}"
+    IO.println "Dion: a Cardano LEAN 4 Relay Node"
+    IO.println "===================================="
+    IO.println s!"Network: {networkName}"
+    IO.println ""
+    IO.println "  Chain database opened (data/chain.db)"
+    IO.println s!"  Bootstrap peers: {bootstrapPeers.length}"
     if relayPeers.length > 0 then
-      IO.println s!"  🌐 Relay peers (from peer snapshot): {relayPeers.length}"
-    IO.println s!"  📡 Total initial peers: {peerAddrs.length}"
-    run do
-      println ("".style)
-      println (("=== Relay Node Active (Ctrl+C to stop) ===".style |> cyan |> bold))
+      IO.println s!"  Relay peers (from peer snapshot): {relayPeers.length}"
+    IO.println s!"  Total initial peers: {peerAddrs.length}"
+    IO.println ""
+    IO.println "=== Relay Node Active (Ctrl+C to stop) ==="
 
   -- Launch inbound connection listener FIRST (before peer tasks exhaust the thread pool)
   -- NOTE: socket_listen MUST be called inside the task, not outside.
@@ -2030,7 +2066,7 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
       | "Preview" => Cleanode.Consensus.Praos.ForgeLoop.SlotClock.preview
       | _ => Cleanode.Consensus.Praos.ForgeLoop.SlotClock.mainnet
     let (forgeTask, _forgeStateRef, forgedBlocksRef) ←
-      Cleanode.Consensus.Praos.ForgeLoop.startForgeLoop fp clock consensusRef mempoolRef prevHashRef blockNoRef
+      Cleanode.Consensus.Praos.ForgeLoop.startForgeLoop fp clock consensusRef mempoolRef ledgerStateRef prevHashRef blockNoRef
     tasks := tasks ++ [forgeTask]
     -- Start block announcement loop (broadcasts forged blocks to shared registry)
     let announceTask ← Cleanode.Consensus.Praos.BlockAnnounce.startAnnouncementLoop registryRef forgedBlocksRef

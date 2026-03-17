@@ -263,59 +263,65 @@ def loadPoolVerificationKey (path : String) : IO (Except String ByteArray) := do
 -- = Operational Cert =
 -- ====================
 
+/-- Parse a CBOR bytestring at position, returning (bytes, newPos) -/
+private def parseCborBytes (data : ByteArray) (pos : Nat) : Option (ByteArray × Nat) := do
+  if data.size <= pos then none
+  let b0 := data[pos]!.toNat
+  if b0 / 32 != 2 then none  -- Must be major type 2 (bytes)
+  let info := b0 % 32
+  if info <= 23 then
+    some (data.extract (pos + 1) (pos + 1 + info), pos + 1 + info)
+  else if info == 24 then
+    if data.size < pos + 2 then none
+    let len := data[pos + 1]!.toNat
+    some (data.extract (pos + 2) (pos + 2 + len), pos + 2 + len)
+  else if info == 25 then
+    if data.size < pos + 3 then none
+    let len := data[pos + 1]!.toNat * 256 + data[pos + 2]!.toNat
+    some (data.extract (pos + 3) (pos + 3 + len), pos + 3 + len)
+  else none
+
+/-- Parse a CBOR unsigned integer at position, returning (value, newPos) -/
+private def parseCborUint (data : ByteArray) (pos : Nat) : Option (Nat × Nat) := do
+  if data.size <= pos then none
+  let b0 := data[pos]!.toNat
+  if b0 / 32 != 0 then none  -- Must be major type 0 (uint)
+  let info := b0 % 32
+  if info <= 23 then some (info, pos + 1)
+  else if info == 24 then
+    if data.size < pos + 2 then none
+    some (data[pos + 1]!.toNat, pos + 2)
+  else if info == 25 then
+    if data.size < pos + 3 then none
+    some (data[pos + 1]!.toNat * 256 + data[pos + 2]!.toNat, pos + 3)
+  else if info == 26 then
+    if data.size < pos + 5 then none
+    let v := data[pos + 1]!.toNat * 16777216 + data[pos + 2]!.toNat * 65536 +
+             data[pos + 3]!.toNat * 256 + data[pos + 4]!.toNat
+    some (v, pos + 5)
+  else none
+
 /-- Parse an operational certificate from CBOR bytes.
-    Format: CBOR array [hotVKey(32), seqNum, kesPeriod, coldKeySig(64)] -/
+    Format: either [cert4, coldVKey] where cert4 = [hotVKey, seqNum, kesPeriod, coldSig]
+    or flat [hotVKey, seqNum, kesPeriod, coldSig] -/
 def parseOperationalCertBytes (data : ByteArray) : Option (ByteArray × Nat × Nat × ByteArray) := do
-  -- Simple CBOR array parsing for the 4-element cert
   if data.size < 1 then none
   let initial := data[0]!.toNat
   let major := initial / 32
   let count := initial % 32
-  if major != 4 || count != 4 then none  -- Must be 4-element array
+  -- Determine start position of the 4-element cert array
+  let startPos ←
+    if major == 4 && count == 2 && data.size >= 2 then
+      -- Wrapped format: [cert4_array, coldVKey]
+      let inner := data[1]!.toNat
+      if inner / 32 == 4 && inner % 32 == 4 then some 2 else none
+    else if major == 4 && count == 4 then some 1
+    else none
 
-  -- Parse hotVKey (bytes, 32)
-  let pos := 1
-  if data.size < pos + 1 then none
-  let b0 := data[pos]!.toNat
-  if b0 / 32 != 2 then none  -- Must be bytes
-  let hotVKeyLen := b0 % 32
-  if hotVKeyLen > 23 then none  -- Simple short form only
-  let hotVKey := data.extract (pos + 1) (pos + 1 + hotVKeyLen)
-  let pos := pos + 1 + hotVKeyLen
-
-  -- Parse seqNum (uint)
-  if data.size < pos + 1 then none
-  let s0 := data[pos]!.toNat
-  let (seqNum, pos) :=
-    if s0 / 32 == 0 && s0 % 32 <= 23 then (s0 % 32, pos + 1)
-    else if s0 == 0x18 then
-      if data.size < pos + 2 then (0, pos)
-      else (data[pos + 1]!.toNat, pos + 2)
-    else (0, pos + 1)
-
-  -- Parse kesPeriod (uint)
-  if data.size < pos + 1 then none
-  let k0 := data[pos]!.toNat
-  let (kesPeriod, pos) :=
-    if k0 / 32 == 0 && k0 % 32 <= 23 then (k0 % 32, pos + 1)
-    else if k0 == 0x18 then
-      if data.size < pos + 2 then (0, pos)
-      else (data[pos + 1]!.toNat, pos + 2)
-    else if k0 == 0x19 then
-      if data.size < pos + 3 then (0, pos)
-      else (data[pos + 1]!.toNat * 256 + data[pos + 2]!.toNat, pos + 3)
-    else (0, pos + 1)
-
-  -- Parse coldKeySig (bytes, 64)
-  if data.size < pos + 1 then none
-  let c0 := data[pos]!.toNat
-  if c0 / 32 != 2 then none
-  let sigLen := if c0 % 32 == 24 then
-    if data.size < pos + 2 then 0 else data[pos + 1]!.toNat
-  else c0 % 32
-  let sigStart := if c0 % 32 == 24 then pos + 2 else pos + 1
-  let coldSig := data.extract sigStart (sigStart + sigLen)
-
+  let (hotVKey, pos) ← parseCborBytes data startPos
+  let (seqNum, pos) ← parseCborUint data pos
+  let (kesPeriod, pos) ← parseCborUint data pos
+  let (coldSig, _) ← parseCborBytes data pos
   some (hotVKey, seqNum, kesPeriod, coldSig)
 
 /-- Load an operational certificate -/

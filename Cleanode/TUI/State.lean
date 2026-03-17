@@ -17,6 +17,8 @@ structure BlockSummary where
   totalFees : Nat           -- Total fees in lovelace
   era       : Nat
   peerAddr  : String        -- Which peer provided this block
+  validTxs  : Nat := 0      -- Txs that passed our validation
+  failedTxs : Nat := 0      -- Txs that failed our validation
   deriving Repr
 
 /-- A peer summary for TUI display -/
@@ -77,6 +79,11 @@ structure TUIState where
   detailView       : DetailView := .none
   maxRecentBlocks : Nat := 20
   maxLogs         : Nat := 5
+  -- Ledger validation counters
+  blocksFullyValid : Nat := 0    -- Blocks where all txs passed our rules
+  blocksWithFailures : Nat := 0  -- Blocks where at least one tx failed
+  totalTxsValidated : Nat := 0   -- Total txs validated across all blocks
+  totalTxsFailed : Nat := 0      -- Total txs that failed validation
   deriving Repr
 
 /-- Create an empty TUI state -/

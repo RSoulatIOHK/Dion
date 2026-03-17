@@ -118,7 +118,13 @@ def renderBlockRow (b : BlockSummary) (rowWidth : Nat) : String :=
   let hashShort := b.hash.take 12
   let txLabel := if b.txCount == 1 then "tx " else "txs"
   let feesAda := b.totalFees / 1000000
-  let content := s!"  {Ansi.brightYellow}#{formatNum b.blockNo}{Ansi.reset}" ++
+  -- Validation indicator: green check if all pass, red X if any fail, dim dot if no txs
+  let valIndicator :=
+    if b.txCount == 0 then s!"{Ansi.dim}.{Ansi.reset}"
+    else if b.failedTxs == 0 then s!"{Ansi.green}V{Ansi.reset}"
+    else s!"{Ansi.red}X{Ansi.reset}{Ansi.dim}({b.failedTxs}){Ansi.reset}"
+  let content := s!"  {valIndicator}" ++
+    s!" {Ansi.brightYellow}#{formatNum b.blockNo}{Ansi.reset}" ++
     s!"  slot {Ansi.cyan}{formatNum b.slot}{Ansi.reset}" ++
     s!"  {b.txCount} {txLabel}" ++
     s!"  {Ansi.green}{feesAda}A{Ansi.reset}" ++
@@ -181,8 +187,21 @@ def renderMempoolPanel (state : TUIState) (width : Nat) (height : Nat) : List St
     s!"{Ansi.dim}  Nonce: {Ansi.reset}{Ansi.cyan}{c.epochNonceHex}..{Ansi.reset}" ++
     (if c.evolvingNonceHex.length > 0 then s!"{Ansi.dim}  evolving: {Ansi.reset}{Ansi.cyan}{c.evolvingNonceHex}..{Ansi.reset}" else "")
   else ""
+  -- Ledger validation section
+  let valTitle := s!"{Ansi.brightCyan}{Ansi.bold}  LEDGER VALIDATION{Ansi.reset}"
+  let valDivider := s!"{Ansi.dim}  {hline '─' (width - 6)}{Ansi.reset}"
+  let valBlocks := s!"{Ansi.white}  Blocks: {Ansi.brightGreen}{state.blocksFullyValid}{Ansi.reset}{Ansi.dim} valid{Ansi.reset}" ++
+    (if state.blocksWithFailures > 0 then s!"{Ansi.dim} / {Ansi.reset}{Ansi.red}{state.blocksWithFailures} with failures{Ansi.reset}" else "")
+  let valTxs := s!"{Ansi.white}  Txs: {Ansi.brightGreen}{state.totalTxsValidated}{Ansi.reset}{Ansi.dim} passed{Ansi.reset}" ++
+    (if state.totalTxsFailed > 0 then s!"{Ansi.dim} / {Ansi.reset}{Ansi.red}{state.totalTxsFailed} failed{Ansi.reset}" else "")
+  let valRate := if state.totalTxsValidated + state.totalTxsFailed > 0 then
+    let total := state.totalTxsValidated + state.totalTxsFailed
+    let pct := state.totalTxsValidated * 100 / total
+    s!"{Ansi.dim}  Pass rate: {Ansi.reset}{if pct >= 99 then Ansi.brightGreen else if pct >= 90 then Ansi.yellow else Ansi.red}{pct}%{Ansi.reset}"
+  else s!"{Ansi.dim}  (no txs validated yet){Ansi.reset}"
   let lines := [title, divider, statsLine, bar, emptyMsg, "",
-                consTitle, consDivider, epochLine, vrfLine, opCertLine, kesLine, issuerLine, nonceLine]
+                consTitle, consDivider, epochLine, vrfLine, opCertLine, kesLine, issuerLine, nonceLine, "",
+                valTitle, valDivider, valBlocks, valTxs, valRate]
   -- Pad to fill height
   lines ++ List.replicate (max 0 (height - lines.length)) ""
 

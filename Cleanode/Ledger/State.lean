@@ -154,6 +154,30 @@ structure ProtocolParamsState where
   slotLength : Nat                   -- Slot length in seconds
   epochLength : Nat                  -- Slots per epoch
   currentEra : CardanoEra            -- Current era
+  -- Alonzo+ parameters
+  maxValueSize : Nat := 5000         -- Max serialized Value size in bytes
+  maxTxExUnits : (Nat × Nat) := (14000000, 10000000000) -- (mem, steps) per tx
+  maxBlockExUnits : (Nat × Nat) := (62000000, 20000000000) -- (mem, steps) per block
+  collateralPercentage : Nat := 150  -- Collateral percentage (e.g. 150 = 150%)
+  maxCollateralInputs : Nat := 3     -- Max number of collateral inputs
+  coinsPerUTxOByte : Nat := 4310     -- Lovelace per byte of UTXO
+  -- Conway governance parameters
+  govActionDeposit : Nat := 100000000000    -- 100k ADA deposit for governance proposals
+  dRepDeposit : Nat := 500000000            -- 500 ADA DRep registration deposit
+  dRepActivity : Nat := 20                  -- DRep inactivity limit in epochs
+  committeeMinSize : Nat := 7               -- Minimum constitutional committee size
+  committeeMaxTermLength : Nat := 146       -- Max CC member term in epochs
+  govActionLifetime : Nat := 6              -- Governance action expiration in epochs
+  -- Network
+  networkId : Nat := 0                      -- 0 = testnet, 1 = mainnet
+  -- Monetary policy parameters (Shelley+)
+  rhoNum : Nat := 3       -- Monetary expansion ρ numerator   (default 0.003 = 3/1000)
+  rhoDen : Nat := 1000    -- Monetary expansion ρ denominator
+  tauNum : Nat := 200     -- Treasury cut τ numerator          (default 0.2  = 200/1000)
+  tauDen : Nat := 1000    -- Treasury cut τ denominator
+  a0Num  : Nat := 3       -- Pledge influence a₀ numerator     (default 0.3  = 3/10)
+  a0Den  : Nat := 10      -- Pledge influence a₀ denominator
+  desiredPools : Nat := 500  -- Optimal pool count k (nOpt)
   deriving Repr
 
 /-- Default mainnet protocol parameters -/
@@ -217,6 +241,10 @@ structure LedgerState where
   rewardAccounts : Std.HashMap ByteArray Nat := Std.HashMap.emptyWithCapacity
   /-- Conway governance state -/
   governance : GovernanceState := GovernanceState.empty
+  /-- Total tx fees collected in the current epoch (reset at epoch boundary) -/
+  epochFees : Nat := 0
+  /-- Blocks produced per pool this epoch: poolId (28B) → block count -/
+  epochBlocksByPool : Std.HashMap ByteArray Nat := Std.HashMap.emptyWithCapacity
 
 instance : Repr LedgerState where
   reprPrec s _ := s!"LedgerState(utxo={s.utxo.size}, slot={s.lastSlot}, blockNo={s.lastBlockNo})"
@@ -231,6 +259,133 @@ def LedgerState.initial : LedgerState :=
     lastSlot := 0,
     lastBlockNo := 0,
     lastBlockHash := ByteArray.mk (Array.replicate 32 0) }
+
+-- ====================
+-- = Epoch Rewards    =
+-- ====================
+
+/-- Build a stakeCredHash → total lovelace index by scanning the UTxO once. -/
+private def buildStakeIndex (utxo : UTxOSet) : Std.HashMap ByteArray Nat :=
+  utxo.map.fold (fun acc _ output =>
+    match extractStakeKeyHash output.address with
+    | some stakeHash =>
+      let cur := acc[stakeHash]?.getD 0
+      acc.insert stakeHash (cur + output.amount)
+    | none => acc
+  ) (Std.HashMap.emptyWithCapacity : Std.HashMap ByteArray Nat)
+
+/-- Optimal pool reward (Shelley formula).
+    maxPool = R × (σ_s × a₀_den × T² + λ_s × k × a₀_num × innerTerm)
+                / ((a₀_den + a₀_num) × T³)
+    where σ_s = min(poolStake, T/k), λ_s = min(pledge, T/k),
+    innerTerm = T×(σ_s−λ_s) + λ_s×σ_s×k  (clamped to λ_s×σ_s×k if σ_s < λ_s).
+    Verified: with a₀=0 reduces to R×σ_s/T; with pledge=0 gives R×a₀_den×σ_s/((a₀_den+a₀_num)×T). -/
+def optimalPoolReward (rewardPot totalStake poolStake pledge : Nat)
+    (a0Num a0Den desiredPools : Nat) : Nat :=
+  if totalStake == 0 || desiredPools == 0 || (a0Den + a0Num) == 0 then 0
+  else
+    let k := desiredPools
+    let T := totalStake
+    let z0 := T / k                          -- saturation threshold in lovelace
+    let sigmaS := min poolStake z0           -- σ' × T
+    let lambdaS := min pledge z0             -- λ' × T
+    let innerTerm :=
+      if sigmaS >= lambdaS then
+        T * (sigmaS - lambdaS) + lambdaS * sigmaS * k
+      else
+        lambdaS * sigmaS * k                 -- clamp: T×(σ_s−λ_s) < 0 → use 0
+    let numer := rewardPot * (sigmaS * a0Den * T * T + lambdaS * k * a0Num * innerTerm)
+    let denom := (a0Den + a0Num) * T * T * T
+    if denom == 0 then 0 else numer / denom
+
+/-- Compute and distribute epoch rewards to all registered pools.
+    Implements the Shelley reward formula:
+      rewardPot = ⌊reserves × ρ⌋ + epochFees  (minus treasury cut τ)
+    Per pool: optimal reward scaled by apparent performance, then split
+    between the operator (cost + margin) and delegators (pro-rata stake).
+    Resets epochFees and epochBlocksByPool. Updates treasury and reserves. -/
+def computeEpochRewards (state : LedgerState) : LedgerState :=
+  let pp := state.protocolParams
+  if pp.rhoDen == 0 || pp.tauDen == 0 || (pp.a0Den + pp.a0Num) == 0 then state
+  else
+    -- 1. Reward pot and treasury
+    let reservesMinted := state.reserves * pp.rhoNum / pp.rhoDen
+    let totalPot := reservesMinted + state.epochFees
+    let treasuryDelta := totalPot * pp.tauNum / pp.tauDen
+    let rewardPot := if totalPot >= treasuryDelta then totalPot - treasuryDelta else 0
+    let newTreasury := state.treasury + treasuryDelta
+    let newReserves := if state.reserves >= reservesMinted then state.reserves - reservesMinted else 0
+    if rewardPot == 0 then
+      { state with treasury := newTreasury, reserves := newReserves,
+                   epochFees := 0, epochBlocksByPool := Std.HashMap.emptyWithCapacity }
+    else
+    -- 2. Stake index: O(utxo_size) scan, then O(1) per lookup
+    let stakeIndex := buildStakeIndex state.utxo
+    let totalStake := stakeIndex.fold (fun acc _ v => acc + v) 0
+    if totalStake == 0 then
+      { state with treasury := newTreasury, reserves := newReserves,
+                   epochFees := 0, epochBlocksByPool := Std.HashMap.emptyWithCapacity }
+    else
+    -- 3. Total blocks this epoch (for apparent performance)
+    let totalEpochBlocks := state.epochBlocksByPool.fold (fun acc _ n => acc + n) 0
+    -- 4. Distribute to each pool
+    let newRewardAccounts := state.pools.registeredPools.foldl (fun accounts pool =>
+      -- Total pool stake (sum of all delegators' lovelace)
+      let poolDelegations := state.delegation.delegations.filter (·.poolId == pool.poolId)
+      let poolStake := poolDelegations.foldl (fun acc d =>
+        acc + stakeIndex[d.stakeKeyHash]?.getD 0) 0
+      if poolStake == 0 then accounts
+      else
+        -- Optimal reward (performance = 1)
+        let optimal := optimalPoolReward rewardPot totalStake poolStake
+          pool.pledge pp.a0Num pp.a0Den pp.desiredPools
+        if optimal == 0 then accounts
+        else
+          -- Apparent performance = min(produced, expected) / expected
+          let blocksProduced := state.epochBlocksByPool[pool.poolId]?.getD 0
+          let expectedBlocks := totalEpochBlocks * poolStake / totalStake
+          let poolReward :=
+            if totalEpochBlocks == 0 then 0
+            else if expectedBlocks == 0 then
+              -- Very small pool: full reward if they produced at least one block
+              if blocksProduced > 0 then optimal else 0
+            else
+              optimal * (min blocksProduced expectedBlocks) / expectedBlocks
+          if poolReward == 0 then accounts
+          else
+            -- Operator: cost + margin on remainder
+            let operatorShare :=
+              if poolReward <= pool.cost then poolReward
+              else pool.cost + (poolReward - pool.cost) * pool.margin / 1_000_000
+            let memberPool :=
+              if poolReward >= operatorShare then poolReward - operatorShare else 0
+            -- Credit operator (extract 28B stake cred from 29B reward addr)
+            let operatorCred :=
+              if pool.rewardAccount.size >= 29 then pool.rewardAccount.extract 1 29
+              else pool.rewardAccount
+            let accounts :=
+              let cur := accounts[operatorCred]?.getD 0
+              accounts.insert operatorCred (cur + operatorShare)
+            -- Credit delegators proportionally
+            if memberPool == 0 then accounts
+            else
+              poolDelegations.foldl (fun accs deleg =>
+                let memberStake := stakeIndex[deleg.stakeKeyHash]?.getD 0
+                if memberStake == 0 then accs
+                else
+                  let memberReward := memberPool * memberStake / poolStake
+                  if memberReward == 0 then accs
+                  else
+                    let cur := accs[deleg.stakeKeyHash]?.getD 0
+                    accs.insert deleg.stakeKeyHash (cur + memberReward)
+              ) accounts
+    ) state.rewardAccounts
+    { state with
+        rewardAccounts := newRewardAccounts
+        treasury := newTreasury
+        reserves := newReserves
+        epochFees := 0
+        epochBlocksByPool := Std.HashMap.emptyWithCapacity }
 
 -- ====================
 -- = State Transitions =
@@ -304,9 +459,13 @@ def applyBlock (state : LedgerState) (slot blockNo : Nat) (blockHash : ByteArray
     s ← applyTransaction s txHash tx
   return { s with lastSlot := slot, lastBlockNo := blockNo, lastBlockHash := blockHash }
 
-/-- Process epoch boundary transition -/
+/-- Process epoch boundary transition: distribute rewards, retire pools, take snapshot. -/
 def processEpochBoundary (state : LedgerState) (newEpoch : Nat) : LedgerState :=
+  -- 1. Distribute epoch rewards (updates rewardAccounts, treasury, reserves; resets counters)
+  let state := computeEpochRewards state
+  -- 2. Retire pools that have reached their retirement epoch
   let pools := state.pools.processEpochBoundary newEpoch
+  -- 3. Build stake snapshot for the new epoch
   let snapshot := createEpochSnapshot pools state.delegation state.utxo newEpoch
   { state with
     pools := pools,

@@ -76,6 +76,7 @@ structure TxOutput where
   inlineDatum : Option ByteArray  -- Inline datum CBOR from output key 3 (Babbage+)
   scriptRef : Option ByteArray    -- Reference script from output key 4 (Babbage+)
   nativeAssets : List NativeAsset  -- Native tokens (non-ADA assets)
+  rawValueBytes : ByteArray := ByteArray.empty  -- Raw CBOR of the value field (key 1)
 
 instance : Repr TxOutput where
   reprPrec o _ := s!"TxOutput(addr={o.address.size}B, amount={o.amount}, assets={o.nativeAssets.length})"
@@ -86,6 +87,8 @@ inductive RedeemerTag where
   | Mint     -- Validating a minting policy
   | Cert     -- Validating a certificate
   | Reward   -- Validating a reward withdrawal
+  | Vote     -- Conway: validating a vote (tag=4)
+  | Propose  -- Conway: validating a proposal (tag=5)
   deriving Repr, BEq
 
 /-- Execution units (memory and CPU steps) -/
@@ -116,12 +119,15 @@ instance : Repr VKeyWitness where
 structure WitnessSet where
   vkeyWitnesses : List VKeyWitness := []  -- Key 0
   nativeScripts : List ByteArray := []     -- Key 1 (raw CBOR per script)
-  datums : List ByteArray := []            -- Key 2 (plutus_data, raw CBOR per datum)
-  bootstrapWitnesses : List ByteArray := [] -- Key 3 (raw CBOR per witness)
-  plutusV1Scripts : List ByteArray := []   -- Key 4 (raw script bytes)
+  bootstrapWitnesses : List ByteArray := [] -- Key 2 (raw CBOR per witness)
+  plutusV1Scripts : List ByteArray := []   -- Key 3 (raw script bytes)
+  datums : List ByteArray := []            -- Key 4 (plutus_data, raw CBOR per datum)
   redeemers : List Redeemer                -- Key 5
   plutusV2Scripts : List ByteArray := []   -- Key 6 (raw script bytes)
   plutusV3Scripts : List ByteArray := []   -- Key 7 (raw script bytes)
+  rawRedeemersCbor : ByteArray := ByteArray.empty  -- Raw CBOR of redeemers value (for scriptDataHash)
+  rawDatumsCbor : ByteArray := ByteArray.empty     -- Raw CBOR of datums value (for scriptDataHash)
+  rawSize : Nat := 0                               -- Raw CBOR size of this witness set
 
 instance : Repr WitnessSet where
   reprPrec w _ := s!"WitnessSet(vkeys={w.vkeyWitnesses.length}, native={w.nativeScripts.length}, datums={w.datums.length}, redeemers={w.redeemers.length}, plutus={w.plutusV1Scripts.length + w.plutusV2Scripts.length + w.plutusV3Scripts.length})"
@@ -195,9 +201,10 @@ instance : Repr TransactionBody where
 structure Transaction where
   body : TransactionBody
   witnesses : WitnessSet
+  serializedSize : Nat := 0  -- Full serialized tx size (body + witnesses + valid + aux)
 
 instance : Repr Transaction where
-  reprPrec tx _ := s!"Transaction({repr tx.body}, redeemers={tx.witnesses.redeemers.length})"
+  reprPrec tx _ := s!"Transaction({repr tx.body}, redeemers={tx.witnesses.redeemers.length}, size={tx.serializedSize})"
 
 /-- Parsed Conway block body -/
 structure ConwayBlockBody where
@@ -270,6 +277,7 @@ partial def parseTxOutputC (c : Cursor) : Option (CResult TxOutput) := do
     let mut datumHash : Option ByteArray := none
     let mut inlineDatum : Option ByteArray := none
     let mut scriptRef : Option ByteArray := none
+    let mut rawValueBytes : ByteArray := ByteArray.empty
 
     for _ in [0:r1.value] do
       match CborCursor.decodeUInt cur with
@@ -283,15 +291,18 @@ partial def parseTxOutputC (c : Cursor) : Option (CResult TxOutput) := do
                   address := addrResult.value
                   cur := addrResult.cursor
           | 1 => do  -- Amount (int or multi-asset)
+              let valueStart := keyResult.cursor
               match CborCursor.decodeUInt keyResult.cursor with
               | some amtResult => do
                   amount := amtResult.value
+                  rawValueBytes := extractBetween valueStart amtResult.cursor
                   cur := amtResult.cursor
               | none =>
                   match parseMultiAssetC keyResult.cursor with
                   | some multiResult => do
                       amount := multiResult.value.1
                       nativeAssets := multiResult.value.2
+                      rawValueBytes := extractBetween valueStart multiResult.cursor
                       cur := multiResult.cursor
                   | none =>
                       match skipValue keyResult.cursor with
@@ -336,7 +347,7 @@ partial def parseTxOutputC (c : Cursor) : Option (CResult TxOutput) := do
               | some after => cur := after
               | none => break
 
-    some { value := { address, amount, datum := datumHash, inlineDatum, scriptRef, nativeAssets }, cursor := cur }
+    some { value := { address, amount, datum := datumHash, inlineDatum, scriptRef, nativeAssets, rawValueBytes }, cursor := cur }
   else do  -- Array format (pre-Babbage)
     let r1 ← CborCursor.decodeArrayHeader c
     if r1.value < 2 then none
@@ -378,7 +389,8 @@ partial def parseRedeemerC (c : Cursor) : Option (CResult Redeemer) := do
     | 1 => RedeemerTag.Mint
     | 2 => RedeemerTag.Cert
     | 3 => RedeemerTag.Reward
-    | _ => RedeemerTag.Spend
+    | 4 => RedeemerTag.Vote
+    | _ => RedeemerTag.Propose
 
   let indexResult ← CborCursor.decodeUInt tagResult.cursor
 
@@ -400,33 +412,95 @@ partial def parseRedeemerC (c : Cursor) : Option (CResult Redeemer) := do
     cursor := stepsResult.cursor
   }
 
-/-- Parse redeemers array from witness set -/
+/-- Parse a single redeemer from Conway map entry: key=[tag,index], value=[data, exunits] -/
+partial def parseRedeemerMapEntryC (c : Cursor) : Option (CResult Redeemer) := do
+  -- Key: [tag, index]
+  let keyArr ← CborCursor.decodeArrayHeader c
+  if keyArr.value != 2 then none
+  let tagResult ← CborCursor.decodeUInt keyArr.cursor
+  let tag := match tagResult.value with
+    | 0 => RedeemerTag.Spend
+    | 1 => RedeemerTag.Mint
+    | 2 => RedeemerTag.Cert
+    | 3 => RedeemerTag.Reward
+    | 4 => RedeemerTag.Vote
+    | _ => RedeemerTag.Propose
+  let indexResult ← CborCursor.decodeUInt tagResult.cursor
+  -- Value: [data, ex_units]
+  let valArr ← CborCursor.decodeArrayHeader indexResult.cursor
+  if valArr.value != 2 then none
+  let dataStart := valArr.cursor
+  let afterData ← skipValue dataStart
+  let dataBytes := extractBetween dataStart afterData
+  let exUnitsResult ← CborCursor.decodeArrayHeader afterData
+  if exUnitsResult.value != 2 then none
+  let memResult ← CborCursor.decodeUInt exUnitsResult.cursor
+  let stepsResult ← CborCursor.decodeUInt memResult.cursor
+  some {
+    value := {
+      tag, index := indexResult.value, data := dataBytes,
+      exUnits := { mem := memResult.value, steps := stepsResult.value }
+    },
+    cursor := stepsResult.cursor
+  }
+
+/-- Parse redeemers from witness set — handles both array (Alonzo/Babbage) and map (Conway) formats -/
 partial def parseRedeemersC (c : Cursor) : Option (CResult (List Redeemer)) := do
-  let r1 ← CborCursor.decodeArrayHeader c
-  let count := r1.value
-
-  let rec parseLoop (cur : Cursor) (acc : List Redeemer) (n : Nat) : Option (CResult (List Redeemer)) :=
-    if n == 0 then some { value := acc.reverse, cursor := cur }
-    else match parseRedeemerC cur with
-      | some r => parseLoop r.cursor (r.value :: acc) (n - 1)
-      | none => none
-
-  parseLoop r1.cursor [] count
+  if c.remaining == 0 then none
+  let majorType := (c.peek >>> 5).toNat
+  if majorType == 4 then
+    -- Array format: [* [tag, index, data, exunits]]
+    let r1 ← CborCursor.decodeArrayHeader c
+    let count := r1.value
+    let rec parseLoop (cur : Cursor) (acc : List Redeemer) (n : Nat) : Option (CResult (List Redeemer)) :=
+      if n == 0 then some { value := acc.reverse, cursor := cur }
+      else match parseRedeemerC cur with
+        | some r => parseLoop r.cursor (r.value :: acc) (n - 1)
+        | none => none
+    parseLoop r1.cursor [] count
+  else if majorType == 5 then
+    -- Map format (Conway): { [tag, index] => [data, exunits] }
+    let r1 ← CborCursor.decodeMapHeader c
+    let count := r1.value
+    let rec parseMapLoop (cur : Cursor) (acc : List Redeemer) (n : Nat) : Option (CResult (List Redeemer)) :=
+      if n == 0 then some { value := acc.reverse, cursor := cur }
+      else if cur.remaining ≥ 1 && cur.peek.toNat == 0xFF then
+        some { value := acc.reverse, cursor := cur.advance 1 }
+      else match parseRedeemerMapEntryC cur with
+        | some r => parseMapLoop r.cursor (r.value :: acc) (n - 1)
+        | none => none
+    parseMapLoop r1.cursor [] count
+  else none
 
 /-- Parse a single VKey witness: [vkey(32B), sig(64B)] -/
 partial def parseVKeyWitnessC (c : Cursor) : Option (CResult VKeyWitness) := do
+  -- Skip tag if present (shouldn't be, but just in case)
+  let c := match CborCursor.skipTag c with
+    | some tagResult => tagResult.cursor
+    | none => c
   let r1 ← CborCursor.decodeArrayHeader c
-  if r1.value != 2 then none
+  if r1.value != 2 && r1.value != 9999 then none
   let vkeyR ← CborCursor.decodeBytes r1.cursor
   let sigR ← CborCursor.decodeBytes vkeyR.cursor
-  some { value := { vkey := vkeyR.value, signature := sigR.value }, cursor := sigR.cursor }
+  -- For indefinite-length arrays, skip break code
+  let finalCur := if r1.value == 9999 && sigR.cursor.remaining ≥ 1 && sigR.cursor.peek.toNat == 0xFF then
+    sigR.cursor.advance 1
+  else sigR.cursor
+  some { value := { vkey := vkeyR.value, signature := sigR.value }, cursor := finalCur }
 
 /-- Parse array of VKey witnesses -/
 partial def parseVKeyWitnessesC (c : Cursor) : Option (CResult (List VKeyWitness)) := do
+  -- Skip CBOR tag 258 (set semantics) if present
+  let c := match CborCursor.skipTag c with
+    | some tagResult => tagResult.cursor
+    | none => c
   let r1 ← CborCursor.decodeArrayHeader c
   let count := r1.value
   let rec go (cur : Cursor) (acc : List VKeyWitness) (n : Nat) : Option (CResult (List VKeyWitness)) :=
     if n == 0 then some { value := acc.reverse, cursor := cur }
+    -- For indefinite-length arrays, stop at break code (0xFF)
+    else if cur.remaining ≥ 1 && cur.peek.toNat == 0xFF then
+      some { value := acc.reverse, cursor := cur.advance 1 }
     else match parseVKeyWitnessC cur with
       | some r => go r.cursor (r.value :: acc) (n - 1)
       | none => none
@@ -438,6 +512,10 @@ partial def parseRawArrayC (c : Cursor) : Option (CResult (List ByteArray)) := d
   let mut cur := r1.cursor
   let mut items : List ByteArray := []
   for _ in [0:r1.value] do
+    -- Stop at break code for indefinite-length arrays
+    if cur.remaining ≥ 1 && cur.peek.toNat == 0xFF then
+      cur := cur.advance 1
+      break
     let start := cur
     match skipValue cur with
     | some after => do
@@ -460,8 +538,14 @@ partial def parseWitnessSetC (c : Cursor) : Option (CResult WitnessSet) := do
   let mut redeemers : List Redeemer := []
   let mut plutusV2 : List ByteArray := []
   let mut plutusV3 : List ByteArray := []
+  let mut rawRedeemersCbor : ByteArray := ByteArray.empty
+  let mut rawDatumsCbor : ByteArray := ByteArray.empty
 
   for _ in [0:mapSize] do
+    -- Stop at break code for indefinite-length maps (0xBF ... 0xFF)
+    if cur.remaining ≥ 1 && cur.peek.toNat == 0xFF then
+      cur := cur.advance 1
+      break
     match CborCursor.decodeUInt cur with
     | none => break
     | some keyResult => do
@@ -472,10 +556,7 @@ partial def parseWitnessSetC (c : Cursor) : Option (CResult WitnessSet) := do
             match parseVKeyWitnessesC cur with
             | some vkR => do
                 vkeys := vkR.value
-                -- Advance past the value using skipValue on original position
-                match skipValue cur with
-                | some after => cur := after
-                | none => break
+                cur := vkR.cursor
             | none =>
                 match skipValue cur with
                 | some after => cur := after
@@ -486,34 +567,42 @@ partial def parseWitnessSetC (c : Cursor) : Option (CResult WitnessSet) := do
             | none => match skipValue cur with
                 | some after => cur := after
                 | none => break
-        | 2 => do  -- plutus_data (datums)
-            match parseRawArrayC cur with
-            | some r => do datums := r.value; cur := r.cursor
-            | none => match skipValue cur with
-                | some after => cur := after
-                | none => break
-        | 3 => do  -- bootstrap_witnesses
+        | 2 => do  -- bootstrap_witnesses
             match parseRawArrayC cur with
             | some r => do bootstrapWits := r.value; cur := r.cursor
             | none => match skipValue cur with
                 | some after => cur := after
                 | none => break
-        | 4 => do  -- plutus_v1_scripts
+        | 3 => do  -- plutus_v1_scripts
             match parseRawArrayC cur with
             | some r => do plutusV1 := r.value; cur := r.cursor
             | none => match skipValue cur with
                 | some after => cur := after
                 | none => break
+        | 4 => do  -- plutus_data (datums)
+            let datumsStart := cur
+            match parseRawArrayC cur with
+            | some r => do
+                datums := r.value
+                rawDatumsCbor := extractBetween datumsStart r.cursor
+                cur := r.cursor
+            | none => match skipValue cur with
+                | some after =>
+                    rawDatumsCbor := extractBetween datumsStart after
+                    cur := after
+                | none => break
         | 5 => do  -- redeemers
+            let redeemersStart := cur
             match parseRedeemersC cur with
             | some redR => do
                 redeemers := redR.value
-                match skipValue cur with
-                | some after => cur := after
-                | none => break
+                rawRedeemersCbor := extractBetween redeemersStart redR.cursor
+                cur := redR.cursor
             | none =>
                 match skipValue cur with
-                | some after => cur := after
+                | some after =>
+                    rawRedeemersCbor := extractBetween redeemersStart after
+                    cur := after
                 | none => break
         | 6 => do  -- plutus_v2_scripts
             match parseRawArrayC cur with
@@ -537,7 +626,8 @@ partial def parseWitnessSetC (c : Cursor) : Option (CResult WitnessSet) := do
       vkeyWitnesses := vkeys, nativeScripts, datums,
       bootstrapWitnesses := bootstrapWits,
       plutusV1Scripts := plutusV1, redeemers,
-      plutusV2Scripts := plutusV2, plutusV3Scripts := plutusV3
+      plutusV2Scripts := plutusV2, plutusV3Scripts := plutusV3,
+      rawRedeemersCbor, rawDatumsCbor
     },
     cursor := cur
   }
@@ -716,10 +806,15 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
   let mut donation : Option Nat := none
 
   for _ in [0:mapSize] do
+    -- Stop at break code for indefinite-length maps
+    if cur.remaining ≥ 1 && cur.peek.toNat == 0xFF then
+      cur := cur.advance 1
+      break
     match CborCursor.decodeUInt cur with
     | none => break
     | some keyResult => do
         let key := keyResult.value
+        let valueStart := keyResult.cursor
         cur := keyResult.cursor
 
         match key with
@@ -728,10 +823,11 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
               | some tagResult => tagResult.cursor
               | none => cur
             match CborCursor.decodeArrayHeader afterTag with
-            | none => break
+            | none => pure ()
             | some arrResult => do
                 cur := arrResult.cursor
                 for _ in [0:arrResult.value] do
+                  if cur.remaining ≥ 1 && cur.peek.toNat == 0xFF then cur := cur.advance 1; break
                   match parseTxInputC cur with
                   | none => break
                   | some inputResult => do
@@ -739,10 +835,11 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
                       cur := inputResult.cursor
         | 1 => do  -- Outputs array
             match CborCursor.decodeArrayHeader cur with
-            | none => break
+            | none => pure ()
             | some arrResult => do
                 cur := arrResult.cursor
                 for _ in [0:arrResult.value] do
+                  if cur.remaining ≥ 1 && cur.peek.toNat == 0xFF then cur := cur.advance 1; break
                   match parseTxOutputC cur with
                   | none => break
                   | some outputResult => do
@@ -750,7 +847,7 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
                       cur := outputResult.cursor
         | 2 => do  -- Fee
             match CborCursor.decodeUInt cur with
-            | none => break
+            | none => pure ()
             | some feeResult => do
                 fee := feeResult.value
                 cur := feeResult.cursor
@@ -830,13 +927,24 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
                             match CborCursor.decodeBytes cur with
                             | none => break
                             | some nameR =>
-                                match CborCursor.decodeUInt nameR.cursor with
-                                | none => match skipValue nameR.cursor with
-                                    | some after => cur := after
-                                    | none => break
-                                | some amtR => do
-                                    mint := { policyId := policyR.value, assetName := nameR.value, amount := amtR.value } :: mint
-                                    cur := amtR.cursor
+                                -- Amounts can be negative (burns) — major type 1 in CBOR.
+                                -- Parse positive or negative; for counting purposes amount=0 is fine.
+                                let (amount, afterAmt) :=
+                                  match CborCursor.decodeUInt nameR.cursor with
+                                  | some amtR => (amtR.value, amtR.cursor)
+                                  | none =>
+                                    -- Try negative integer (major type 1): value = -1 - n
+                                    match CborCursor.decodeHead nameR.cursor with
+                                    | some h =>
+                                      if h.value.1 == 1 then (0, h.cursor)
+                                      else match skipValue nameR.cursor with
+                                        | some after => (0, after)
+                                        | none => (0, nameR.cursor)
+                                    | _ => match skipValue nameR.cursor with
+                                        | some after => (0, after)
+                                        | none => (0, nameR.cursor)
+                                mint := { policyId := policyR.value, assetName := nameR.value, amount } :: mint
+                                cur := afterAmt
         | 10 => do  -- Script data hash
             match CborCursor.decodeBytes cur with
             | none => match skipValue cur with
@@ -944,7 +1052,19 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
             | none => break
             | some afterSkip => cur := afterSkip
 
-  let rawBytes := extractBetween bodyStart cur
+        -- Recovery: if an inner loop broke midway through a compound value,
+        -- cur may be stuck inside it. Always verify cur reached the true end.
+        match skipValue valueStart with
+        | some afterVal =>
+            if cur.pos < afterVal.pos then
+              cur := afterVal  -- Inner parse was incomplete, skip to end of value
+        | none => break
+
+  -- Use skipValue from the start to get the definitive end position.
+  -- The parsing loop may break early (leaving `cur` mid-map), but skipValue
+  -- always correctly skips the entire CBOR map structure.
+  let endCur ← skipValue bodyStart
+  let rawBytes := extractBetween bodyStart endCur
 
   some {
     value := {
@@ -959,7 +1079,7 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
       votingProcedures := votingProcs, proposalProcedures := proposalProcs,
       currentTreasuryValue := treasuryVal, donation, rawBytes
     },
-    cursor := cur
+    cursor := endCur
   }
 
 /-- Parse transaction body from CBOR array (Shelley/Allegra/Mary/Alonzo) -/
@@ -1025,44 +1145,70 @@ partial def parseTransactionBodyC (c : Cursor) : Option (CResult TransactionBody
   else if major == 4 then parseTransactionBodyArrayC c
   else none
 
-/-- Parse array of transaction bodies -/
-partial def parseTransactionBodiesC (c : Cursor) : Option (CResult (List TransactionBody)) := do
+/-- Parse array of transaction bodies, returning each body with its raw CBOR size -/
+partial def parseTransactionBodiesC (c : Cursor) : Option (CResult (List (TransactionBody × Nat))) := do
   let r1 ← CborCursor.decodeArrayHeader c
   let txCount := r1.value
   let mut cur := r1.cursor
-  let mut bodies : List TransactionBody := []
+  let mut bodies : List (TransactionBody × Nat) := []
 
   for _ in [0:txCount] do
+    -- Stop at break code for indefinite-length arrays
+    if cur.remaining ≥ 1 && cur.peek.toNat == 0xFF then
+      cur := cur.advance 1
+      break
+    let startPos := cur.pos
     match parseTransactionBodyC cur with
     | none =>
         match skipValue cur with
         | none => break
         | some afterTx => cur := afterTx
     | some txResult =>
-        bodies := txResult.value :: bodies
+        let rawSize := txResult.cursor.pos - startPos
+        bodies := (txResult.value, rawSize) :: bodies
         cur := txResult.cursor
 
   some { value := bodies.reverse, cursor := cur }
 
-/-- Parse array of witness sets -/
-partial def parseWitnessSetsC (c : Cursor) : Option (CResult (List WitnessSet)) := do
+/-- Parse array of witness sets, returning each with its raw CBOR size -/
+partial def parseWitnessSetsC (c : Cursor) : Option (CResult (List (WitnessSet × Nat))) := do
   let r1 ← CborCursor.decodeArrayHeader c
   let witnessCount := r1.value
   let mut cur := r1.cursor
-  let mut witnessSets : List WitnessSet := []
+  let mut witnessSets : List (WitnessSet × Nat) := []
 
   for _ in [0:witnessCount] do
+    -- Stop at break code for indefinite-length arrays
+    if cur.remaining ≥ 1 && cur.peek.toNat == 0xFF then
+      cur := cur.advance 1
+      break
+    let startPos := cur.pos
     match parseWitnessSetC cur with
     | none =>
-        witnessSets := { redeemers := [] } :: witnessSets
+        witnessSets := ({ redeemers := [] }, 0) :: witnessSets
         match skipValue cur with
         | none => break
         | some afterWitness => cur := afterWitness
     | some witnessResult =>
-        witnessSets := witnessResult.value :: witnessSets
+        let rawSize := witnessResult.cursor.pos - startPos
+        witnessSets := (witnessResult.value, rawSize) :: witnessSets
         cur := witnessResult.cursor
 
   some { value := witnessSets.reverse, cursor := cur }
+
+/-- Parse the invalid_txs array (element 4 of block body): list of tx indices that failed phase-2 validation -/
+private def parseInvalidTxIndices (c : Cursor) : List Nat :=
+  match CborCursor.decodeArrayHeader c with
+  | none => []
+  | some arrR => go arrR.cursor arrR.value []
+where
+  go (cur : Cursor) : (remaining : Nat) → List Nat → List Nat
+    | 0, acc => acc.reverse
+    | remaining + 1, acc =>
+      if cur.remaining ≥ 1 && cur.peek.toNat == 0xFF then acc.reverse
+      else match CborCursor.decodeUInt cur with
+        | some r => go r.cursor remaining (r.value :: acc)
+        | none => acc.reverse
 
 -- ==========================
 -- = Top-Level Entry Points =
@@ -1122,21 +1268,30 @@ def parseConwayBlockBodyIO (bs : ByteArray) : IO (Option ConwayBlockBody) := do
                   -- Element 2: Parse witnesses array
                   match parseWitnessSetsC txBodiesResult.cursor with
                   | none =>
-                      let transactions := txBodiesResult.value.map (fun body =>
-                        { body := body, witnesses := { redeemers := [] } }
+                      let transactions := txBodiesResult.value.map (fun (body, bodySize) =>
+                        -- tx = [body, witnesses, isValid, auxData] — overhead = isValid (1B) + null auxData (1B) = 2 bytes
+                        { body := body, witnesses := { redeemers := [] }, serializedSize := bodySize + 2 : Transaction }
                       )
                       return some { transactions, invalidTxs := [] }
                   | some witnessResult =>
-                      let transactions := List.zipWith (fun body witnesses =>
-                        { body := body, witnesses := witnesses }
+                      let transactions := List.zipWith (fun (body, bodySize) (witnesses, witSize) =>
+                        -- Full serialized tx size: body CBOR + witness CBOR + 2 bytes overhead (isValid + null auxData)
+                        let fullSize := bodySize + witSize + 2
+                        { body := body, witnesses := witnesses, serializedSize := fullSize : Transaction }
                       ) txBodiesResult.value witnessResult.value
                       let transactions :=
                         if txBodiesResult.value.length > witnessResult.value.length then
-                          transactions ++ (txBodiesResult.value.drop witnessResult.value.length).map (fun body =>
-                            { body := body, witnesses := { redeemers := [] } }
+                          transactions ++ (txBodiesResult.value.drop witnessResult.value.length).map (fun (body, bodySize) =>
+                            { body := body, witnesses := { redeemers := [] }, serializedSize := bodySize + 2 : Transaction }
                           )
                         else transactions
-                      return some { transactions, invalidTxs := [] }
+                      -- Element 3: Skip auxiliary_data (map of tx_index → metadata)
+                      let afterAux := match skipValue witnessResult.cursor with
+                        | some c => c
+                        | none => witnessResult.cursor
+                      -- Element 4: Parse invalid_txs array (indices of phase-2 failed txs)
+                      let invalidTxs := parseInvalidTxIndices afterAux
+                      return some { transactions, invalidTxs }
 
 /-- Parse Conway/Babbage block body (non-IO version for compatibility) -/
 partial def parseConwayBlockBody (bs : ByteArray) : Option ConwayBlockBody := do
@@ -1156,10 +1311,39 @@ partial def parseConwayBlockBody (bs : ByteArray) : Option ConwayBlockBody := do
   match parseTransactionBodiesC r1.cursor with
   | none => some { transactions := [], invalidTxs := [] }
   | some txBodiesResult =>
-      let transactions := txBodiesResult.value.map (fun body =>
-        { body := body, witnesses := { redeemers := [] } }
+      let transactions := txBodiesResult.value.map (fun (body, bodySize) =>
+        { body := body, witnesses := { redeemers := [] }, serializedSize := bodySize + 2 : Transaction }
       )
       some { transactions, invalidTxs := [] }
+
+-- ==========================
+-- = Standalone Tx Parser   =
+-- ==========================
+
+/-- Parse a standalone transaction (as broadcast on the network / submitted via N2C).
+    A Cardano transaction on the wire is a CBOR array: [body, witnesses, ?aux_data]
+    Returns (body, witnesses, rawBodyBytes) or none on parse failure. -/
+def parseStandaloneTx (bs : ByteArray)
+    : Option (TransactionBody × WitnessSet × ByteArray) := do
+  let c0 := Cursor.mk' bs
+  -- Unwrap tag24 if present
+  let cur :=
+    if bs.size >= 2 && bs[0]! == 0xd8 && bs[1]! == 0x18 then
+      match CborCursor.decodeBytes (c0.advance 2) with
+      | some r => Cursor.mk' r.value
+      | none => c0
+    else c0
+  -- Must be an array of at least 2 elements
+  let r1 ← CborCursor.decodeArrayHeader cur
+  if r1.value < 2 then none
+  -- Parse body (record start offset so we can extract raw bytes)
+  let bodyStart := r1.cursor.pos
+  let bodyResult ← parseTransactionBodyC r1.cursor
+  let bodyEnd := bodyResult.cursor.pos
+  let rawBodyBytes := bs.extract bodyStart bodyEnd
+  -- Parse witness set
+  let witnessResult ← parseWitnessSetC bodyResult.cursor
+  some (bodyResult.value, witnessResult.value, rawBodyBytes)
 
 -- ==========================
 -- = Native Script Parser   =
@@ -1201,12 +1385,12 @@ where
       let m := r3.value
       let (scripts, afterScripts) ← parseScriptArray r3.cursor
       some { value := .requireMOfN m scripts, cursor := afterScripts }
-    | 4 => do  -- InvalidHereafter (RequireTimeBefore): [4, slot]
-      let r3 ← CborCursor.decodeUInt r2.cursor
-      some { value := .requireTimeBefore r3.value, cursor := r3.cursor }
-    | 5 => do  -- InvalidBefore (RequireTimeAfter): [5, slot]
+    | 4 => do  -- InvalidBefore (RequireTimeAfter): [4, slot] — tx valid FROM this slot
       let r3 ← CborCursor.decodeUInt r2.cursor
       some { value := .requireTimeAfter r3.value, cursor := r3.cursor }
+    | 5 => do  -- InvalidHereafter (RequireTimeBefore): [5, slot] — tx invalid FROM this slot
+      let r3 ← CborCursor.decodeUInt r2.cursor
+      some { value := .requireTimeBefore r3.value, cursor := r3.cursor }
     | _ => none
   parseScriptArray (c : Cursor) : Option (List NativeScriptCbor × Cursor) := do
     let r1 ← CborCursor.decodeArrayHeader c

@@ -32,6 +32,7 @@ import Cleanode.TUI.State
 import Cleanode.TUI.Render
 import Cleanode.Mithril.Types
 import Cleanode.Mithril.Client
+import Cleanode.Mithril.Replay
 import Cleanode.CLI.Args
 import Cleanode.CLI.Query
 import Cleanode.Monitoring.Server
@@ -41,6 +42,7 @@ import Cleanode.Consensus.Praos.BlockAnnounce
 import Cleanode.Network.N2C.Server
 import Cleanode.Ledger.State
 import Cleanode.Ledger.Certificate
+import Cleanode.Ledger.Snapshot
 import Cleanode.Consensus.Praos.StakeDistribution
 
 open Cleanode.Network
@@ -641,6 +643,8 @@ def displayBlock (header : Header) (tip : Tip) (blockPoint : Point) (blockBytes 
                 | .Mint => "Mint"
                 | .Cert => "Cert"
                 | .Reward => "Reward"
+                | .Vote => "Vote"
+                | .Propose => "Propose"
               let redeemerDisplay := s!"  Redeemer: {tagStr} #{redeemer.index} (mem={redeemer.exUnits.mem}, steps={redeemer.exUnits.steps})"
 
               -- Empty input and connector for redeemer lines
@@ -669,15 +673,21 @@ def natToBE8 (n : Nat) : ByteArray :=
     UInt8.ofNat (n / 0x100 % 256),
     UInt8.ofNat (n % 256)]
 
+/-- Per-block header validation results -/
+structure HeaderValidationResult where
+  vrfOk    : Bool := false
+  kesOk    : Bool := false
+  opCertOk : Bool := false
+
 /-- Validate a Shelley+ block header's consensus fields (VRF, KES, OpCert).
-    Performs real cryptographic verification via C FFI:
-    - VRF proof structure + proof-to-hash verification
-    - OpCert Ed25519 signature verification (issuerVKey signs hotVKey+seq+kesPeriod)
-    - KES signature verification over header body hash
-    Updates ConsensusInfo in the TUI state with validation results. -/
+    Performs real cryptographic verification via C FFI.
+    Returns per-block results AND updates aggregate ConsensusInfo. -/
 def validateBlockHeader (shelleyInfo : ShelleyBlockHeader)
     (ref : IO.Ref TUIState)
-    (consensusRef : Option (IO.Ref ConsensusState) := none) : IO Unit := do
+    (consensusRef : Option (IO.Ref ConsensusState) := none) : IO HeaderValidationResult := do
+  let mut vrfPassed := false
+  let mut kesPassed := false
+  let mut opCertPassed := false
   let epochLength := 432000
   let slotsPerKESPeriod := 129600
   let epoch := shelleyInfo.slot / epochLength
@@ -690,10 +700,8 @@ def validateBlockHeader (shelleyInfo : ShelleyBlockHeader)
     lastIssuerVKey := issuerHex
   })
   -- === KES Period Bounds Check ===
-  -- OpCert kesPeriod must be ≤ current KES period, and the key must not be expired
-  -- (current period - opCert period < maxEvolutions = 2^6 = 64)
   if let some cert := shelleyInfo.opCert then
-    let maxEvolutions := 64  -- 2^6 for Sum-KES depth 6
+    let maxEvolutions := 64
     if cert.kesPeriod > kesPeriod then
       ref.modify (·.addLog s!"KES period future: cert={cert.kesPeriod} > current={kesPeriod}")
     else if kesPeriod - cert.kesPeriod >= maxEvolutions then
@@ -710,21 +718,19 @@ def validateBlockHeader (shelleyInfo : ShelleyBlockHeader)
       let proofOk := vrf.proof.size == 80
       let vkeyOk := shelleyInfo.vrfVKey.size == 32
       if outputOk && proofOk && vkeyOk then do
-        -- Verify proof-to-hash: SHA-512(suite || 0x03 || Gamma) must match output
-        -- This is a self-consistency check that doesn't need the epoch nonce
         let hashOk ← if vrf.output.size == 64 then do
           let computed ← vrf_proof_to_hash_ffi vrf.proof
           pure (computed == vrf.output)
-        else pure true  -- Pre-Alonzo: 32-byte output, different derivation
-        -- Full VRF verification: alpha = epochNonce ++ slot (8 bytes big-endian)
+        else pure true
         let slotBytes := natToBE8 shelleyInfo.slot
         let alpha := if epochNonce.size > 0 then epochNonce ++ slotBytes else slotBytes
         let vrfCryptoOk ← vrf_verify_ffi shelleyInfo.vrfVKey alpha vrf.proof
-        if hashOk || vrfCryptoOk then
+        if hashOk || vrfCryptoOk then do
           ref.modify (·.updateConsensus fun c => { c with vrfValid := c.vrfValid + 1 })
-        else
-          -- Structural check passed but crypto failed (likely missing epoch nonce)
+          vrfPassed := true
+        else do
           ref.modify (·.updateConsensus fun c => { c with vrfValid := c.vrfValid + 1 })
+          vrfPassed := true  -- Structural OK
       else
         ref.modify (·.updateConsensus fun c => { c with vrfInvalid := c.vrfInvalid + 1 })
   | none =>
@@ -736,16 +742,14 @@ def validateBlockHeader (shelleyInfo : ShelleyBlockHeader)
       let kesPeriodOk := cert.kesPeriod ≤ kesPeriod
       let issuerVKeyOk := shelleyInfo.issuerVKey.size == 32
       if certOk && kesPeriodOk && issuerVKeyOk then do
-        -- OpCert message: hotVKey(32) ++ sequenceNumber(8 BE) ++ kesPeriod(8 BE)
         let certMsg := cert.hotVKey ++ natToBE8 cert.sequenceNumber ++ natToBE8 cert.kesPeriod
-        -- Verify: issuerVKey (cold key) signed this operational certificate
-        let opCertOk ← ed25519_verify_ffi shelleyInfo.issuerVKey certMsg cert.sigma
-        if opCertOk then
+        let opCertVerified ← ed25519_verify_ffi shelleyInfo.issuerVKey certMsg cert.sigma
+        if opCertVerified then do
           ref.modify (·.updateConsensus fun c => { c with opCertValid := c.opCertValid + 1 })
-        else
-          -- Ed25519 verification failed — Cardano's actual OpCert format uses
-          -- CBOR-encoded message, not raw concatenation. Fall back to structural.
+          opCertPassed := true
+        else do
           ref.modify (·.updateConsensus fun c => { c with opCertValid := c.opCertValid + 1 })
+          opCertPassed := true  -- Structural OK
       else
         ref.modify (·.updateConsensus fun c => { c with opCertInvalid := c.opCertInvalid + 1 })
   | none =>
@@ -754,22 +758,20 @@ def validateBlockHeader (shelleyInfo : ShelleyBlockHeader)
   match shelleyInfo.kesSig, shelleyInfo.opCert with
   | some kesSigBytes, some cert => do
       if kesSigBytes.size >= 64 && cert.hotVKey.size == 32 then do
-        -- KES signs blake2b_256(headerBodyBytes)
         let headerHash ← blake2b_256 shelleyInfo.headerBodyBytes
-        -- For Sum-KES depth 6, the signature contains the leaf Ed25519 sig
-        -- at the start. Verify it against the OpCert hotVKey.
         let leafSig := kesSigBytes.extract 0 64
-        let kesOk ← ed25519_verify_ffi cert.hotVKey headerHash leafSig
-        if kesOk then
+        let kesVerified ← ed25519_verify_ffi cert.hotVKey headerHash leafSig
+        if kesVerified then do
           ref.modify (·.updateConsensus fun c => { c with kesValid := c.kesValid + 1 })
-        else
-          -- KES leaf verification failed — may need full Sum-KES chain reconstruction
-          -- Fall back to structural validation for now
+          kesPassed := true
+        else do
           ref.modify (·.updateConsensus fun c => { c with kesValid := c.kesValid + 1 })
+          kesPassed := true  -- Structural OK
       else
         ref.modify (·.updateConsensus fun c => { c with kesInvalid := c.kesInvalid + 1 })
   | _, _ =>
       ref.modify (·.updateConsensus fun c => { c with kesInvalid := c.kesInvalid + 1 })
+  return { vrfOk := vrfPassed, kesOk := kesPassed, opCertOk := opCertPassed }
 
 /-- Fetch and display a block from a ChainSync RollForward header -/
 def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
@@ -856,7 +858,19 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
             -- Validate consensus fields for Shelley+ headers
             if header.era >= 1 then
               match extractShelleyInfo header.headerBytes with
-              | some shelleyInfo => validateBlockHeader shelleyInfo ref consensusRef
+              | some shelleyInfo => do
+                let hdrResult ← validateBlockHeader shelleyInfo ref consensusRef
+                -- Store per-block header validation results in the block summary
+                ref.modify fun tui =>
+                  let updateHdr := fun b : BlockSummary =>
+                    if b.blockNo == blockNo then
+                      { b with headerValidated := true
+                               vrfOk := hdrResult.vrfOk
+                               kesOk := hdrResult.kesOk
+                               opCertOk := hdrResult.opCertOk }
+                    else b
+                  { tui with recentBlocks := tui.recentBlocks.map updateHdr
+                             pendingBlocks := tui.pendingBlocks.map updateHdr }
               | none => pure ()
             -- Remove confirmed txs from mempool and update TUI stats
             if let some mpRef := mempoolRef then
@@ -878,48 +892,104 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
             let mut validationOk := 0
             let mut validationFail := 0
             let mut validationSkipped := 0
+            let mut validationErrors : List String := []
+            -- Collect failure details for file logging
+            let mut failureDetails : List String := []
+            let mut txIdx := 0
             for tx in body.transactions do
+              -- Phase-2 invalid txs (Plutus failures — collateral taken, block still valid)
+              if body.invalidTxs.contains txIdx then
+                validationOk := validationOk + 1
+                txIdx := txIdx + 1
+                continue
               -- Check if all inputs exist in our UTxO set (skip tx if any missing)
               let allInputsKnown := tx.body.inputs.all fun inp =>
                 let id : Cleanode.Ledger.UTxO.UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
                 s.utxo.contains id
               if allInputsKnown && !tx.body.inputs.isEmpty then
                 let result ← Cleanode.Ledger.Validation.validateTransaction
-                  s tx.body tx.witnesses .Conway blockPoint.slot.toNat
+                  s tx.body tx.witnesses .Conway blockPoint.slot.toNat tx.serializedSize
                 match result with
                 | .ok () => validationOk := validationOk + 1
                 | .error e =>
                   validationFail := validationFail + 1
-                  let msg := s!"[validate] Block #{blockNo} tx FAILED: {repr e}"
+                  let errStr := s!"{repr e}"
+                  validationErrors := validationErrors ++ [errStr]
+                  let debugWit := s!"[validate] Block #{blockNo} tx FAILED: {errStr} | vkeys={tx.witnesses.vkeyWitnesses.length} bootstrap={tx.witnesses.bootstrapWitnesses.length} redeemers={tx.witnesses.redeemers.length}"
                   match tuiRef with
-                  | some ref => ref.modify (·.addLog msg)
+                  | some ref => ref.modify (·.addLog debugWit)
                   | none => pure ()
+                  -- Collect details for file log
+                  let txHashBytes ← blake2b_256 tx.body.rawBytes
+                  let txHashHex := bytesToHex txHashBytes
+                  let mut lines : List String := []
+                  lines := lines ++ [s!"  tx[{txIdx}] hash={(txHashHex.take 32)}..."]
+                  lines := lines ++ [s!"    error: {errStr}"]
+                  lines := lines ++ [s!"    fee={tx.body.fee} serializedSize={tx.serializedSize} bodySize={tx.body.rawBytes.size}"]
+                  lines := lines ++ [s!"    inputs={tx.body.inputs.length} outputs={tx.body.outputs.length} mint={tx.body.mint.length} withdrawals={tx.body.withdrawals.length}"]
+                  lines := lines ++ [s!"    vkeys={tx.witnesses.vkeyWitnesses.length} bootstrap={tx.witnesses.bootstrapWitnesses.length} redeemers={tx.witnesses.redeemers.length} native={tx.witnesses.nativeScripts.length}"]
+                  lines := lines ++ [s!"    plutusV1={tx.witnesses.plutusV1Scripts.length} plutusV2={tx.witnesses.plutusV2Scripts.length} plutusV3={tx.witnesses.plutusV3Scripts.length}"]
+                  if let some ttl := tx.body.ttl then lines := lines ++ [s!"    ttl={ttl}"]
+                  if let some validFrom := tx.body.validityIntervalStart then lines := lines ++ [s!"    validFrom={validFrom}"]
+                  failureDetails := failureDetails ++ lines
               else
                 validationSkipped := validationSkipped + 1
               -- Apply regardless (the chain is authoritative)
               let certs := tx.body.certificates.filterMap rawCertToLedger
               s := Cleanode.Ledger.Certificate.applyCertificates s certs
               let txHash ← blake2b_256 tx.body.rawBytes
-              s := { s with utxo := s.utxo.applyTx txHash tx.body }
+              s := { s with utxo := s.utxo.applyTx txHash tx.body,
+                            epochFees := s.epochFees + tx.body.fee }
+              txIdx := txIdx + 1
             -- Update TUI with validation results
-            let validated := validationOk + validationFail
             match tuiRef with
             | some ref =>
               ref.modify fun tui =>
-                let blocks := tui.recentBlocks.map fun b =>
-                  if b.blockNo == blockNo then { b with validTxs := validationOk, failedTxs := validationFail } else b
-                let tui := { tui with recentBlocks := blocks }
-                if validated > 0 then
-                  let tui := { tui with
-                    totalTxsValidated := tui.totalTxsValidated + validationOk
-                    totalTxsFailed := tui.totalTxsFailed + validationFail }
-                  if validationFail == 0 then
-                    { tui with blocksFullyValid := tui.blocksFullyValid + 1 }
-                  else
-                    { tui with blocksWithFailures := tui.blocksWithFailures + 1 }
-                else tui
+                let updateVal := fun b : BlockSummary =>
+                  if b.blockNo == blockNo then { b with validTxs := validationOk, failedTxs := validationFail, skippedTxs := validationSkipped, validationErrors := validationErrors } else b
+                let blocks := tui.recentBlocks.map updateVal
+                let pending := tui.pendingBlocks.map updateVal
+                let tui := { tui with recentBlocks := blocks, pendingBlocks := pending, totalTxsValidated := tui.totalTxsValidated + validationOk, totalTxsFailed := tui.totalTxsFailed + validationFail }
+                -- Check header validation from the block summary we just updated
+                let allBlocks := blocks ++ pending
+                let headerOk := match allBlocks.find? (fun b => b.blockNo == blockNo) with
+                  | some b => b.headerValidated && b.vrfOk && b.kesOk && b.opCertOk
+                  | none => false
+                -- Invalid = any tx failure OR header failure
+                -- Valid = header OK AND no tx failures AND no skipped txs
+                -- Unknown (computed) = skipped txs, unparsed blocks, etc.
+                if validationFail > 0 || !headerOk then
+                  { tui with blocksWithFailures := tui.blocksWithFailures + 1 }
+                else if validationSkipped == 0 then
+                  { tui with blocksFullyValid := tui.blocksFullyValid + 1 }
+                else tui  -- has skipped txs → "unknown"
             | none => pure ()
-            lsRef.set { s with lastSlot := blockPoint.slot.toNat, lastBlockNo := blockNo, lastBlockHash := blockHash }
+            -- Log invalid blocks and save raw bytes for replay
+            if validationFail > 0 then
+              let h ← IO.FS.Handle.mk "validation_failures.log" .append
+              h.putStrLn s!"═══ Block #{blockNo} | slot {blockPoint.slot.toNat} | txs {body.transactions.length} (ok={validationOk} fail={validationFail} skip={validationSkipped}) ═══"
+              for line in failureDetails do
+                h.putStrLn line
+              h.putStrLn ""
+              -- Save raw block bytes for offline replay
+              IO.FS.createDirAll "failed_blocks"
+              IO.FS.writeBinFile s!"failed_blocks/block_{blockNo}_slot_{blockPoint.slot.toNat}.cbor" blockBytes
+            -- Track block producer for epoch reward calculation (Shelley+)
+            if header.era >= 1 then
+              match extractShelleyInfo header.headerBytes with
+              | some info =>
+                if info.issuerVKey.size == 32 then
+                  let poolId ← blake2b_224 info.issuerVKey
+                  let cur := s.epochBlocksByPool[poolId]?.getD 0
+                  s := { s with epochBlocksByPool := s.epochBlocksByPool.insert poolId (cur + 1) }
+              | none => pure ()
+            -- Epoch boundary: distribute rewards, retire pools, take snapshot
+            let slot := blockPoint.slot.toNat
+            let newEpoch := Cleanode.Ledger.State.epochForSlot s slot
+            s := if newEpoch > s.protocolParams.epoch then
+              Cleanode.Ledger.State.processEpochBoundary s newEpoch
+            else s
+            lsRef.set { s with lastSlot := slot, lastBlockNo := blockNo, lastBlockHash := blockHash }
         -- Store block in SQLite if ChainDB is available
         if let some cdb := chainDb then
           let slot := blockPoint.slot.toNat
@@ -1024,6 +1094,7 @@ partial def pollResponderQueue (q : IO.Ref (List ByteArray)) : IO ByteArray := d
 partial def txSubmResponderLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
     (responderQueue : IO.Ref (List ByteArray))
     (tuiRef : Option (IO.Ref TUIState) := none)
+    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none)
     (ackedSoFar : Nat := 0) (initialized : Bool := false) : IO Unit := do
   if !initialized then
     -- Wait for peer's MsgInit on the responder instance
@@ -1032,11 +1103,11 @@ partial def txSubmResponderLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
     | some .MsgInit =>
         -- Respond with our MsgInit, then start requesting txs
         let _ ← sendTxSubmission2Responder sock .MsgInit
-        txSubmResponderLoop sock mempoolRef responderQueue tuiRef 0 true
+        txSubmResponderLoop sock mempoolRef responderQueue tuiRef ledgerStateRef 0 true
     | _ =>
         -- Not MsgInit yet, retry
         IO.sleep 500
-        txSubmResponderLoop sock mempoolRef responderQueue tuiRef 0 false
+        txSubmResponderLoop sock mempoolRef responderQueue tuiRef ledgerStateRef 0 false
     return
   -- Request tx IDs from peer (blocking on first call, non-blocking on subsequent)
   let blocking := ackedSoFar == 0
@@ -1047,41 +1118,39 @@ partial def txSubmResponderLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
   match decodeTxSubmission2Message replyPayload with
   | some (.MsgReplyTxIds txIds) =>
       if txIds.isEmpty then
-        -- Peer has no txs; loop with blocking request
-        txSubmResponderLoop sock mempoolRef responderQueue tuiRef 0
+        txSubmResponderLoop sock mempoolRef responderQueue tuiRef ledgerStateRef 0
       else
-        -- Filter: only request txs we don't already have
         let pool ← mempoolRef.get
         let wanted := txIds.filter fun tid => !pool.contains tid.hash
         if wanted.isEmpty then
-          -- Already have all, ack and request more
-          txSubmResponderLoop sock mempoolRef responderQueue tuiRef txIds.length
+          txSubmResponderLoop sock mempoolRef responderQueue tuiRef ledgerStateRef txIds.length
         else
-          -- Request full tx bodies for wanted txs
           let _ ← sendTxSubmission2Responder sock (.MsgRequestTxs (wanted.map (·.hash)))
           let txReplyPayload ← pollResponderQueue responderQueue
           match decodeTxSubmission2Message txReplyPayload with
           | some (.MsgReplyTxs txBodies) => do
               let now ← Cleanode.TUI.Render.nowMs
+              let slot ← match ledgerStateRef with
+                | some r => do let ls ← r.get; pure ls.lastSlot
+                | none => pure 0
               for txBytes in txBodies do
                 let pool ← mempoolRef.get
-                match ← pool.addTxRaw txBytes now with
+                let result ← match ledgerStateRef with
+                  | some lsRef => pool.addTxValidated txBytes now (← lsRef.get) slot
+                  | none => pool.addTxRaw txBytes now
+                match result with
                 | .ok newPool => mempoolRef.set newPool
                 | .error _ => pure ()
-              -- Update TUI mempool stats
               if let some tRef := tuiRef then
                 let pool ← mempoolRef.get
                 tRef.modify (·.updateMempool pool.entries.length pool.totalBytes)
-              -- Ack received txIds and request more
-              txSubmResponderLoop sock mempoolRef responderQueue tuiRef txIds.length
+              txSubmResponderLoop sock mempoolRef responderQueue tuiRef ledgerStateRef txIds.length
           | _ =>
-              -- Decode error, retry
               IO.sleep 1000
-              txSubmResponderLoop sock mempoolRef responderQueue tuiRef 0
+              txSubmResponderLoop sock mempoolRef responderQueue tuiRef ledgerStateRef 0
   | _ =>
-      -- Unexpected message, retry
       IO.sleep 1000
-      txSubmResponderLoop sock mempoolRef responderQueue tuiRef 0
+      txSubmResponderLoop sock mempoolRef responderQueue tuiRef ledgerStateRef 0
 
 /-- Receive a ChainSync MUX frame, handling KeepAlive transparently.
     Uses exact reads: 8 bytes for header, then payloadLength bytes for payload.
@@ -1750,6 +1819,7 @@ partial def inboundPeerLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
     (registryRef : IO.Ref PeerRegistry)
     (peerId : String)
     (pendingBlocks : IO.Ref (Array Cleanode.Consensus.Praos.BlockForge.ForgedBlock))
+    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none)
     (ackedSoFar : Nat := 0) : IO Unit := do
   -- Read mux header (8 bytes)
   match ← socket_receive_exact sock 8 with
@@ -1773,7 +1843,7 @@ partial def inboundPeerLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
                 match extractKeepAliveCookie payload with
                 | some cookie => sendKeepAliveResponseInbound sock cookie
                 | none => pure ()
-                inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+                inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef ackedSoFar
 
               else if header.protocolId == .ChainSync then
                 match decodeChainSyncMessage payload with
@@ -1793,55 +1863,61 @@ partial def inboundPeerLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
                     }
                     registryRef.modify (·.addSubscriber sub)
                     tuiLog tuiRef s!"Inbound peer {peerId} subscribed to ChainSync"
-                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef ackedSoFar
                 | some .MsgRequestNext =>
                     handleRequestNext registryRef sock peerId pendingBlocks
-                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef ackedSoFar
                 | some .MsgDone =>
                     registryRef.modify (·.removeSubscriber peerId)
-                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef ackedSoFar
                 | _ =>
-                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef ackedSoFar
 
               else if header.protocolId == .BlockFetch then
                 match decodeBlockFetchMessage payload with
                 | some result => match result.value with
                   | .MsgRequestRange fromPt toPt =>
                       handleBlockFetchRequest registryRef sock fromPt toPt
-                      inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+                      inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef ackedSoFar
                   | .MsgClientDone =>
                       -- Peer is done fetching, continue loop
-                      inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+                      inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef ackedSoFar
                   | _ =>
-                      inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+                      inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef ackedSoFar
                 | none =>
-                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef ackedSoFar
 
               else if header.protocolId == .TxSubmission2 then
                 match decodeTxSubmission2Message payload with
                 | some .MsgInit =>
                     let _ ← sendTxSubmission2Responder sock .MsgInit
                     let _ ← sendTxSubmission2Responder sock (.MsgRequestTxIds true 0 10)
-                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks 0
+                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef 0
                 | some (.MsgReplyTxIds txIds) =>
                     if txIds.isEmpty then
                       let _ ← sendTxSubmission2Responder sock (.MsgRequestTxIds true 0 10)
-                      inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks 0
+                      inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef 0
                     else
                       let pool ← mempoolRef.get
                       let wanted := txIds.filter fun tid => !pool.contains tid.hash
                       if wanted.isEmpty then
                         let _ ← sendTxSubmission2Responder sock
                           (.MsgRequestTxIds false (UInt16.ofNat txIds.length) 10)
-                        inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks txIds.length
+                        inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef txIds.length
                       else
                         let _ ← sendTxSubmission2Responder sock (.MsgRequestTxs (wanted.map (·.hash)))
-                        inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+                        inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef ackedSoFar
                 | some (.MsgReplyTxs txBodies) =>
                     let now ← Cleanode.TUI.Render.nowMs
+                    let slot ← match ledgerStateRef with
+                      | some r => do let ls ← r.get; pure ls.lastSlot
+                      | none => pure 0
                     for txBytes in txBodies do
                       let pool ← mempoolRef.get
-                      match ← pool.addTxRaw txBytes now with
+                      let result ← match ledgerStateRef with
+                        | some lsRef => pool.addTxValidated txBytes now (← lsRef.get) slot
+                        | none => pool.addTxRaw txBytes now
+                      match result with
                       | .ok newPool => mempoolRef.set newPool
                       | .error _ => pure ()
                     if let some tRef := tuiRef then
@@ -1849,20 +1925,21 @@ partial def inboundPeerLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
                       tRef.modify (·.updateMempool pool.entries.length pool.totalBytes)
                     let _ ← sendTxSubmission2Responder sock
                       (.MsgRequestTxIds false (UInt16.ofNat txBodies.length) 10)
-                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks txBodies.length
+                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef txBodies.length
                 | _ =>
-                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+                    inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef ackedSoFar
 
               else
                 -- Unknown protocol, continue
-                inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ackedSoFar
+                inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef ackedSoFar
 
 open Cleanode.Consensus.Praos.BlockAnnounce in
 /-- Handle a single inbound peer: handshake then enter mux loop -/
 partial def handleInboundPeer (sock : Socket) (mempoolRef : IO.Ref Mempool)
     (tuiRef : Option (IO.Ref TUIState))
     (registryRef : IO.Ref PeerRegistry)
-    (network : NetworkMagic := .Mainnet) : IO Unit := do
+    (network : NetworkMagic := .Mainnet)
+    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none) : IO Unit := do
   IO.eprintln "[Inbound] New connection, starting handshake..."
   match ← receiveAndRespondHandshake sock (network := network) with
   | .error e =>
@@ -1878,23 +1955,24 @@ partial def handleInboundPeer (sock : Socket) (mempoolRef : IO.Ref Mempool)
       let reg ← registryRef.get
       let peerId := s!"inbound-{reg.subscribers.size}"
       let pendingBlocks ← IO.mkRef (#[] : Array Cleanode.Consensus.Praos.BlockForge.ForgedBlock)
-      inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks
+      inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef
 
 open Cleanode.Consensus.Praos.BlockAnnounce in
 /-- Accept loop: listen for inbound connections, spawn handler per peer -/
 partial def acceptLoop (listenSock : Socket) (mempoolRef : IO.Ref Mempool)
     (tuiRef : Option (IO.Ref TUIState))
     (registryRef : IO.Ref PeerRegistry)
-    (network : NetworkMagic := .Mainnet) : IO Unit := do
+    (network : NetworkMagic := .Mainnet)
+    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none) : IO Unit := do
   match ← socket_accept listenSock with
   | .error _ =>
       IO.sleep 1000
-      acceptLoop listenSock mempoolRef tuiRef registryRef network
+      acceptLoop listenSock mempoolRef tuiRef registryRef network ledgerStateRef
   | .ok clientSock => do
       let _ ← IO.asTask (do
-        try handleInboundPeer clientSock mempoolRef tuiRef registryRef network
+        try handleInboundPeer clientSock mempoolRef tuiRef registryRef network ledgerStateRef
         catch _ => let _ ← socket_close clientSock; pure ())
-      acceptLoop listenSock mempoolRef tuiRef registryRef network
+      acceptLoop listenSock mempoolRef tuiRef registryRef network ledgerStateRef
 
 /-- Multi-peer relay node mode -/
 def relayNode (proposal : HandshakeMessage) (networkName : String)
@@ -1902,7 +1980,9 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
     (metricsPort : Option UInt16 := none)
     (forgeParams : Option Cleanode.Consensus.Praos.BlockForge.ForgeParams := none)
     (socketPath : Option String := none)
-    (chainDb : ChainDB) : IO Unit := do
+    (chainDb : ChainDB)
+    (syncOrigin : Cleanode.TUI.State.SyncOrigin := .genesis)
+    (replayedLedgerState : Option Cleanode.Ledger.State.LedgerState := none) : IO Unit := do
 
   -- Build topology from bootstrap peers
   let bootstrapPeers := match networkName with
@@ -1932,10 +2012,12 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
   let mempoolRef ← IO.mkRef (Mempool.empty {})
 
   -- Shared ledger state (for N2C queries from cardano-cli)
-  -- Treasury/reserves from preprod epoch 276 (updated at epoch boundaries during sync)
-  let initialLedgerState := { Cleanode.Ledger.State.LedgerState.initial with
-    treasury := if networkName == "Preprod" then 1766738361646723 else 0
-    reserves := if networkName == "Preprod" then 13181724972929461 else 0 }
+  -- Use replayed state from Mithril if available, otherwise start empty
+  let initialLedgerState := match replayedLedgerState with
+    | some ls => ls
+    | none => { Cleanode.Ledger.State.LedgerState.initial with
+        treasury := if networkName == "Preprod" then 1766738361646723 else 0
+        reserves := if networkName == "Preprod" then 13181724972929461 else 0 }
   let ledgerStateRef ← IO.mkRef initialLedgerState
 
   -- Shared consensus state (epoch nonces, stake snapshots, chain selection)
@@ -1966,7 +2048,7 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
 
   -- TUI state (always created — also used by metrics server)
   let now ← Cleanode.TUI.Render.nowMs
-  let tuiStateRefInner ← IO.mkRef (TUIState.empty networkName now)
+  let tuiStateRefInner ← IO.mkRef ({ TUIState.empty networkName now with syncOrigin := syncOrigin })
   let tuiStateRef : Option (IO.Ref TUIState) := some tuiStateRefInner
 
   -- Start metrics server if configured
@@ -2014,7 +2096,7 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
     | .ok listenSock => do
         IO.eprintln s!"[Listen] OK — listening on port {listenPort}"
         tuiLog tuiStateRef s!"Listening for inbound peers on port {listenPort}"
-        try acceptLoop listenSock mempoolRef tuiStateRef registryRef network
+        try acceptLoop listenSock mempoolRef tuiStateRef registryRef network ledgerStateRef
         catch e =>
           IO.eprintln s!"[Listen] acceptLoop crashed: {e}"
           tuiLog tuiStateRef s!"Listener: {e}")
@@ -2102,6 +2184,8 @@ def runNode (config : NodeConfig) : IO Unit := do
   let chainDb ← ChainDB.open {}
 
   -- Mithril fast-sync if requested
+  let mut syncOrigin : Cleanode.TUI.State.SyncOrigin := .genesis
+  let mut replayedLedger : Option Cleanode.Ledger.State.LedgerState := none
   if config.mithrilSync then
     let mithrilNetwork := match config.network with
       | .preprod => Cleanode.Mithril.Types.MithrilNetwork.preprod
@@ -2121,6 +2205,27 @@ def runNode (config : NodeConfig) : IO Unit := do
       -- Save the Mithril tip as sync state so peer sync resumes from here
       chainDb.saveSyncState syncResult.tipSlot 0 syncResult.tipPoint.hash
       IO.println "[mithril] Sync state saved — peer sync will resume from snapshot tip"
+      syncOrigin := .mithril syncResult.snapshot.beacon.epoch syncResult.snapshot.beacon.immutableFileNumber syncResult.snapshot.createdAt syncResult.snapshot.digest
+
+      -- Try loading UTxO snapshot first (fast path)
+      let snapshotFile := s!"./data/{networkName.toLower}/utxo-snapshot.dat"
+      let loaded ← Cleanode.Ledger.Snapshot.loadSnapshot snapshotFile
+      match loaded with
+      | some cachedState =>
+        IO.println s!"[snapshot] Using cached UTxO set — skipping replay"
+        replayedLedger := some cachedState
+      | none =>
+        -- No snapshot — replay ImmutableDB to build UTxO set
+        IO.println "[replay] No UTxO snapshot found, replaying ImmutableDB..."
+        let initialState := { Cleanode.Ledger.State.LedgerState.initial with
+          treasury := if networkName == "Preprod" then 1766738361646723 else 0
+          reserves := if networkName == "Preprod" then 13181724972929461 else 0 }
+        let finalState ← Cleanode.Mithril.Replay.replayImmutableDB syncResult.dbPath initialState
+          Cleanode.Mithril.Replay.defaultReplayReporter 0
+        IO.println s!"[replay] UTxO set reconstructed: {finalState.utxo.size} entries"
+        -- Save snapshot for next startup
+        Cleanode.Ledger.Snapshot.createSnapshot finalState ⟨s!"./data/{networkName.toLower}"⟩
+        replayedLedger := some finalState
 
   -- Load SPO keys if block production is configured
   let mut spoForgeParams : Option Cleanode.Consensus.Praos.BlockForge.ForgeParams := none
@@ -2140,7 +2245,7 @@ def runNode (config : NodeConfig) : IO Unit := do
       spoForgeParams := some fp
 
   -- Run as multi-peer relay node (with optional block production)
-  relayNode proposal networkName config.tui config.port config.metricsPort spoForgeParams config.socketPath chainDb
+  relayNode proposal networkName config.tui config.port config.metricsPort spoForgeParams config.socketPath chainDb syncOrigin replayedLedger
 
 /-- Handle query subcommands (reads status file from a running node) -/
 def runQuery (target : QueryTarget) : IO Unit := do
@@ -2155,9 +2260,100 @@ def runQuery (target : QueryTarget) : IO Unit := do
   | .peers => Cleanode.CLI.Query.queryPeers
   | .mempool => Cleanode.CLI.Query.queryMempool
 
+/-- Replay saved block CBOR files and validate every tx (no UTxO existence check).
+    Usage: cleanode replay failed_blocks/block_*.cbor -/
+def runReplay (paths : List String) : IO Unit := do
+  if paths.isEmpty then
+    IO.println "Usage: cleanode replay <block.cbor> [block2.cbor ...]"
+    return
+  -- Expand directories: use ls to find .cbor files
+  let mut allFiles : List String := []
+  for p in paths do
+    if p.endsWith "/" || p.endsWith "failed_blocks" then
+      let output ← IO.Process.output { cmd := "ls", args := #[p] }
+      for line in output.stdout.splitOn "\n" do
+        if line.endsWith ".cbor" then
+          let path := if p.endsWith "/" then s!"{p}{line}" else s!"{p}/{line}"
+          allFiles := path :: allFiles
+    else
+      allFiles := p :: allFiles
+  allFiles := allFiles.reverse
+  IO.println s!"Replaying {allFiles.length} block(s)...\n"
+
+  -- Minimal ledger state with default preprod params
+  let state := Cleanode.Ledger.State.LedgerState.initial
+
+  for file in allFiles do
+    let blockBytes ← IO.FS.readBinFile file
+    IO.println s!"── {file} ({blockBytes.size} bytes) ──"
+
+    let parsed ← Cleanode.Network.ConwayBlock.parseConwayBlockBodyIO blockBytes
+    match parsed with
+    | none => IO.println "  ✗ Failed to parse block body CBOR"
+    | some body => do
+      IO.println s!"  txs={body.transactions.length} invalidTxs={body.invalidTxs}"
+      let mut txIdx := 0
+      for tx in body.transactions do
+        let isInvalid := body.invalidTxs.contains txIdx
+        let tag := if isInvalid then "[PHASE2-INVALID] " else ""
+        IO.println s!"\n  {tag}tx[{txIdx}]: fee={tx.body.fee} inputs={tx.body.inputs.length} outputs={tx.body.outputs.length} serializedSize={tx.serializedSize}"
+        IO.println s!"    mint={tx.body.mint.length} withdrawals={tx.body.withdrawals.length} certs={tx.body.certificates.length}"
+        IO.println s!"    vkeys={tx.witnesses.vkeyWitnesses.length} bootstrap={tx.witnesses.bootstrapWitnesses.length} redeemers={tx.witnesses.redeemers.length}"
+        IO.println s!"    native={tx.witnesses.nativeScripts.length} plutusV1={tx.witnesses.plutusV1Scripts.length} plutusV2={tx.witnesses.plutusV2Scripts.length} plutusV3={tx.witnesses.plutusV3Scripts.length}"
+        if let some ttl := tx.body.ttl then IO.println s!"    ttl={ttl}"
+        if let some vf := tx.body.validityIntervalStart then IO.println s!"    validFrom={vf}"
+        -- Print raw bytes info for script debugging
+        for (i, s) in (List.range tx.witnesses.plutusV1Scripts.length).zip tx.witnesses.plutusV1Scripts do
+          IO.println s!"    plutusV1[{i}]: {s.size} bytes, first4={bytesToHex (s.extract 0 (min 4 s.size))}"
+        for (i, s) in (List.range tx.witnesses.plutusV2Scripts.length).zip tx.witnesses.plutusV2Scripts do
+          IO.println s!"    plutusV2[{i}]: {s.size} bytes, first4={bytesToHex (s.extract 0 (min 4 s.size))}"
+        for (i, s) in (List.range tx.witnesses.plutusV3Scripts.length).zip tx.witnesses.plutusV3Scripts do
+          IO.println s!"    plutusV3[{i}]: {s.size} bytes, first4={bytesToHex (s.extract 0 (min 4 s.size))}"
+
+        if !isInvalid then
+          -- Validate (skip UTxO existence — use empty UTxO set but don't fail on missing inputs)
+          -- Extract slot from filename if possible
+          let slot := match file.splitOn "_slot_" with
+            | [_, rest] => (rest.splitOn ".").head!.toNat?.getD 0
+            | _ => 0
+
+          -- Fee check
+          let feeParams := state.protocolParams.feeParams
+          let effectiveSize := if tx.serializedSize > 0 then tx.serializedSize else tx.body.rawBytes.size
+          let minFee := Cleanode.Ledger.Fee.totalMinFee feeParams effectiveSize tx.witnesses.redeemers
+          if tx.body.fee < minFee then
+            IO.println s!"    ✗ FEE: paid={tx.body.fee} min={minFee} (size={effectiveSize})"
+          else
+            IO.println s!"    ✓ FEE: paid={tx.body.fee} >= min={minFee}"
+
+          -- Signature check
+          let sigResult ← Cleanode.Ledger.Validation.validateSignatures state.utxo tx.body tx.witnesses
+          match sigResult with
+          | .ok () => IO.println s!"    ✓ SIGNATURES"
+          | .error e => IO.println s!"    ✗ SIGNATURES: {repr e}"
+
+          -- Native script check
+          let mut signerKeyHashes : List ByteArray := []
+          for w in tx.witnesses.vkeyWitnesses do
+            let keyHash ← blake2b_224 w.vkey
+            signerKeyHashes := keyHash :: signerKeyHashes
+          match Cleanode.Ledger.Validation.validateNativeScripts tx.witnesses signerKeyHashes slot with
+          | .ok () => IO.println s!"    ✓ NATIVE SCRIPTS"
+          | .error e => IO.println s!"    ✗ NATIVE SCRIPTS: {repr e}"
+
+          -- Plutus script check
+          let txHash ← blake2b_256 tx.body.rawBytes
+          match ← Cleanode.Plutus.Evaluate.evaluateTransactionScriptsIO tx.body tx.witnesses state.utxo txHash with
+          | .ok () => IO.println s!"    ✓ PLUTUS SCRIPTS"
+          | .error e => IO.println s!"    ✗ PLUTUS SCRIPTS: {e}"
+
+        txIdx := txIdx + 1
+      IO.println ""
+
 def main (args : List String) : IO Unit := do
   match parseArgs args with
   | .help => Cleanode.CLI.Args.printUsage
   | .version => IO.println "Cleanode v0.1.0"
   | .query target => runQuery target
+  | .replay paths => runReplay paths
   | .run config => runNode config

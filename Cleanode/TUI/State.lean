@@ -19,6 +19,13 @@ structure BlockSummary where
   peerAddr  : String        -- Which peer provided this block
   validTxs  : Nat := 0      -- Txs that passed our validation
   failedTxs : Nat := 0      -- Txs that failed our validation
+  skippedTxs : Nat := 0     -- Txs skipped (inputs unknown)
+  validationErrors : List String := []  -- Per-tx error messages for detail panel
+  -- Per-block consensus header validation
+  vrfOk     : Bool := false  -- VRF proof verified
+  kesOk     : Bool := false  -- KES signature verified
+  opCertOk  : Bool := false  -- Operational cert verified
+  headerValidated : Bool := false  -- Header validation was attempted
   deriving Repr
 
 /-- A peer summary for TUI display -/
@@ -43,6 +50,12 @@ structure ConsensusInfo where
   lastIssuerVKey   : String     -- Last block issuer VKey hash (hex, truncated)
   epochNonceHex    : String     -- Current epoch nonce (hex, truncated)
   evolvingNonceHex : String     -- Evolving nonce (hex, truncated)
+  deriving Repr
+
+/-- How the node started syncing -/
+inductive SyncOrigin where
+  | genesis                                    -- Started from genesis (full sync)
+  | mithril (epoch : Nat) (immutableFile : Nat) (createdAt : String) (digest : String)  -- From Mithril snapshot
   deriving Repr
 
 /-- Which panel currently has keyboard focus -/
@@ -74,16 +87,19 @@ structure TUIState where
   logs            : List String         -- Last M log lines for status bar
   consensus       : ConsensusInfo       -- Consensus validation stats
   -- Interactive state
+  paused           : Bool := false      -- When true, block list stops auto-scrolling
   selectedBlockIdx : Nat := 0           -- Cursor in the block list (0 = newest)
   activePanel      : ActivePanel := .blocks
   detailView       : DetailView := .none
   maxRecentBlocks : Nat := 20
   maxLogs         : Nat := 5
+  pendingBlocks   : List BlockSummary := []  -- Blocks received while paused (newest first)
   -- Ledger validation counters
   blocksFullyValid : Nat := 0    -- Blocks where all txs passed our rules
   blocksWithFailures : Nat := 0  -- Blocks where at least one tx failed
   totalTxsValidated : Nat := 0   -- Total txs validated across all blocks
   totalTxsFailed : Nat := 0      -- Total txs that failed validation
+  syncOrigin : SyncOrigin := .genesis  -- How this sync session started
   deriving Repr
 
 /-- Create an empty TUI state -/
@@ -109,9 +125,17 @@ def TUIState.empty (networkName : String) (startedAt : Nat) : TUIState :=
 /-- Add a block to the recent blocks list (newest first, bounded, deduplicated) -/
 def TUIState.addBlock (s : TUIState) (b : BlockSummary) : TUIState :=
   -- Skip duplicate blocks (multiple peers may sync the same block)
-  if s.recentBlocks.any (fun x => x.blockNo == b.blockNo) then
+  if s.recentBlocks.any (fun x => x.blockNo == b.blockNo) ||
+     s.pendingBlocks.any (fun x => x.blockNo == b.blockNo) then
     { s with tipBlockNo := max s.tipBlockNo b.blockNo
              tipSlot := max s.tipSlot b.slot }
+  else if s.paused then
+    -- While paused, buffer new blocks — don't touch the visible list
+    { s with
+      pendingBlocks := (b :: s.pendingBlocks).take s.maxRecentBlocks
+      tipBlockNo := b.blockNo
+      tipSlot := b.slot
+      blocksReceived := s.blocksReceived + 1 }
   else
     let blocks := (b :: s.recentBlocks).take s.maxRecentBlocks
     { s with
@@ -191,6 +215,15 @@ def TUIState.selectBack (s : TUIState) : TUIState :=
   | .blockDetail => { s with detailView := .none }
   | .consensusFull => { s with detailView := .none, activePanel := .blocks }
   | .none => s
+
+/-- Toggle pause mode. On unpause, flush pending blocks into the visible list. -/
+def TUIState.togglePause (s : TUIState) : TUIState :=
+  if s.paused then
+    -- Unpausing: merge pending blocks into visible list
+    let merged := (s.pendingBlocks ++ s.recentBlocks).take s.maxRecentBlocks
+    { s with paused := false, recentBlocks := merged, pendingBlocks := [], selectedBlockIdx := 0 }
+  else
+    { s with paused := true }
 
 /-- Toggle consensus detail panel -/
 def TUIState.toggleConsensus (s : TUIState) : TUIState :=

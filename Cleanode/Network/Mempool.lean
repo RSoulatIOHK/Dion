@@ -207,6 +207,45 @@ def Mempool.addTxRaw (pool : Mempool) (rawBytes : ByteArray) (nowMs : Nat)
     config := pool.config
   }
 
+/-- Add a transaction to the mempool after full ledger validation.
+    Parses the raw CBOR, runs validateTransaction, rejects if invalid. -/
+def Mempool.addTxValidated (pool : Mempool) (rawBytes : ByteArray) (nowMs : Nat)
+    (ledger : Cleanode.Ledger.State.LedgerState) (slot : Nat)
+    : IO (Except String Mempool) := do
+  -- Capacity checks first (cheap)
+  if pool.totalBytes + rawBytes.size > pool.config.maxBytes then
+    return .error "mempool byte limit"
+  if pool.entries.length >= pool.config.maxSize then
+    return .error "mempool full"
+  -- Parse the standalone transaction
+  match Cleanode.Network.ConwayBlock.parseStandaloneTx rawBytes with
+  | none => return .error "tx parse failed"
+  | some (body, witnesses, _rawBody) =>
+    -- Dedup check
+    let txHash ← Cleanode.Network.Crypto.blake2b_256 rawBytes
+    if pool.contains txHash then return .ok pool
+    -- Full ledger validation (same logic as block validation)
+    let allInputsKnown := body.inputs.all fun inp =>
+      let id : Cleanode.Ledger.UTxO.UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
+      ledger.utxo.contains id
+    if !allInputsKnown then
+      return .error "unknown inputs (UTxO not synced yet)"
+    match ← Cleanode.Ledger.Validation.validateTransaction
+        ledger body witnesses .Conway slot rawBytes.size with
+    | .error e => return .error s!"validation failed: {repr e}"
+    | .ok () =>
+      let entry : MempoolEntry := {
+        txHash, rawBytes
+        transaction := { body, witnesses := { witnesses with } }
+        addedAt := nowMs
+        size := rawBytes.size
+      }
+      return .ok {
+        entries := pool.entries ++ [entry]
+        totalBytes := pool.totalBytes + rawBytes.size
+        config := pool.config
+      }
+
 /-- Per-peer TxSubmission2 sliding window state.
     Tracks which txs have been announced to this peer. -/
 structure TxSubmPeerState where

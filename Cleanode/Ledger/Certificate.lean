@@ -196,6 +196,16 @@ inductive CertError where
   | poolNotRegistered
   | retirementTooFar (epoch maxEpoch : Nat)
   | ownerNotSigned
+  -- #392: Non-zero reward balance on deregistration
+  | nonZeroRewardBalance (balance : Nat)
+  -- #393: Incorrect deposit/refund amounts (Conway)
+  | incorrectDeposit (provided expected : Nat)
+  | incorrectRefund (provided expected : Nat)
+  -- #394: Pool cost below minimum
+  | poolCostTooLow (cost minCost : Nat)
+  -- #395: Delegatee not registered
+  | delegateePoolNotRegistered (poolId : ByteArray)
+  | delegateeDRepNotRegistered
 
 instance : Repr CertError where
   reprPrec
@@ -204,6 +214,12 @@ instance : Repr CertError where
     | .poolNotRegistered, _ => "PoolNotRegistered"
     | .retirementTooFar e m, _ => s!"RetirementTooFar(epoch={e}, max={m})"
     | .ownerNotSigned, _ => "OwnerNotSigned"
+    | .nonZeroRewardBalance b, _ => s!"NonZeroRewardBalance(balance={b})"
+    | .incorrectDeposit p e, _ => s!"IncorrectDeposit(provided={p}, expected={e})"
+    | .incorrectRefund p e, _ => s!"IncorrectRefund(provided={p}, expected={e})"
+    | .poolCostTooLow c m, _ => s!"PoolCostTooLow(cost={c}, min={m})"
+    | .delegateePoolNotRegistered _, _ => "DelegateePoolNotRegistered"
+    | .delegateeDRepNotRegistered, _ => "DelegateeDRepNotRegistered"
 
 /-- Validate a certificate against current ledger state -/
 def validateCertificate (state : LedgerState) (cert : Certificate)
@@ -215,10 +231,20 @@ def validateCertificate (state : LedgerState) (cert : Certificate)
   | .stakeKeyDeregistration keyHash =>
     if !state.delegation.registeredStakeKeys.any (· == keyHash) then
       throw .stakeKeyNotRegistered
-  | .stakeDelegation keyHash _ =>
+    -- #392: Cannot deregister with non-zero reward balance
+    let balance := state.rewardBalance (if keyHash.size == 28 then keyHash else keyHash)
+    if balance > 0 then
+      throw (.nonZeroRewardBalance balance)
+  | .stakeDelegation keyHash poolId =>
     if !state.delegation.registeredStakeKeys.any (· == keyHash) then
       throw .stakeKeyNotRegistered
-  | .poolRegistration _ => pure ()  -- Pool registration is always valid (creates or updates)
+    -- #395: Target pool must be registered
+    if !state.pools.registeredPools.any (fun p => p.poolId == poolId) then
+      throw (.delegateePoolNotRegistered poolId)
+  | .poolRegistration params =>
+    -- #394: Pool cost must be at least minPoolCost
+    if params.cost < state.protocolParams.minPoolCost then
+      throw (.poolCostTooLow params.cost state.protocolParams.minPoolCost)
   | .poolRetirement poolId epoch =>
     if !state.pools.registeredPools.any (fun p => p.poolId == poolId) then
       throw .poolNotRegistered
@@ -226,21 +252,40 @@ def validateCertificate (state : LedgerState) (cert : Certificate)
     if epoch > maxEpoch then
       throw (.retirementTooFar epoch maxEpoch)
   -- Conway certificates: validate stake key preconditions
-  | .conwayRegistration keyHash _ =>
+  | .conwayRegistration keyHash deposit =>
     if state.delegation.registeredStakeKeys.any (· == keyHash) then
       throw .stakeKeyAlreadyRegistered
-  | .conwayDeregistration keyHash _ =>
+    -- #393: Deposit must match stakeKeyDeposit
+    if deposit != state.protocolParams.stakeKeyDeposit then
+      throw (.incorrectDeposit deposit state.protocolParams.stakeKeyDeposit)
+  | .conwayDeregistration keyHash refund =>
     if !state.delegation.registeredStakeKeys.any (· == keyHash) then
       throw .stakeKeyNotRegistered
+    -- #392: Cannot deregister with non-zero reward balance
+    let balance := state.rewardBalance keyHash
+    if balance > 0 then
+      throw (.nonZeroRewardBalance balance)
+    -- #393: Refund must match stakeKeyDeposit
+    if refund != state.protocolParams.stakeKeyDeposit then
+      throw (.incorrectRefund refund state.protocolParams.stakeKeyDeposit)
   | .voteDelegation keyHash _ =>
     if !state.delegation.registeredStakeKeys.any (· == keyHash) then
       throw .stakeKeyNotRegistered
-  | .stakeVoteDelegation keyHash _ _ =>
+  | .stakeVoteDelegation keyHash poolId _ =>
     if !state.delegation.registeredStakeKeys.any (· == keyHash) then
       throw .stakeKeyNotRegistered
-  | .stakeRegDelegation _ _ _ => pure ()  -- Registration + delegation in one
+    -- #395: Target pool must be registered
+    if !state.pools.registeredPools.any (fun p => p.poolId == poolId) then
+      throw (.delegateePoolNotRegistered poolId)
+  | .stakeRegDelegation _ poolId _ =>
+    -- #395: Target pool must be registered
+    if !state.pools.registeredPools.any (fun p => p.poolId == poolId) then
+      throw (.delegateePoolNotRegistered poolId)
   | .voteRegDelegation _ _ _ => pure ()
-  | .stakeVoteRegDelegation _ _ _ _ => pure ()
+  | .stakeVoteRegDelegation _ poolId _ _ =>
+    -- #395: Target pool must be registered
+    if !state.pools.registeredPools.any (fun p => p.poolId == poolId) then
+      throw (.delegateePoolNotRegistered poolId)
   | .authCommitteeHot _ _ => pure ()
   | .resignCommitteeCold _ => pure ()
 

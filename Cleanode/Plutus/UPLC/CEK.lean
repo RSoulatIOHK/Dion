@@ -346,17 +346,22 @@ def applyBuiltin (fun_ : BuiltinFun) (args : List CekValue) : Except String CekV
     let n := bs.foldl (fun acc b => acc * 256 + b.toNat) 0
     return .VConst (.Integer (Int.ofNat n))
 
-  -- Crypto (hash functions — would need FFI in production)
-  | .Blake2b_256, [.VConst (.ByteString _bs)] =>
-    -- Placeholder — in production, call FFI blake2b_256
-    return .VConst (.ByteString (ByteArray.mk (Array.replicate 32 0)))
-  | .Sha2_256, [.VConst (.ByteString _bs)] =>
-    return .VConst (.ByteString (ByteArray.mk (Array.replicate 32 0)))
-  | .Sha3_256, [.VConst (.ByteString _bs)] =>
-    return .VConst (.ByteString (ByteArray.mk (Array.replicate 32 0)))
-  | .VerifyEd25519Signature, [.VConst (.ByteString _vk), .VConst (.ByteString _msg), .VConst (.ByteString _sig)] =>
-    -- Placeholder — needs FFI
-    return .VConst (.Bool false)
+  -- Crypto builtins — these are handled by applyBuiltinIO in IO mode.
+  -- Pure mode fallback: return error directing caller to use IO evaluation.
+  | .Blake2b_256, [.VConst (.ByteString _)] =>
+    throw "blake2b_256 requires IO evaluation (use evaluateIO)"
+  | .Sha2_256, [.VConst (.ByteString _)] =>
+    throw "sha2_256 requires IO evaluation (use evaluateIO)"
+  | .Sha3_256, [.VConst (.ByteString _)] =>
+    throw "sha3_256 requires IO evaluation (use evaluateIO)"
+  | .Keccak_256, [.VConst (.ByteString _)] =>
+    throw "keccak_256 requires IO evaluation (use evaluateIO)"
+  | .Blake2b_224, [.VConst (.ByteString _)] =>
+    throw "blake2b_224 requires IO evaluation (use evaluateIO)"
+  | .Ripemd_160, [.VConst (.ByteString _)] =>
+    throw "ripemd_160 requires IO evaluation (use evaluateIO)"
+  | .VerifyEd25519Signature, [.VConst (.ByteString _), .VConst (.ByteString _), .VConst (.ByteString _)] =>
+    throw "ed25519_verify requires IO evaluation (use evaluateIO)"
 
   | _, _ => throw s!"builtin type mismatch or unimplemented: {repr fun_}"
 
@@ -378,11 +383,15 @@ def step (state : CekState) (budget : ExBudget) : CekState × ExBudget :=
     | .Computing env term cont =>
       match term with
       | .Var idx =>
-        -- de Bruijn: index 0 = most recently bound (last in env array)
-        let ridx := env.size - 1 - idx
-        if h : ridx < env.size then
-          (.Returning env[ridx] cont, budget')
-        else (.Error s!"variable index {idx} out of range (env size {env.size})", budget')
+        -- de Bruijn indices in UPLC Flat are 1-based: 1 = most recently bound
+        -- Index 0 means free variable (should not occur in closed programs)
+        if idx == 0 || idx > env.size then
+          (.Error s!"variable index {idx} out of range (env size {env.size})", budget')
+        else
+          let ridx := env.size - idx
+          match env[ridx]? with
+          | some v => (.Returning v cont, budget')
+          | none => (.Error s!"variable index {idx} lookup failed", budget')
       | .LamAbs body =>
         (.Returning (.VLamAbs body env) cont, budget')
       | .Delay body =>
@@ -592,7 +601,7 @@ def applyBuiltinIO (fun_ : BuiltinFun) (args : List CekValue) : IO (Option (Exce
   | .VerifyEd25519Signature, [.VConst (.ByteString vk), .VConst (.ByteString msg), .VConst (.ByteString sig)] =>
     let r ← Cleanode.Network.Crypto.ed25519_verify_ffi vk msg sig
     return some (.ok (.VConst (.Bool r)))
-  -- Sha2_256 and Sha3_256: no FFI available yet, return placeholder
+  -- SHA-256 and SHA3-256 via FFI
   | .Sha2_256, [.VConst (.ByteString bs)] =>
     let r ← Cleanode.Network.Crypto.sha256 bs
     return some (.ok (.VConst (.ByteString r)))
@@ -606,6 +615,18 @@ def applyBuiltinIO (fun_ : BuiltinFun) (args : List CekValue) : IO (Option (Exce
   | .VerifySchnorrSecp256k1Signature, [.VConst (.ByteString vk), .VConst (.ByteString msg), .VConst (.ByteString sig)] =>
     let r ← Cleanode.Network.Crypto.secp256k1_schnorr_verify vk msg sig
     return some (.ok (.VConst (.Bool r)))
+  -- #406: Keccak-256 (NOT the same as SHA3-256 — different padding)
+  | .Keccak_256, [.VConst (.ByteString bs)] =>
+    let r ← Cleanode.Network.Crypto.keccak_256 bs
+    return some (.ok (.VConst (.ByteString r)))
+  -- Blake2b-224 (28-byte hash, used for credential hashing)
+  | .Blake2b_224, [.VConst (.ByteString bs)] =>
+    let r ← Cleanode.Network.Crypto.blake2b_224 bs
+    return some (.ok (.VConst (.ByteString r)))
+  -- #407: RIPEMD-160 (20-byte hash, used in Bitcoin-compatible scripts)
+  | .Ripemd_160, [.VConst (.ByteString bs)] =>
+    let r ← Cleanode.Network.Crypto.ripemd_160 bs
+    return some (.ok (.VConst (.ByteString r)))
   | _, _ => return none
 
 /-- IO-based CEK step: tries IO builtins first, falls back to pure step. -/

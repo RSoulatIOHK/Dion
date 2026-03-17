@@ -20,6 +20,7 @@ namespace Cleanode.Ledger.Snapshot
 
 open Cleanode.Ledger.State
 open Cleanode.Ledger.UTxO
+open Cleanode.Network.ConwayBlock
 open System (FilePath)
 
 -- ====================
@@ -131,9 +132,26 @@ partial def createSnapshot (state : LedgerState) (snapshotDir : FilePath) : IO U
   for entry in state.utxo.toList do
     data := data ++ serializeUTxOEntry entry
 
-  let filename := snapshotDir / s!"snapshot_{si.epoch}_{si.slot}.dat"
+  let filename := snapshotDir / "utxo-snapshot.dat"
   IO.FS.writeBinFile filename data
-  IO.println s!"Snapshot saved: epoch={si.epoch}, slot={si.slot}, utxos={si.utxoCount}"
+  IO.println s!"[snapshot] Saved: {filename} — epoch={si.epoch}, slot={si.slot}, utxos={si.utxoCount}, size={data.size} bytes"
+
+/-- Deserialize UTxO entries from snapshot binary data -/
+private partial def deserializeUTxOEntries (data : ByteArray) (offset : Nat) (count : Nat) : UTxOSet :=
+  let rec go (off : Nat) (remaining : Nat) (m : Std.HashMap UTxOId TxOutput) : Std.HashMap UTxOId TxOutput :=
+    if remaining == 0 || off + 44 > data.size then m
+    else
+      let txHash := data.extract off (off + 32)
+      let outputIndex := decodeNat64 data (off + 32)
+      let addrLen := (decodeU32 data (off + 40)).toNat
+      if off + 44 + addrLen + 8 > data.size then m
+      else
+        let address := data.extract (off + 44) (off + 44 + addrLen)
+        let amount := decodeNat64 data (off + 44 + addrLen)
+        let id : UTxOId := { txHash, outputIndex }
+        let output : TxOutput := { address, amount, datum := none, inlineDatum := none, scriptRef := none, nativeAssets := [] }
+        go (off + 44 + addrLen + 8) (remaining - 1) (m.insert id output)
+  { map := go offset count Std.HashMap.emptyWithCapacity }
 
 /-- Load a snapshot from disk -/
 def loadSnapshot (filename : FilePath) : IO (Option LedgerState) := do
@@ -151,18 +169,23 @@ def loadSnapshot (filename : FilePath) : IO (Option LedgerState) := do
     let epoch := decodeNat64 data 8
     let slot := decodeNat64 data 16
     let blockNo := decodeNat64 data 24
-    let _utxoCount := decodeNat64 data 32
+    let utxoCount := decodeNat64 data 32
 
-    -- For now, return a minimal state with the info
-    -- Full deserialization would reconstruct the UTxO set
+    -- Deserialize UTxO entries (header is 56 bytes: 8 + 8*6 = 56)
+    IO.println s!"[snapshot] Loading {utxoCount} UTxO entries from {filename}..."
+    let utxo := deserializeUTxOEntries data 56 utxoCount
+
     let ledgerState := {
       LedgerState.initial with
       lastSlot := slot,
       lastBlockNo := blockNo,
+      utxo := utxo,
       protocolParams := { ProtocolParamsState.mainnetDefaults with epoch := epoch }
     }
+    IO.println s!"[snapshot] Loaded: slot={slot}, block={blockNo}, UTxO={utxo.size} entries"
     return some ledgerState
-  catch _ =>
+  catch e =>
+    IO.println s!"[snapshot] Failed to load {filename}: {e}"
     return none
 
 /-- Validate snapshot integrity -/

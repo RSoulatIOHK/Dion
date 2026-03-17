@@ -44,6 +44,29 @@ def midSeparatorT (leftWidth rightWidth : Nat) : String :=
 def midSeparatorInvT (leftWidth rightWidth : Nat) : String :=
   s!"{Ansi.blue}╠{hline '═' (leftWidth - 1)}╩{hline '═' (rightWidth - 2)}╣{Ansi.reset}"
 
+/-- Mid separator with 3-column top T: ╠═══╦═══╦═══╣ -/
+def midSeparatorTriT (lw mw rw : Nat) : String :=
+  s!"{Ansi.blue}╠{hline '═' (lw - 1)}╦{hline '═' (mw - 1)}╦{hline '═' (rw - 2)}╣{Ansi.reset}"
+
+/-- Mid separator with 3-column bottom T: ╠═══╩═══╩═══╣ -/
+def midSeparatorTriInvT (lw mw rw : Nat) : String :=
+  s!"{Ansi.blue}╠{hline '═' (lw - 1)}╩{hline '═' (mw - 1)}╩{hline '═' (rw - 2)}╣{Ansi.reset}"
+
+/-- Mid separator: left two columns merge, right column continues with content: ╠═══╩═══╣ content ║ -/
+def midSepMergeLeftWithContent (lw mw : Nat) (rightContent : String) (rw : Nat) : String :=
+  let ri := padRight rightContent (rw - 3)
+  s!"{Ansi.blue}╠{hline '═' (lw - 1)}╩{hline '═' (mw - 1)}╣{Ansi.reset} {ri}{Ansi.blue}║{Ansi.reset}"
+
+/-- Bottom separator: full-width left + right column end: ╠═══════╩═══╣ -/
+def midSepEndRight (leftTotal rw : Nat) : String :=
+  s!"{Ansi.blue}╠{hline '═' (leftTotal - 1)}╩{hline '═' (rw - 2)}╣{Ansi.reset}"
+
+/-- Two-column line where left is wide (merged): ║ left ║ right ║ -/
+def splitLineWide (left : String) (right : String) (leftTotal rightWidth : Nat) : String :=
+  let leftInner := padRight left (leftTotal - 2)
+  let rightInner := padRight right (rightWidth - 3)
+  s!"{Ansi.blue}║{Ansi.reset} {leftInner}{Ansi.blue}║{Ansi.reset} {rightInner}{Ansi.blue}║{Ansi.reset}"
+
 /-- Left-bordered line: ║ content ║ -/
 def boxLine (content : String) (width : Nat) : String :=
   let inner := padRight content (width - 4)
@@ -54,6 +77,13 @@ def splitLine (left : String) (right : String) (leftWidth rightWidth : Nat) : St
   let leftInner := padRight left (leftWidth - 2)
   let rightInner := padRight right (rightWidth - 3)
   s!"{Ansi.blue}║{Ansi.reset} {leftInner}{Ansi.blue}║{Ansi.reset} {rightInner}{Ansi.blue}║{Ansi.reset}"
+
+/-- Three-column line: ║ left ║ mid ║ right ║ -/
+def triLine (left : String) (mid : String) (right : String) (lw mw rw : Nat) : String :=
+  let li := padRight left (lw - 2)
+  let mi := padRight mid (mw - 2)
+  let ri := padRight right (rw - 3)
+  s!"{Ansi.blue}║{Ansi.reset} {li}{Ansi.blue}║{Ansi.reset} {mi}{Ansi.blue}║{Ansi.reset} {ri}{Ansi.blue}║{Ansi.reset}"
 
 -- ========================
 -- = Header               =
@@ -90,15 +120,28 @@ where
 def renderHeader (state : TUIState) (width : Nat) (nowMs : Nat) : List String :=
   let uptime := formatUptime nowMs state.startedAt
   let logoLines := renderLogo
+  let syncOriginLabel : String := match (state.syncOrigin : SyncOrigin) with
+    | .genesis => s!"{Ansi.dim}Sync: {Ansi.reset}{Ansi.yellow}Genesis{Ansi.reset}"
+    | .mithril epoch immFile createdAt digest =>
+      let snapshot := s!"epoch {epoch}, immutable #{immFile}"
+      let created := if createdAt.length > 0 then s!", {createdAt.take 10}" else ""
+      let digestShort := if digest.length > 0 then s!"  {Ansi.dim}digest: {Ansi.reset}{Ansi.cyan}{digest.take 16}..{Ansi.reset}" else ""
+      s!"{Ansi.dim}Sync: {Ansi.reset}{Ansi.brightGreen}Mithril{Ansi.reset}{Ansi.dim} ({snapshot}{created}){Ansi.reset}{digestShort}"
   let infoLines := [
     subtitle,
     s!"{Ansi.white}  Network: {Ansi.brightCyan}{state.networkName}{Ansi.reset}" ++
       s!"{Ansi.dim}  |  {Ansi.reset}{Ansi.white}Tip: {Ansi.brightYellow}#{formatNum state.tipBlockNo}{Ansi.reset}" ++
       s!"{Ansi.dim}  Slot: {Ansi.reset}{Ansi.cyan}{formatNum state.tipSlot}{Ansi.reset}" ++
       s!"{Ansi.dim}  |  {Ansi.reset}{Ansi.white}Uptime: {Ansi.green}{uptime}{Ansi.reset}",
+    let unknown := state.blocksReceived - state.blocksFullyValid - state.blocksWithFailures
     s!"{Ansi.white}  Blocks synced: {Ansi.brightYellow}{formatNum state.blocksReceived}{Ansi.reset}" ++
+      s!"{Ansi.dim}  ({Ansi.reset}{Ansi.brightGreen}{state.blocksFullyValid} valid{Ansi.reset}" ++
+      (if unknown > 0 then s!" {Ansi.dim}{unknown} unknown{Ansi.reset}" else "") ++
+      (if state.blocksWithFailures > 0 then s!" {Ansi.red}{state.blocksWithFailures} invalid{Ansi.reset}" else "") ++
+      s!"{Ansi.dim}){Ansi.reset}" ++
       s!"{Ansi.dim}  |  {Ansi.reset}{Ansi.white}Peers: {Ansi.brightGreen}{state.peers.length}{Ansi.reset}" ++
-      s!"{Ansi.dim}  |  {Ansi.reset}{Ansi.white}Rollbacks: {Ansi.yellow}{state.rollbacks}{Ansi.reset}"
+      s!"{Ansi.dim}  |  {Ansi.reset}{Ansi.white}Rollbacks: {Ansi.yellow}{state.rollbacks}{Ansi.reset}",
+    s!"{Ansi.white}  {syncOriginLabel}"
   ]
   -- Interleave logo and info: logo on left, info on right
   let headerLines := List.range 5 |>.map fun i =>
@@ -109,34 +152,53 @@ def renderHeader (state : TUIState) (width : Nat) (nowMs : Nat) : List String :=
     boxLine (s!"{logoPadded}  {info}") width
   headerLines
 
+/-- Format lovelace as ADA with 3 decimal places (e.g., 1234567 → "1.234") -/
+def formatAda (lovelace : Nat) : String :=
+  let whole := lovelace / 1000000
+  let frac := (lovelace % 1000000) / 1000  -- 3 decimal places
+  let fracStr := if frac < 10 then s!"00{frac}" else if frac < 100 then s!"0{frac}" else s!"{frac}"
+  s!"{formatNum whole}.{fracStr}"
+
 -- ========================
 -- = Blocks Panel         =
 -- ========================
 
-/-- Render a single block row -/
-def renderBlockRow (b : BlockSummary) (rowWidth : Nat) : String :=
+/-- Render a single block row, with optional selection highlight -/
+def renderBlockRow (b : BlockSummary) (rowWidth : Nat) (selected : Bool := false) : String :=
   let hashShort := b.hash.take 12
   let txLabel := if b.txCount == 1 then "tx " else "txs"
-  let feesAda := b.totalFees / 1000000
-  -- Validation indicator: green check if all pass, red X if any fail, dim dot if no txs
+  let feesAda := formatAda b.totalFees
+  -- Validation indicator:
+  --   Green V = fully validated (header + all txs pass)
+  --   Red X   = header or tx validation failed
+  --   Grey ~  = header OK but some txs skipped (UTxO inputs unknown)
+  --   Dim .   = not validated at all
   let valIndicator :=
-    if b.txCount == 0 then s!"{Ansi.dim}.{Ansi.reset}"
-    else if b.failedTxs == 0 then s!"{Ansi.green}V{Ansi.reset}"
-    else s!"{Ansi.red}X{Ansi.reset}{Ansi.dim}({b.failedTxs}){Ansi.reset}"
-  let content := s!"  {valIndicator}" ++
+    if b.failedTxs > 0 then s!"{Ansi.red}X{Ansi.reset}{Ansi.dim}({b.failedTxs}){Ansi.reset}"
+    else if b.skippedTxs > 0 then s!"{Ansi.dim}~{Ansi.reset}"
+    else if b.headerValidated || b.validTxs > 0 then s!"{Ansi.green}V{Ansi.reset}"
+    else s!"{Ansi.dim}.{Ansi.reset}"
+  let cursor := if selected then s!"{Ansi.brightCyan}>{Ansi.reset}" else " "
+  let content := s!" {cursor}{valIndicator}" ++
     s!" {Ansi.brightYellow}#{formatNum b.blockNo}{Ansi.reset}" ++
     s!"  slot {Ansi.cyan}{formatNum b.slot}{Ansi.reset}" ++
     s!"  {b.txCount} {txLabel}" ++
-    s!"  {Ansi.green}{feesAda}A{Ansi.reset}" ++
+    s!"  {Ansi.green}{feesAda} A{Ansi.reset}" ++
     s!"{Ansi.dim}  {hashShort}..{Ansi.reset}"
-  padRight content rowWidth
+  if selected then
+    padRight (s!"{csi}7m" ++ content ++ s!"{csi}27m") rowWidth  -- reverse video
+  else
+    padRight content rowWidth
 
 /-- Render the blocks panel (left side) -/
-def renderBlockPanel (blocks : List BlockSummary) (width : Nat) (height : Nat) : List String :=
-  let title := s!"{Ansi.brightCyan}{Ansi.bold}  RECENT BLOCKS{Ansi.reset}"
+def renderBlockPanel (blocks : List BlockSummary) (width : Nat) (height : Nat)
+    (selectedIdx : Nat := 0) (paused : Bool := false) : List String :=
+  let pauseTag := if paused then s!"{Ansi.yellow}{Ansi.bold} PAUSED{Ansi.reset}" else ""
+  let title := s!"{Ansi.brightCyan}{Ansi.bold}  RECENT BLOCKS{Ansi.reset}{pauseTag}"
   let divider := s!"{Ansi.dim}  {hline '─' (width - 6)}{Ansi.reset}"
   let visible := blocks.take (height - 2)
-  let blockRows := visible.map fun b => renderBlockRow b (width - 4)
+  let indices := List.range visible.length
+  let blockRows := (indices.zip visible).map fun (i, b) => renderBlockRow b (width - 4) (i == selectedIdx)
   -- Pad to fill height
   let remaining := height - 2 - blockRows.length
   let emptyRows := if blocks.isEmpty then
@@ -252,37 +314,221 @@ where
 
 /-- Render the status/log bar at the bottom -/
 def renderStatusBar (state : TUIState) (width : Nat) : List String :=
-  let logs := state.logs.reverse.take 3 |>.reverse
-  logs.map fun msg =>
+  let helpLine := s!"{Ansi.dim}  [Space]=pause  [↑↓]=select  [Enter]=details  [Esc]=back  [c]=consensus  [q]=quit{Ansi.reset}"
+  let logs := state.logs.reverse.take 2 |>.reverse
+  let logLines := logs.map fun msg =>
     let content := s!"{Ansi.dim}  {msg}{Ansi.reset}"
     padRight content (width - 4)
+  [padRight helpLine (width - 4)] ++ logLines
 
 -- ========================
 -- = Block Detail Panel   =
 -- ========================
 
-/-- Render block detail when a block is selected and Enter is pressed -/
-def renderBlockDetail (block : BlockSummary) (width : Nat) (height : Nat) : List String :=
-  let title := s!"{Ansi.brightCyan}{Ansi.bold}  BLOCK #{formatNum block.blockNo}{Ansi.reset}{Ansi.dim}  [Esc=back Enter=txs]{Ansi.reset}"
+/-- The 25 ledger validation checks, in order -/
+private def validationCheckNames : List String :=
+  [ "Tx size limit", "Validity interval (TTL)", "Input existence (UTxO)",
+    "Double-spend", "Balance (inputs >= outputs + fee)", "Min UTxO per output",
+    "Withdrawal amounts", "Fee >= minimum", "Ed25519 signatures",
+    "Native scripts", "Plutus scripts", "Collateral", "Script data hash",
+    -- New checks (#374–#410)
+    "Non-empty inputs", "Output value size", "Network ID",
+    "Collateral ADA-only", "Max collateral inputs", "Total collateral",
+    "Ref input disjointness", "Metadata hash", "ExUnits budget",
+    "Extra redeemers", "Plutus datum presence", "Validation tag" ]
+
+/-- Classify which check an error string belongs to (by prefix match) -/
+private def errorToCheckIdx (err : String) : Option Nat :=
+  if err.startsWith "TxTooLarge" then some 0
+  else if err.startsWith "ExpiredTx" || err.startsWith "TxNotYetValid" then some 1
+  else if err.startsWith "InputNotFound" then some 2
+  else if err.startsWith "DoubleSpend" then some 3
+  else if err.startsWith "InsufficientFunds" then some 4
+  else if err.startsWith "OutputTooSmall" then some 5
+  else if err.startsWith "InvalidWithdrawal" then some 6
+  else if err.startsWith "FeeBelowMinimum" then some 7
+  else if err.startsWith "MissingSignature" then some 8
+  else if err.startsWith "NativeScriptFailure" then some 9
+  else if err.startsWith "ScriptFailure" then some 10
+  else if err.startsWith "CollateralNotFound" || err.startsWith "CollateralIsScriptLocked"
+       || err.startsWith "InsufficientCollateral" || err.startsWith "CollateralOverlap" then some 11
+  else if err.startsWith "InvalidScriptDataHash" then some 12
+  else if err.startsWith "InputSetEmpty" then some 13
+  else if err.startsWith "OutputTooBig" then some 14
+  else if err.startsWith "WrongNetwork" then some 15
+  else if err.startsWith "CollateralContainsNonADA" then some 16
+  else if err.startsWith "TooManyCollateralInputs" then some 17
+  else if err.startsWith "IncorrectTotalCollateral" then some 18
+  else if err.startsWith "NonDisjointRefInputs" then some 19
+  else if err.startsWith "MetadataHashMismatch" then some 20
+  else if err.startsWith "ExUnitsTooBig" then some 21
+  else if err.startsWith "ExtraRedeemer" then some 22
+  else if err.startsWith "UnspendableUTxONoDatum" then some 23
+  else if err.startsWith "ValidationTagMismatch" then some 24
+  else none
+
+/-- Render full-width block detail with validation checklist -/
+def renderBlockDetailFull (block : BlockSummary) (width : Nat) (height : Nat) : List String :=
+  let title := s!"{Ansi.brightCyan}{Ansi.bold}  BLOCK #{formatNum block.blockNo} DETAIL{Ansi.reset}{Ansi.dim}  [Esc=back]{Ansi.reset}"
   let divider := s!"{Ansi.dim}  {hline '─' (width - 6)}{Ansi.reset}"
-  let slotLine := s!"{Ansi.white}  Slot: {Ansi.cyan}{formatNum block.slot}{Ansi.reset}"
-  let hashLine := s!"{Ansi.white}  Hash: {Ansi.dim}{block.hash}{Ansi.reset}"
   let eraName := match block.era with
     | 0 => "Byron" | 1 => "Shelley" | 2 => "Allegra" | 3 => "Mary"
     | 4 => "Alonzo" | 5 => "Babbage" | 6 => "Conway" | _ => s!"Era {block.era}"
-  let eraLine := s!"{Ansi.white}  Era: {Ansi.yellow}{eraName}{Ansi.reset}"
-  let sizeLine := s!"{Ansi.white}  Size: {Ansi.reset}{block.size} bytes"
-  let feesAda := block.totalFees / 1000000
-  let feesLine := s!"{Ansi.white}  Fees: {Ansi.green}{feesAda} ADA{Ansi.reset}{Ansi.dim} ({block.totalFees} lovelace){Ansi.reset}"
-  let peerLine := s!"{Ansi.dim}  From: {block.peerAddr}{Ansi.reset}"
-  let txTitle := s!""
-  let txHeader := s!"{Ansi.brightCyan}{Ansi.bold}  TRANSACTIONS ({block.txCount}){Ansi.reset}"
-  let txDivider := s!"{Ansi.dim}  {hline '─' (width - 6)}{Ansi.reset}"
-  -- Transaction list (placeholder — we only have count, not full tx data in BlockSummary)
-  let txRows := (List.range (min block.txCount (height - 12))).map fun i =>
-    s!"  {Ansi.dim}Tx #{i + 1}{Ansi.reset}"
-  let lines := [title, divider, slotLine, hashLine, eraLine, sizeLine, feesLine, peerLine, txTitle,
-                txHeader, txDivider] ++ txRows
+  let feesAda := formatAda block.totalFees
+  let infoLine := s!"{Ansi.white}  Slot: {Ansi.cyan}{formatNum block.slot}{Ansi.reset}" ++
+    s!"  {Ansi.white}Era: {Ansi.yellow}{eraName}{Ansi.reset}" ++
+    s!"  {Ansi.white}Size: {Ansi.reset}{block.size}B" ++
+    s!"  {Ansi.white}Fees: {Ansi.green}{feesAda} ADA{Ansi.reset}" ++
+    s!"  {Ansi.dim}Hash: {block.hash}{Ansi.reset}"
+  let peerLine := s!"{Ansi.dim}  From: {block.peerAddr}{Ansi.reset}" ++
+    s!"  {Ansi.white}Txs: {Ansi.brightYellow}{block.txCount}{Ansi.reset}"
+  -- Header validation summary
+  let headerLines :=
+    if block.headerValidated then
+      let vrfSym := if block.vrfOk then s!"{Ansi.green}V{Ansi.reset}" else s!"{Ansi.red}X{Ansi.reset}"
+      let kesSym := if block.kesOk then s!"{Ansi.green}V{Ansi.reset}" else s!"{Ansi.red}X{Ansi.reset}"
+      let opcSym := if block.opCertOk then s!"{Ansi.green}V{Ansi.reset}" else s!"{Ansi.red}X{Ansi.reset}"
+      [s!"  {vrfSym} VRF proof   {kesSym} KES signature   {opcSym} OpCert"]
+    else
+      [s!"{Ansi.dim}  . Header not validated{Ansi.reset}"]
+  -- Transaction validation summary line
+  let valSummary :=
+    if block.txCount == 0 then
+      if block.headerValidated then
+        s!"{Ansi.brightGreen}  Empty block — header fully validated{Ansi.reset}"
+      else
+        s!"{Ansi.dim}  Empty block — not validated{Ansi.reset}"
+    else if block.failedTxs > 0 then
+      s!"  {Ansi.green}{block.validTxs} passed{Ansi.reset}  {Ansi.red}{block.failedTxs} failed{Ansi.reset}" ++
+        (if block.skippedTxs > 0 then s!"  {Ansi.dim}{block.skippedTxs} skipped{Ansi.reset}" else "")
+    else if block.skippedTxs > 0 then
+      if block.validTxs > 0 then
+        s!"  {Ansi.green}{block.validTxs} passed{Ansi.reset}  {Ansi.dim}{block.skippedTxs} skipped (inputs unknown){Ansi.reset}"
+      else
+        s!"{Ansi.dim}  {block.skippedTxs} tx(s) skipped — UTxO inputs unknown during sync{Ansi.reset}"
+    else if block.validTxs > 0 then
+      s!"{Ansi.brightGreen}  All {block.validTxs} transactions passed all 25 validation rules{Ansi.reset}"
+    else
+      s!"{Ansi.dim}  (not validated){Ansi.reset}"
+  -- Build the checklist: 2-column layout for 25 checks
+  -- Collect which checks failed (from error strings)
+  let failedChecks : List Nat := block.validationErrors.filterMap errorToCheckIdx
+  let checklistTitle := s!"{Ansi.brightCyan}{Ansi.bold}  VALIDATION CHECKLIST{Ansi.reset}"
+  let checklistDiv := s!"{Ansi.dim}  {hline '─' (width - 6)}{Ansi.reset}"
+  let mkCheckCell (i : Nat) (name : String) : String :=
+    let num := if i + 1 < 10 then s!" {i + 1}" else s!"{i + 1}"
+    let failCount := failedChecks.filter (· == i) |>.length
+    let pad := String.mk (List.replicate (26 - name.length) ' ')
+    if failCount > 0 then
+      s!"{Ansi.red}X  {num}. {name}{pad}({failCount}){Ansi.reset}"
+    else
+      s!"{Ansi.green}V  {num}. {name}{pad}{Ansi.reset}"
+  -- Split into two columns (13 left, 12 right)
+  let colSize := (validationCheckNames.length + 1) / 2
+  let checklistRows := (List.range colSize).map fun row =>
+    let left := match validationCheckNames[row]? with
+      | some name => mkCheckCell row name
+      | none => ""
+    let rightIdx := row + colSize
+    let right := match validationCheckNames[rightIdx]? with
+      | some name => mkCheckCell rightIdx name
+      | none => ""
+    s!"  {left}  {right}"
+  -- Error details section
+  let errTitle := if block.validationErrors.length > 0 then
+    s!"{Ansi.brightCyan}{Ansi.bold}  ERROR DETAILS ({block.validationErrors.length}){Ansi.reset}"
+  else ""
+  let errDiv := if block.validationErrors.length > 0 then
+    s!"{Ansi.dim}  {hline '─' (width - 6)}{Ansi.reset}"
+  else ""
+  let maxErrors := max 0 (height - 22)  -- space remaining after checklist
+  let errLines := block.validationErrors.take maxErrors |>.map fun e =>
+    let truncated := if e.length > (width - 10) then e.take (width - 13) ++ "..." else e
+    s!"{Ansi.red}  !{Ansi.reset} {Ansi.dim}{truncated}{Ansi.reset}"
+  let moreLine := if block.validationErrors.length > maxErrors then
+    s!"{Ansi.dim}  ... and {block.validationErrors.length - maxErrors} more errors{Ansi.reset}"
+  else ""
+  let lines := [title, divider, infoLine, peerLine, ""] ++ headerLines ++ ["", valSummary, "",
+                checklistTitle, checklistDiv] ++ checklistRows ++
+               (if errTitle.length > 0 then ["", errTitle, errDiv] ++ errLines ++ [moreLine] else [])
+  lines ++ List.replicate (max 0 (height - lines.length)) ""
+
+-- ==============================
+-- = Block Info Side Panel      =
+-- ==============================
+
+/-- Render selected block info in the right side panel (full height with 25 checks) -/
+def renderBlockInfoPanel (block : BlockSummary) (width : Nat) (height : Nat) : List String :=
+  let title := s!"{Ansi.brightCyan}{Ansi.bold}  BLOCK #{formatNum block.blockNo}{Ansi.reset}{Ansi.dim}  [Esc]{Ansi.reset}"
+  let divider := s!"{Ansi.dim}  {hline '─' (width - 6)}{Ansi.reset}"
+  let eraName := match block.era with
+    | 0 => "Byron" | 1 => "Shelley" | 2 => "Allegra" | 3 => "Mary"
+    | 4 => "Alonzo" | 5 => "Babbage" | 6 => "Conway" | _ => s!"Era {block.era}"
+  let feesAda := formatAda block.totalFees
+  let slotLine := s!"{Ansi.white}  Slot: {Ansi.cyan}{formatNum block.slot}{Ansi.reset}  {Ansi.white}Era: {Ansi.yellow}{eraName}{Ansi.reset}"
+  let sizeLine := s!"{Ansi.white}  Size: {Ansi.reset}{block.size}B  {Ansi.white}Fees: {Ansi.green}{feesAda} A{Ansi.reset}"
+  let txLine := s!"{Ansi.white}  Txs: {Ansi.brightYellow}{block.txCount}{Ansi.reset}" ++
+    (if block.validTxs > 0 then s!"  {Ansi.green}{block.validTxs} ok{Ansi.reset}" else "") ++
+    (if block.failedTxs > 0 then s!"  {Ansi.red}{block.failedTxs} fail{Ansi.reset}" else "") ++
+    (if block.skippedTxs > 0 then s!"  {Ansi.dim}{block.skippedTxs} skip{Ansi.reset}" else "")
+  let hashLine := s!"{Ansi.dim}  {block.hash}..{Ansi.reset}"
+  let peerLine := s!"{Ansi.dim}  {block.peerAddr}{Ansi.reset}"
+  -- Header validation
+  let hdrLines := if block.headerValidated then
+    let vrfSym := if block.vrfOk then s!"{Ansi.green}V{Ansi.reset}" else s!"{Ansi.red}X{Ansi.reset}"
+    let kesSym := if block.kesOk then s!"{Ansi.green}V{Ansi.reset}" else s!"{Ansi.red}X{Ansi.reset}"
+    let opcSym := if block.opCertOk then s!"{Ansi.green}V{Ansi.reset}" else s!"{Ansi.red}X{Ansi.reset}"
+    [s!"  {vrfSym} VRF  {kesSym} KES  {opcSym} OpCert"]
+  else
+    [s!"{Ansi.dim}  . Header not validated{Ansi.reset}"]
+  -- 25-check validation checklist
+  let checkNames := [ "Tx size", "Validity interval", "Input existence",
+    "Double-spend", "Balance check", "Min UTxO",
+    "Withdrawals", "Fee >= minimum", "Ed25519 sigs",
+    "Native scripts", "Plutus scripts", "Collateral", "Script data hash",
+    "Non-empty inputs", "Output value size", "Network ID",
+    "Collateral ADA-only", "Max collateral", "Total collateral",
+    "Ref input disjoint", "Metadata hash", "ExUnits budget",
+    "Extra redeemers", "Plutus datum", "Validation tag" ]
+  let failedChecks : List Nat := block.validationErrors.filterMap errorToCheckIdx
+  let checklistTitle := s!"{Ansi.brightCyan}{Ansi.bold}  CHECKS{Ansi.reset}"
+  let checklistDiv := s!"{Ansi.dim}  {hline '─' (width - 6)}{Ansi.reset}"
+  -- 2-column check layout: 13 rows × 2 = 26 slots for 25 checks
+  -- Pad left-column names to fixed visual width so right column aligns
+  let leftPadWidth := 17  -- len("Validity interval") = 17, longest left name
+  let mkCell (i : Nat) (padTo : Nat) : String :=
+    match checkNames[i]? with
+    | none => String.mk (List.replicate (padTo + 5) ' ')
+    | some name =>
+      let failCount := failedChecks.filter (· == i) |>.length
+      let num := if i + 1 < 10 then s!" {i + 1}" else s!"{i + 1}"
+      let padding := if name.length < padTo then String.mk (List.replicate (padTo - name.length) ' ') else ""
+      let namePad := name ++ padding
+      if failCount > 0 then
+        s!"{Ansi.red}X{num}.{namePad}{Ansi.reset}{Ansi.dim}({failCount}){Ansi.reset}"
+      else if block.txCount == 0 && !block.headerValidated then
+        s!"{Ansi.dim}.{num}.{namePad}{Ansi.reset}"
+      else
+        s!"{Ansi.green}V{num}.{namePad}{Ansi.reset}"
+  let colSize := (checkNames.length + 1) / 2  -- 13
+  let checkRows := List.range colSize |>.map fun row =>
+    let left := mkCell row leftPadWidth
+    let right := mkCell (row + colSize) 0
+    s!" {left} {right}"
+  -- Error details at the bottom if space allows
+  let usedLines := 9 + hdrLines.length + 2 + checkRows.length
+  let errSpace := max 0 (height - usedLines - 1)
+  let errLines := if block.validationErrors.isEmpty || errSpace == 0 then []
+  else
+    let errs := block.validationErrors.take errSpace |>.map fun e =>
+      let truncated := if e.length > (width - 8) then e.take (width - 11) ++ "..." else e
+      s!"{Ansi.red}  !{Ansi.reset}{Ansi.dim} {truncated}{Ansi.reset}"
+    let more := if block.validationErrors.length > errSpace then
+      [s!"{Ansi.dim}  +{block.validationErrors.length - errSpace} more{Ansi.reset}"]
+    else []
+    [""] ++ errs ++ more
+  let lines := [title, divider, slotLine, sizeLine, txLine, hashLine, peerLine, ""] ++
+               hdrLines ++ ["", checklistTitle, checklistDiv] ++ checkRows ++ errLines
   lines ++ List.replicate (max 0 (height - lines.length)) ""
 
 -- ==============================
@@ -341,35 +587,71 @@ def renderFrame (state : TUIState) (nowMs : Nat) (width : Nat := 160) (height : 
   let panelHeight := 14
   let peerHeight := 10
 
-  -- Header
-  let header := [topBorder width] ++ renderHeader state width nowMs
+  -- Determine if we need 3-column layout (block detail open)
+  let showBlockInfo := match state.detailView with
+    | .blockDetail | .txDetail _ => state.selectedBlock.isSome
+    | _ => false
 
-  -- Left panel: block list
-  let blockLines := renderBlockPanel state.recentBlocks leftWidth panelHeight
-  -- Right panel: always mempool + consensus
-  let mempoolLines := renderMempoolPanel state rightWidth panelHeight
-  let panelRows := List.range panelHeight |>.map fun i =>
-    let left := (blockLines.get? i).getD ""
-    let right := (mempoolLines.get? i).getD ""
-    splitLine left right leftWidth rightWidth
-
-  -- Peers panel
-  let peerLines := renderPeerPanel state.peers width peerHeight
-  let peerRows := peerLines.map fun line => boxLine line width
-
-  -- Status bar
-  let statusLines := renderStatusBar state width
-  let statusRows := statusLines.map fun line => boxLine line width
-
-  -- Assemble
-  let allLines := header
-    ++ [midSeparatorT leftWidth rightWidth]
-    ++ panelRows
-    ++ [midSeparatorInvT leftWidth rightWidth]
-    ++ peerRows
-    ++ [midSeparator width]
-    ++ statusRows
-    ++ [bottomBorder width]
+  let allLines := if showBlockInfo then
+    -- Extended layout: normal 2-col (unchanged) + extra block info panel on the right
+    let col3w := 55  -- extra panel width for block info
+    let totalW := width + col3w  -- wider frame when detail is open
+    let fullHeight := panelHeight + 1 + peerHeight  -- right column spans full height
+    -- Left two panels at normal sizes
+    let blockLines := renderBlockPanel state.recentBlocks leftWidth panelHeight
+        state.selectedBlockIdx state.paused
+    let midLines := match state.detailView with
+      | .consensusFull => renderConsensusDetail state rightWidth panelHeight
+      | _ => renderMempoolPanel state rightWidth panelHeight
+    let rightLines := match state.selectedBlock with
+      | some block => renderBlockInfoPanel block col3w fullHeight
+      | none => List.replicate fullHeight ""
+    -- Top section: 3 columns (blocks | mempool | block info)
+    let topRows := List.range panelHeight |>.map fun i =>
+      let l := (blockLines.get? i).getD ""
+      let m := (midLines.get? i).getD ""
+      let r := (rightLines.get? i).getD ""
+      triLine l m r leftWidth rightWidth col3w
+    -- Mid separator: left two merge, right continues with content
+    let midSepContent := (rightLines.get? panelHeight).getD ""
+    let midSep := midSepMergeLeftWithContent leftWidth rightWidth midSepContent col3w
+    -- Bottom section: peers (full normal width) | block info continues
+    let peerLines := renderPeerPanel state.peers width peerHeight
+    let bottomRows := List.range peerHeight |>.map fun i =>
+      let l := (peerLines.get? i).getD ""
+      let r := (rightLines.get? (panelHeight + 1 + i)).getD ""
+      splitLineWide l r width col3w
+    -- Status bar at extended width
+    let statusLines := renderStatusBar state totalW
+    let statusRows := statusLines.map fun line => boxLine line totalW
+    [topBorder totalW] ++ (renderHeader state totalW nowMs)
+      ++ [midSeparatorTriT leftWidth rightWidth col3w] ++ topRows
+      ++ [midSep] ++ bottomRows
+      ++ [midSeparator totalW]
+      ++ statusRows
+      ++ [bottomBorder totalW]
+  else
+    -- Normal two-column layout: Blocks | Mempool+Consensus
+    let blockLines := renderBlockPanel state.recentBlocks leftWidth panelHeight
+        state.selectedBlockIdx state.paused
+    let rightLines := match state.detailView with
+      | .consensusFull => renderConsensusDetail state rightWidth panelHeight
+      | _ => renderMempoolPanel state rightWidth panelHeight
+    let panelRows := List.range panelHeight |>.map fun i =>
+      let left := (blockLines.get? i).getD ""
+      let right := (rightLines.get? i).getD ""
+      splitLine left right leftWidth rightWidth
+    let peerLines := renderPeerPanel state.peers width peerHeight
+    let peerRows := peerLines.map fun line => boxLine line width
+    -- Status bar at normal width
+    let statusLines := renderStatusBar state width
+    let statusRows := statusLines.map fun line => boxLine line width
+    [topBorder width] ++ (renderHeader state width nowMs)
+      ++ [midSeparatorT leftWidth rightWidth] ++ panelRows
+      ++ [midSeparatorInvT leftWidth rightWidth] ++ peerRows
+      ++ [midSeparator width]
+      ++ statusRows
+      ++ [bottomBorder width]
 
   -- Join all lines, each followed by clearLine to erase leftover chars
   String.intercalate "\n" (allLines.map fun l => l ++ Ansi.clearLine)

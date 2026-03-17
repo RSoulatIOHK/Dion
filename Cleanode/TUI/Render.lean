@@ -1,12 +1,14 @@
 import Cleanode.TUI.Ansi
 import Cleanode.TUI.State
 import Cleanode.TUI.Layout
+import Cleanode.TUI.Input
 
 /-!
 # TUI Render Loop
 
 Manages the render lifecycle: switches to alternate screen buffer,
-hides cursor, redraws every 500ms, and restores terminal on exit.
+hides cursor, redraws every 200ms, and restores terminal on exit.
+Also starts the keyboard input handler.
 -/
 
 namespace Cleanode.TUI.Render
@@ -14,6 +16,7 @@ namespace Cleanode.TUI.Render
 open Cleanode.TUI.Ansi
 open Cleanode.TUI.State
 open Cleanode.TUI.Layout
+open Cleanode.TUI.Input
 
 /-- Initialize the terminal for TUI mode -/
 def initTerminal : IO Unit := do
@@ -24,6 +27,7 @@ def initTerminal : IO Unit := do
 
 /-- Restore the terminal to normal mode -/
 def restoreTerminal : IO Unit := do
+  disableRawMode
   IO.print Ansi.showCursor
   IO.print Ansi.altScreenOff
   let _ ← IO.getStdout >>= (·.flush)
@@ -36,6 +40,8 @@ def nowMs : IO Nat := do
 /-- The main TUI render loop. Reads state, renders frame, sleeps. -/
 partial def tuiRenderLoop (stateRef : IO.Ref TUIState) : IO Unit := do
   initTerminal
+  -- Start keyboard input handler in background
+  let _inputTask ← startInputHandler stateRef
   let rec loop : IO Unit := do
     let state ← stateRef.get
     let now ← nowMs
@@ -43,7 +49,7 @@ partial def tuiRenderLoop (stateRef : IO.Ref TUIState) : IO Unit := do
     -- Move cursor home and overwrite (no clear = no flicker)
     IO.print (Ansi.home ++ frame)
     let _ ← IO.getStdout >>= (·.flush)
-    IO.sleep 500
+    IO.sleep 200  -- Faster refresh for responsive input
     loop
   loop
 

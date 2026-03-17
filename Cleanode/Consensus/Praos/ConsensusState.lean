@@ -160,6 +160,80 @@ def getPoolStake (state : ConsensusState) (poolId : ByteArray) : Nat :=
   | none => 0
 
 -- ====================
+-- = OpCert Counters  =
+-- ====================
+
+/-- #402: Track last seen OpCert counter per pool for monotonicity enforcement -/
+structure OpCertCounterMap where
+  /-- poolId (28 bytes) → last seen sequence number -/
+  counters : List (ByteArray × Nat) := []
+
+/-- Check and update OpCert counter for a pool.
+    Pre-Vasil: counter must be >= last seen.
+    Post-Vasil: counter must be exactly last seen + 1.
+    Returns (isValid, updatedMap). -/
+def OpCertCounterMap.checkAndUpdate (m : OpCertCounterMap) (poolId : ByteArray)
+    (counter : Nat) (strictMode : Bool := true) : (Bool × OpCertCounterMap) :=
+  match m.counters.find? (fun (pid, _) => pid == poolId) with
+  | some (_, lastSeen) =>
+    let valid := if strictMode then
+      counter == lastSeen + 1 || counter == lastSeen  -- same block re-validation
+    else
+      counter >= lastSeen
+    let updated := m.counters.map fun (pid, c) =>
+      if pid == poolId then (pid, max c counter) else (pid, c)
+    (valid, { counters := updated })
+  | none =>
+    -- First time seeing this pool's OpCert
+    (true, { counters := (poolId, counter) :: m.counters })
+
+-- ====================
+-- = Dual VRF (#403)  =
+-- ====================
+
+/-- #403: Verify both VRF proofs from a block header.
+    Each block must contain two VRF proofs:
+    1. certVRF (leader eligibility): input = epochNonce || 0x4C || slot
+    2. nonceVRF (nonce contribution): input = epochNonce || 0x4E || slot -/
+structure DualVRFResult where
+  certVRFValid : Bool       -- Leader eligibility proof verified
+  nonceVRFValid : Bool      -- Nonce contribution proof verified
+  nonceVRFOutput : ByteArray -- Output used for evolving nonce
+
+/-- Verify both VRF proofs from a block header -/
+def verifyDualVRF (vrfPublicKey : List UInt8) (epochNonce : ByteArray)
+    (slot : Nat) (certProof nonceProof : Cleanode.Crypto.VRF.ECVRF.VRFProof)
+    (activeSlotsCoeff : Rational) (poolStake totalStake : Nat) : DualVRFResult :=
+  -- Verify certVRF (leader election, domain sep 0x4C)
+  let certInput := vrfInput epochNonce slot 0x4C
+  let certValid := Cleanode.Crypto.VRF.ECVRF.verify vrfPublicKey certInput certProof
+  let certOutput := Cleanode.Crypto.VRF.ECVRF.proofToHash certProof
+  let certThresholdOk := if certValid then
+    let y := vrfOutputToNat certOutput
+    let threshold := computeThresholdAccurate activeSlotsCoeff poolStake totalStake
+    y < threshold
+  else false
+  -- Verify nonceVRF (nonce contribution, domain sep 0x4E)
+  let nonceInput := vrfInputNonce epochNonce slot
+  let nonceValid := Cleanode.Crypto.VRF.ECVRF.verify vrfPublicKey nonceInput nonceProof
+  let nonceOutput := Cleanode.Crypto.VRF.ECVRF.proofToHash nonceProof
+  { certVRFValid := certValid && certThresholdOk
+    nonceVRFValid := nonceValid
+    nonceVRFOutput := ByteArray.mk nonceOutput.toArray }
+
+/-- #404: Update evolving nonce from a validated block's nonceVRF output.
+    Only blocks in the first 4/5 of the epoch (stability window) contribute. -/
+def updateEvolvingNonceFromBlock (state : ConsensusState) (slot : Nat)
+    (nonceVRFOutput : ByteArray) : IO ConsensusState := do
+  -- Only accumulate nonces from the stability window (first 4k/f slots)
+  let stabilityWindow := state.epochLength * 4 / 5
+  let slotInEpoch := slot - state.epochFirstSlot
+  if slotInEpoch < stabilityWindow then
+    updateEvolvingNonceIO state nonceVRFOutput
+  else
+    pure state  -- Past stability window, don't contribute to nonce
+
+-- ====================
 -- = Persistence      =
 -- ====================
 

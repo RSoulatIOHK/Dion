@@ -18,13 +18,14 @@ db/immutable/
 ## Secondary Index Format (post-Byron / Shelley+)
 
 Each entry in the `.secondary` file is 56 bytes (no version header):
-- blockSize     : 4 bytes (Word32 BE) — size of the block in the .chunk file
-- blockOffset   : 4 bytes (Word32 BE) — offset of block in .chunk file
+- blockOffset   : 8 bytes (Word64 BE) — offset of block in .chunk file
 - headerOffset  : 2 bytes (Word16 BE) — offset of header within the block
 - headerSize    : 2 bytes (Word16 BE) — size of the block header
 - checksum      : 4 bytes (Word32 BE) — CRC32 of the block
 - headerHash    : 32 bytes            — Blake2b-256 hash of the header (= block hash)
 - blockOrEBB    : 8 bytes (Word64 BE) — slot number (or EBB epoch with high bit set)
+
+Note: There is NO blockSize field. Size must be computed from consecutive offsets.
 
 ## References
 - ouroboros-consensus: Ouroboros.Consensus.Storage.ImmutableDB.Impl.Index.Secondary
@@ -77,32 +78,35 @@ def readWord32BE (bs : ByteArray) (offset : Nat) : UInt32 :=
 
 /-- A parsed secondary index entry -/
 structure SecondaryEntry where
-  blockSize     : UInt32      -- Size of the block in the .chunk file
-  blockOffset   : UInt32      -- Offset in the .chunk file
+  blockOffset   : UInt64      -- Offset in the .chunk file (Word64)
   headerOffset  : UInt16
   headerSize    : UInt16
   checksum      : UInt32
   headerHash    : ByteArray   -- 32 bytes, Blake2b-256 of the header
   blockOrEBB    : UInt64      -- Slot number (or EBB epoch with bit 63 set)
+  blockSize     : Nat := 0    -- Computed from consecutive offsets (not in the index)
+
+instance : Inhabited SecondaryEntry where
+  default := { blockOffset := 0, headerOffset := 0, headerSize := 0, checksum := 0,
+               headerHash := ByteArray.empty, blockOrEBB := 0, blockSize := 0 }
 
 /-- Size of a secondary index entry in bytes:
-    Word32 + Word32 + Word16 + Word16 + Word32 + 32 bytes + Word64 = 56 -/
+    Word64 + Word16 + Word16 + Word32 + 32 bytes + Word64 = 56 -/
 def secondaryEntrySize : Nat := 56
 
 /-- Parse a single secondary index entry from bytes at a given offset.
-    Layout: blockSize(4) + blockOffset(4) + headerOffset(2) + headerSize(2)
+    Layout: blockOffset(8) + headerOffset(2) + headerSize(2)
             + checksum(4) + headerHash(32) + blockOrEBB(8) = 56 bytes -/
 def parseSecondaryEntry (bs : ByteArray) (offset : Nat) : Option SecondaryEntry := do
   if offset + secondaryEntrySize > bs.size then none
-  let blockSize := readWord32BE bs offset
-  let blockOffset := readWord32BE bs (offset + 4)
+  let blockOffset := readWord64BE bs offset
   let headerOffset := readWord16BE bs (offset + 8)
   let headerSize := readWord16BE bs (offset + 10)
   let checksum := readWord32BE bs (offset + 12)
   let headerHash := bs.extract (offset + 16) (offset + 48)
   let blockOrEBB := readWord64BE bs (offset + 48)
   some {
-    blockSize, blockOffset, headerOffset, headerSize, checksum, headerHash, blockOrEBB
+    blockOffset, headerOffset, headerSize, checksum, headerHash, blockOrEBB
   }
 
 /-- The EBB bit mask (bit 63) -/

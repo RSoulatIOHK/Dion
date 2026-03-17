@@ -83,4 +83,92 @@ opaque secp256k1_ecdsa_verify (publicKey : @& ByteArray) (message : @& ByteArray
 opaque secp256k1_schnorr_verify (publicKey : @& ByteArray) (message : @& ByteArray)
     (signature : @& ByteArray) : IO Bool
 
+-- ====================
+-- = #406: Keccak-256 =
+-- ====================
+
+/-- Compute Keccak-256 hash (32 bytes) via FFI.
+    CIP-101: Ethereum-compatible hash for cross-chain interop.
+    Note: Keccak-256 is NOT the same as SHA3-256 (different padding).
+    Used by Plutus builtin `blake2b_256` equivalent for Ethereum data. -/
+@[extern "cleanode_keccak_256"]
+opaque keccak_256 (data : @& ByteArray) : IO ByteArray
+
+-- ====================
+-- = #407: RIPEMD-160 =
+-- ====================
+
+/-- Compute RIPEMD-160 hash (20 bytes) via FFI.
+    CIP-127: Bitcoin address compatibility.
+    Bitcoin P2PKH addresses = RIPEMD-160(SHA-256(pubkey)). -/
+@[extern "cleanode_ripemd_160"]
+opaque ripemd_160 (data : @& ByteArray) : IO ByteArray
+
+-- ====================
+-- = #405: BLS12-381  =
+-- ====================
+
+/-- BLS12-381 G1 point (48 bytes compressed, 96 bytes uncompressed) -/
+abbrev BLS12_381_G1 := ByteArray
+
+/-- BLS12-381 G2 point (96 bytes compressed, 192 bytes uncompressed) -/
+abbrev BLS12_381_G2 := ByteArray
+
+/-- BLS12-381 Miller loop result (pairing intermediate) -/
+abbrev BLS12_381_MlResult := ByteArray
+
+-- G1 operations
+@[extern "cleanode_bls12_381_g1_add"]
+opaque bls12_381_g1_add (a b : @& BLS12_381_G1) : IO BLS12_381_G1
+
+@[extern "cleanode_bls12_381_g1_neg"]
+opaque bls12_381_g1_neg (a : @& BLS12_381_G1) : IO BLS12_381_G1
+
+@[extern "cleanode_bls12_381_g1_scalar_mul"]
+opaque bls12_381_g1_scalarMul (scalar : @& ByteArray) (point : @& BLS12_381_G1) : IO BLS12_381_G1
+
+@[extern "cleanode_bls12_381_g1_equal"]
+opaque bls12_381_g1_equal (a b : @& BLS12_381_G1) : IO Bool
+
+@[extern "cleanode_bls12_381_g1_hash_to_group"]
+opaque bls12_381_g1_hashToGroup (msg dst : @& ByteArray) : IO BLS12_381_G1
+
+@[extern "cleanode_bls12_381_g1_compress"]
+opaque bls12_381_g1_compress (point : @& BLS12_381_G1) : IO ByteArray
+
+@[extern "cleanode_bls12_381_g1_uncompress"]
+opaque bls12_381_g1_uncompress (compressed : @& ByteArray) : IO BLS12_381_G1
+
+-- G2 operations
+@[extern "cleanode_bls12_381_g2_add"]
+opaque bls12_381_g2_add (a b : @& BLS12_381_G2) : IO BLS12_381_G2
+
+@[extern "cleanode_bls12_381_g2_neg"]
+opaque bls12_381_g2_neg (a : @& BLS12_381_G2) : IO BLS12_381_G2
+
+@[extern "cleanode_bls12_381_g2_scalar_mul"]
+opaque bls12_381_g2_scalarMul (scalar : @& ByteArray) (point : @& BLS12_381_G2) : IO BLS12_381_G2
+
+@[extern "cleanode_bls12_381_g2_equal"]
+opaque bls12_381_g2_equal (a b : @& BLS12_381_G2) : IO Bool
+
+@[extern "cleanode_bls12_381_g2_hash_to_group"]
+opaque bls12_381_g2_hashToGroup (msg dst : @& ByteArray) : IO BLS12_381_G2
+
+@[extern "cleanode_bls12_381_g2_compress"]
+opaque bls12_381_g2_compress (point : @& BLS12_381_G2) : IO ByteArray
+
+@[extern "cleanode_bls12_381_g2_uncompress"]
+opaque bls12_381_g2_uncompress (compressed : @& ByteArray) : IO BLS12_381_G2
+
+-- Pairing operations
+@[extern "cleanode_bls12_381_miller_loop"]
+opaque bls12_381_millerLoop (g1 : @& BLS12_381_G1) (g2 : @& BLS12_381_G2) : IO BLS12_381_MlResult
+
+@[extern "cleanode_bls12_381_mul_ml_result"]
+opaque bls12_381_mulMlResult (a b : @& BLS12_381_MlResult) : IO BLS12_381_MlResult
+
+@[extern "cleanode_bls12_381_final_verify"]
+opaque bls12_381_finalVerify (a b : @& BLS12_381_MlResult) : IO Bool
+
 end Cleanode.Network.Crypto

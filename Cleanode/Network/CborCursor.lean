@@ -128,19 +128,54 @@ def decodeBytes (c : Cursor) : Option (CResult ByteArray) := do
   else
     none
 
-/-- Decode array header (major type 4) — returns element count -/
+/-- Decode array header (major type 4) — returns element count.
+    For indefinite-length arrays (0x9F), returns a large sentinel value. -/
 def decodeArrayHeader (c : Cursor) : Option (CResult Nat) := do
-  let r ← decodeHead c
-  let (major, count) := r.value
-  if major == 4 then some { value := count, cursor := r.cursor }
-  else none
+  if c.remaining < 1 then none
+  let initial := c.peek.toNat
+  -- Check for indefinite-length array (0x9F)
+  if initial == 0x9F then
+    some { value := 9999, cursor := c.advance 1 }  -- sentinel: parse until 0xFF break
+  else
+    let r ← decodeHead c
+    let (major, count) := r.value
+    if major == 4 then some { value := count, cursor := r.cursor }
+    -- Handle CBOR tag 258 (set semantics) wrapping an array — used in Conway era
+    else if major == 6 && count == 258 then
+      -- Tag 258 wraps the actual array; decode the inner array header
+      let inner := r.cursor
+      if inner.remaining < 1 then none
+      let innerInitial := inner.peek.toNat
+      if innerInitial == 0x9F then
+        some { value := 9999, cursor := inner.advance 1 }
+      else
+        let r2 ← decodeHead inner
+        let (major2, count2) := r2.value
+        if major2 == 4 then some { value := count2, cursor := r2.cursor }
+        else none
+    else none
 
-/-- Decode map header (major type 5) — returns pair count -/
+/-- Decode map header (major type 5) — returns pair count.
+    For indefinite-length maps (0xBF), returns a large sentinel value. -/
 def decodeMapHeader (c : Cursor) : Option (CResult Nat) := do
-  let r ← decodeHead c
-  let (major, count) := r.value
-  if major == 5 then some { value := count, cursor := r.cursor }
-  else none
+  if c.remaining < 1 then none
+  let initial := c.peek.toNat
+  -- Check for indefinite-length map (0xBF)
+  if initial == 0xBF then
+    some { value := 9999, cursor := c.advance 1 }  -- sentinel: parse until 0xFF break
+  else
+    let r ← decodeHead c
+    let (major, count) := r.value
+    if major == 5 then some { value := count, cursor := r.cursor }
+    else none
+
+/-- Check if cursor points to CBOR break code (0xFF) -/
+def isBreak (c : Cursor) : Bool :=
+  c.remaining ≥ 1 && c.peek.toNat == 0xFF
+
+/-- Skip past break code (0xFF), returns cursor after -/
+def skipBreak (c : Cursor) : Option Cursor :=
+  if isBreak c then some (c.advance 1) else none
 
 /-- Decode and skip CBOR tag (major type 6) — returns tag number -/
 def skipTag (c : Cursor) : Option (CResult Nat) := do

@@ -95,6 +95,10 @@ def encodeBigUInt (n : Nat) : ByteArray :=
     -- Positive bignum: tag(2) + byte string (big-endian)
     encodeHead .Tag 2 ++ encodeHead .ByteString (natToBigEndianBytes n).size ++ natToBigEndianBytes n
 
+/-- Encode negative integer in CBOR format. Value encodes -1 - n (so n=0 → -1). -/
+def encodeNegInt (n : Nat) : ByteArray :=
+  encodeHead .NegativeInt n
+
 /-- Encode byte string in CBOR format -/
 def encodeBytes (bs : ByteArray) : ByteArray :=
   encodeHead .ByteString bs.size ++ bs

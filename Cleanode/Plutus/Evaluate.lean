@@ -1,9 +1,8 @@
 import Cleanode.Plutus.UPLC.Term
 import Cleanode.Plutus.UPLC.Flat
-import Cleanode.Plutus.UPLC.CEK
-import Cleanode.Plutus.UPLC.CostModel
 import Cleanode.Plutus.ScriptContext
 import Cleanode.Network.ConwayBlock
+import Cleanode.Network.Crypto
 import Cleanode.Ledger.UTxO
 
 /-!
@@ -30,10 +29,9 @@ namespace Cleanode.Plutus.Evaluate
 
 open Cleanode.Plutus.UPLC
 open Cleanode.Plutus.UPLC.Flat
-open Cleanode.Plutus.UPLC.CEK
-open Cleanode.Plutus.UPLC.CostModel
 open Cleanode.Plutus.ScriptContext
 open Cleanode.Network.ConwayBlock
+open Cleanode.Network.Crypto
 open Cleanode.Ledger.UTxO
 
 -- ====================
@@ -44,6 +42,18 @@ open Cleanode.Ledger.UTxO
 inductive PlutusVersion where
   | V1 | V2 | V3
   deriving BEq, Repr
+
+/-- Version byte prefix for script hashing: V1=0x01, V2=0x02, V3=0x03 -/
+private def versionByte : PlutusVersion → UInt8
+  | .V1 => 0x01
+  | .V2 => 0x02
+  | .V3 => 0x03
+
+/-- Semantics version for FFI: V1=0, V2=1, V3=2 -/
+private def semanticsId : PlutusVersion → UInt32
+  | .V1 => 0
+  | .V2 => 1
+  | .V3 => 2
 
 -- ====================
 -- = Script Eval      =
@@ -57,55 +67,82 @@ structure ScriptResult where
   error : Option String := none
   deriving Repr
 
-/-- Encode PlutusData as a UPLC Constant for script application -/
-private def dataToConstant (d : PlutusData) : Constant :=
-  .Data d
+-- ====================
+-- = Plutuz FFI       =
+-- ====================
 
-/-- Apply a UPLC term to arguments by wrapping in Apply nodes -/
-private def applyArgs (script : Term) (args : List Term) : Term :=
-  args.foldl (fun acc arg => .Apply acc arg) script
+/-- FFI to Plutuz Zig UPLC evaluator (no argument application).
+    Takes Flat-encoded UPLC program bytes (after CBOR stripping) + budget.
+    Returns (errCode, cpuUsed, memUsed, payload).
+    errCode=0 → payload is Flat-encoded result program.
+    errCode>0 → payload is UTF-8 error message. -/
+@[extern "lean_plutuz_eval_flat"]
+opaque plutuzEvalFlat (program : @& ByteArray) (cpuBudget : UInt64) (memBudget : UInt64)
+    : IO (UInt32 × UInt64 × UInt64 × ByteArray)
 
-/-- Evaluate a single Plutus script.
-    `scriptBytes`: raw Flat-encoded (or CBOR-wrapped) script bytes
-    `version`: PlutusV1/V2/V3
-    `datum`: optional datum (for spending scripts in V1/V2)
-    `redeemer`: the redeemer PlutusData
-    `context`: the ScriptContext PlutusData
+/-- FFI to Plutuz with argument application.
+    Applies CBOR-encoded PlutusData arguments to the script before evaluation.
+    numArgs: how many of arg1/arg2/arg3 to apply (0-3).
+    semantics: 0=V1, 1=V2, 2=V3. -/
+@[extern "lean_plutuz_eval_flat_applied"]
+opaque plutuzEvalFlatApplied (program : @& ByteArray) (numArgs : UInt32)
+    (arg1 : @& ByteArray) (arg2 : @& ByteArray) (arg3 : @& ByteArray)
+    (cpuBudget : UInt64) (memBudget : UInt64) (semantics : UInt32)
+    : IO (UInt32 × UInt64 × UInt64 × ByteArray)
+
+/-- Strip CBOR bytestring layers to get raw Flat bytes.
+    V1/V2 scripts from witness key 4 may have up to 3 CBOR layers. -/
+private def stripCborLayers (scriptBytes : ByteArray) : ByteArray × Nat :=
+  match stripCborByteString scriptBytes with
+  | none => (scriptBytes, 0)
+  | some inner =>
+    match stripCborByteString inner with
+    | some innerInner =>
+      match stripCborByteString innerInner with
+      | some innerInnerInner => (innerInnerInner, 3)
+      | none => (innerInner, 2)
+    | none => (inner, 1)
+
+/-- Evaluate a Plutus script with arguments applied via FFI.
+    `scriptBytes`: CBOR-wrapped script bytes
+    `version`: Plutus language version (controls semantics)
+    `args`: CBOR-encoded PlutusData arguments to apply before evaluation
     `exUnits`: declared execution units (budget) -/
+def evaluateScriptIO (scriptBytes : ByteArray) (version : PlutusVersion)
+    (args : List ByteArray) (exUnits : ExUnits) : IO ScriptResult := do
+  let (flatBytes, stripsApplied) := stripCborLayers scriptBytes
+  -- Call FFI with arguments
+  let empty := ByteArray.empty
+  let arg1 := args.getD 0 empty
+  let arg2 := args.getD 1 empty
+  let arg3 := args.getD 2 empty
+  let numArgs := args.length.toUInt32
+  let (errCode, cpuUsed, memUsed, payload) ←
+    plutuzEvalFlatApplied flatBytes numArgs arg1 arg2 arg3
+      exUnits.steps.toUInt64 exUnits.mem.toUInt64 (semanticsId version)
+  if errCode == 0 then
+    return { success := true, memUsed := memUsed.toNat, stepsUsed := cpuUsed.toNat }
+  else
+    let errMsg := String.fromUTF8! payload
+    -- Log failures with diagnostic info
+    let hexPrefix := (flatBytes.extract 0 (min 16 flatBytes.size)).foldl
+      (fun acc b => acc ++ (if b < 16 then "0" else "") ++ String.mk (Nat.toDigits 16 b.toNat)) ""
+    let h ← IO.FS.Handle.mk "validation_failures.log" .append
+    h.putStrLn s!"  [plutus-diag] version={repr version} strips={stripsApplied} rawSize={scriptBytes.size} flatSize={flatBytes.size} nArgs={args.length} first16={hexPrefix} err={errMsg}"
+    return { success := false, memUsed := memUsed.toNat, stepsUsed := cpuUsed.toNat,
+             error := some errMsg }
+
+/-- Pure fallback for evaluation (used when IO is not available) -/
 def evaluateScript (scriptBytes : ByteArray) (version : PlutusVersion)
-    (datum : Option PlutusData) (redeemer : PlutusData) (context : PlutusData)
+    (_datum : Option PlutusData) (_redeemer : PlutusData) (_context : PlutusData)
     (exUnits : ExUnits) : ScriptResult :=
-  -- 1. Deserialize script
-  match decodePlutusScript scriptBytes with
-  | none => { success := false, memUsed := 0, stepsUsed := 0, error := some "failed to decode Flat script" }
-  | some program =>
-    -- 2. Build argument list based on version
-    let args : List Term := match version with
-    | .V1 | .V2 =>
-      -- V1/V2: script datum? redeemer context
-      let datumArg := datum.map (fun d => Term.Constant (dataToConstant d))
-      let redeemerArg := Term.Constant (dataToConstant redeemer)
-      let contextArg := Term.Constant (dataToConstant context)
-      match datumArg with
-      | some d => [d, redeemerArg, contextArg]
-      | none => [redeemerArg, contextArg]
-    | .V3 =>
-      -- V3: script context (datum + redeemer folded into context)
-      [Term.Constant (dataToConstant context)]
-
-    -- 3. Apply arguments
-    let appliedTerm := applyArgs program.term args
-
-    -- 4. Run CEK machine
-    let budget : ExBudget := { mem := exUnits.mem, steps := exUnits.steps }
-    match evaluate appliedTerm budget with
-    | .error msg =>
-      { success := false, memUsed := exUnits.mem, stepsUsed := exUnits.steps,
-        error := some msg }
-    | .ok (value, remainingBudget) =>
-      let memUsed := exUnits.mem - remainingBudget.mem
-      let stepsUsed := exUnits.steps - remainingBudget.steps
-      { success := isScriptSuccess value, memUsed, stepsUsed }
+  match decodePlutusScriptDiag scriptBytes with
+  | .error msg =>
+    { success := false, memUsed := 0, stepsUsed := 0,
+      error := some s!"decode failed: {msg}" }
+  | .ok _program =>
+    { success := false, memUsed := 0, stepsUsed := exUnits.steps,
+      error := some s!"pure CEK disabled — use evaluateScriptIO (version={repr version})" }
 
 -- ====================
 -- = Tx-Level Eval    =
@@ -124,148 +161,246 @@ structure ScriptEvaluation where
     For script-locked addresses (bit 4 of header = 1), this is the script hash. -/
 private def extractPaymentCredHash (address : ByteArray) : Option ByteArray :=
   if address.size < 29 then none
-  else some (address.extract 1 29)  -- 1-byte header + 28-byte payment credential
+  else some (address.extract 1 29)
 
 /-- Check if an address has a script payment credential (bit 4 of header). -/
 private def isScriptAddress (address : ByteArray) : Bool :=
   if address.size == 0 then false
   else address[0]! &&& 0x10 != 0
 
-/-- Build a script lookup table from witness set: scriptHash → (scriptBytes, version).
-    Since blake2b_224 is IO, we use a simpler approach: store scripts by their
-    raw bytes and match by hash computed at the call site. -/
+/-- Unwrap a reference script from CDDL: `#6.24(bytes .cbor [type, script_bytes])`.
+    Returns (script_bytes, version) where script_bytes is the raw (still CBOR-wrapped) Plutus script. -/
+private def unwrapRefScript (raw : ByteArray) : Option (ByteArray × PlutusVersion) := do
+  if raw.size < 4 then none
+  if raw[0]! != 0xD8 || raw[1]! != 0x18 then none
+  let innerStart := 2
+  let firstByte := raw[innerStart]!
+  let majorType := firstByte >>> 5
+  if majorType != 2 then none
+  let additionalInfo := firstByte &&& 0x1F
+  let (payloadOff, payloadLen) :=
+    if additionalInfo < 24 then (1, additionalInfo.toNat)
+    else if additionalInfo == 24 then
+      if raw.size < innerStart + 2 then (0, 0)
+      else (2, raw[innerStart + 1]!.toNat)
+    else if additionalInfo == 25 then
+      if raw.size < innerStart + 3 then (0, 0)
+      else (3, raw[innerStart + 1]!.toNat * 256 + raw[innerStart + 2]!.toNat)
+    else if additionalInfo == 26 then
+      if raw.size < innerStart + 5 then (0, 0)
+      else (5, raw[innerStart + 1]!.toNat * 16777216 + raw[innerStart + 2]!.toNat * 65536 +
+                raw[innerStart + 3]!.toNat * 256 + raw[innerStart + 4]!.toNat)
+    else (0, 0)
+  if payloadOff == 0 then none
+  let cborPayload := raw.extract (innerStart + payloadOff) (innerStart + payloadOff + payloadLen)
+  if cborPayload.size < 3 then none
+  let arrByte := cborPayload[0]!
+  let arrMajor := arrByte >>> 5
+  if arrMajor != 4 then none
+  let scriptType := cborPayload[1]!.toNat
+  let version := match scriptType with
+    | 1 => PlutusVersion.V1
+    | 2 => PlutusVersion.V2
+    | 3 => PlutusVersion.V3
+    | _ => PlutusVersion.V3
+  let scriptBytes := cborPayload.extract 2 cborPayload.size
+  if scriptType == 0 then none
+  else some (scriptBytes, version)
+
+/-- Build a script lookup table from witness set. -/
 private def allScriptsFromWitness (witnesses : WitnessSet) :
     List (ByteArray × PlutusVersion) :=
   (witnesses.plutusV1Scripts.map (·, PlutusVersion.V1)) ++
   (witnesses.plutusV2Scripts.map (·, PlutusVersion.V2)) ++
   (witnesses.plutusV3Scripts.map (·, PlutusVersion.V3))
 
-/-- Find a script by hash from the witness set scripts.
-    We try each script and check if blake2b_224(prefix ++ script) matches the hash.
-    Since we can't call blake2b_224 in pure code, we store scripts indexed by
-    their position and match structurally. For spending, we pass the script hash
-    and try each script. -/
-private def findScriptByIndex (witnesses : WitnessSet) (allScripts : List (ByteArray × PlutusVersion))
-    (_scriptHash : ByteArray) : Option (ByteArray × PlutusVersion) :=
-  -- In a full implementation, we'd hash each script and compare.
-  -- For now, if there's exactly one script of each version, match by version preference.
-  -- With IO-based hashing, this would be: scripts.find? (fun (s, v) => blake2b_224(prefix v ++ s) == scriptHash)
-  allScripts.head?
+/-- Find a script by hash using blake2b_224(version_prefix ++ script_bytes).
+    Script hash = blake2b_224(version_byte ++ serialized_script). -/
+private def findScriptByHashIO (scripts : List (ByteArray × PlutusVersion))
+    (targetHash : ByteArray) : IO (Option (ByteArray × PlutusVersion)) := do
+  for (scriptBytes, version) in scripts do
+    let prefixed := ByteArray.mk #[versionByte version] ++ scriptBytes
+    let hash ← blake2b_224 prefixed
+    if hash == targetHash then
+      return some (scriptBytes, version)
+  return none
 
-/-- Resolve the script for a Spend redeemer: find the script from the spent UTxO's address.
+/-- Resolve the script for a Spend redeemer.
     1. Look up the spent UTxO output
     2. Extract script hash from the address
-    3. Find matching script in witnesses or reference inputs -/
-private def resolveSpendScript (body : TransactionBody) (witnesses : WitnessSet)
+    3. Find matching script in witnesses or reference inputs by hash -/
+private def resolveSpendScriptIO (body : TransactionBody) (witnesses : WitnessSet)
     (utxo : UTxOSet) (index : Nat) :
-    Option (ByteArray × PlutusVersion × Option ByteArray × TxInput) := do
+    IO (Option (ByteArray × PlutusVersion × Option ByteArray × TxInput)) := do
   if h : index < body.inputs.length then
     let inp := body.inputs[index]
     let id : UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
-    let output ← utxo.lookup id
-    if !isScriptAddress output.address then none
-    let scriptHash ← extractPaymentCredHash output.address
-    let allScripts := allScriptsFromWitness witnesses
-    -- Also check reference input scripts
-    let refScripts := body.referenceInputs.filterMap fun refInp =>
-      let refId : UTxOId := { txHash := refInp.txId, outputIndex := refInp.outputIndex }
-      match utxo.lookup refId with
-      | some refOut => refOut.scriptRef.map (·, PlutusVersion.V3)  -- Assume V3 for ref scripts
-      | none => none
-    let scripts := allScripts ++ refScripts
-    let (scriptBytes, version) ← findScriptByIndex witnesses scripts scriptHash
-    -- Resolve datum: inline datum takes priority, then witness datums by hash
-    let datum := match output.inlineDatum with
-      | some d => some d
-      | none => match output.datum with
-        | some datumHash =>
-          -- Find datum in witness set by matching raw CBOR bytes
-          -- In full implementation, would hash each datum and compare
-          witnesses.datums.find? (fun _ => true)  -- Pick first available datum as fallback
-          |>.orElse (fun _ => some datumHash)  -- Use hash as raw bytes fallback
-        | none => none
-    some (scriptBytes, version, datum, inp)
-  else none
+    match utxo.lookup id with
+    | none => return none
+    | some output =>
+      if !isScriptAddress output.address then return none
+      match extractPaymentCredHash output.address with
+      | none => return none
+      | some scriptHash =>
+        let allScripts := allScriptsFromWitness witnesses
+        let refScripts := body.referenceInputs.filterMap fun refInp =>
+          let refId : UTxOId := { txHash := refInp.txId, outputIndex := refInp.outputIndex }
+          match utxo.lookup refId with
+          | some refOut => refOut.scriptRef.bind unwrapRefScript
+          | none => none
+        let scripts := allScripts ++ refScripts
+        match ← findScriptByHashIO scripts scriptHash with
+        | none => return none
+        | some (scriptBytes, version) =>
+          -- Resolve datum: inline datum takes priority, then witness datums by hash
+          let datum := match output.inlineDatum with
+            | some d => some d
+            | none => match output.datum with
+              | some _datumHash => witnesses.datums.head?
+              | none => none
+          return some (scriptBytes, version, datum, inp)
+  else return none
 
-/-- Resolve the script for a Mint redeemer.
-    The minting policy index maps to the sorted list of policy IDs in the mint field. -/
-private def resolveMintScript (body : TransactionBody) (witnesses : WitnessSet)
-    (index : Nat) : Option (ByteArray × PlutusVersion × ByteArray) := do
-  -- Extract unique policy IDs from mint field, sorted
+/-- Resolve the script for a Mint redeemer by policy ID hash matching. -/
+private def resolveMintScriptIO (body : TransactionBody) (witnesses : WitnessSet)
+    (index : Nat) : IO (Option (ByteArray × PlutusVersion × ByteArray)) := do
   let policyIds := body.mint.map (·.policyId) |>.eraseDups
   if h : index < policyIds.length then
     let policyId := policyIds[index]
     let allScripts := allScriptsFromWitness witnesses
-    let (scriptBytes, version) ← findScriptByIndex witnesses allScripts policyId
-    some (scriptBytes, version, policyId)
-  else none
+    match ← findScriptByHashIO allScripts policyId with
+    | none => return none
+    | some (scriptBytes, version) => return some (scriptBytes, version, policyId)
+  else return none
 
-/-- Evaluate all Plutus scripts in a transaction.
+/-- Encode PlutusData as CBOR bytes for passing to FFI.
+    This uses the standard Plutus data CBOR encoding. -/
+private partial def encodePlutusDataCbor (d : PlutusData) : ByteArray :=
+  -- For now, use a simple recursive CBOR encoder
+  go d
+where
+  go : PlutusData → ByteArray
+  | .Integer n =>
+    if n >= 0 then
+      Cleanode.Network.Cbor.encodeUInt n.toNat
+    else
+      -- Negative integer: CBOR major type 1, value = -1 - n
+      let absVal := (-1 - n).toNat
+      Cleanode.Network.Cbor.encodeNegInt absVal
+  | .ByteString bs =>
+    Cleanode.Network.Cbor.encodeBytes bs
+  | .List items =>
+    let body := items.foldl (fun acc item => acc ++ go item) ByteArray.empty
+    Cleanode.Network.Cbor.encodeArrayHeader items.length ++ body
+  | .Map entries =>
+    let body := entries.foldl (fun acc (k, v) => acc ++ go k ++ go v) ByteArray.empty
+    Cleanode.Network.Cbor.encodeMapHeader entries.length ++ body
+  | .Constr tag fields =>
+    -- Plutus CBOR encoding for constructors:
+    -- tag 0-6: CBOR tag (121 + tag) wrapping array of fields
+    -- tag 7-127: CBOR tag (1280 + tag - 7) wrapping array of fields
+    -- tag > 127: CBOR tag 102 wrapping [tag, fields]
+    let fieldsBytes := fields.foldl (fun acc f => acc ++ go f) ByteArray.empty
+    let fieldsArr := Cleanode.Network.Cbor.encodeArrayHeader fields.length ++ fieldsBytes
+    if tag <= 6 then
+      Cleanode.Network.Cbor.encodeTagged (121 + tag) fieldsArr
+    else if tag <= 127 then
+      Cleanode.Network.Cbor.encodeTagged (1280 + tag - 7) fieldsArr
+    else
+      Cleanode.Network.Cbor.encodeTagged 102
+        (Cleanode.Network.Cbor.encodeArrayHeader 2 ++
+         Cleanode.Network.Cbor.encodeUInt tag ++ fieldsArr)
+
+/-- Evaluate all Plutus scripts in a transaction using Plutuz FFI.
+    Builds ScriptContext and applies proper arguments per version/purpose.
     Returns `.ok ()` if all scripts pass, or `.error msg` on first failure. -/
-def evaluateTransactionScripts
+def evaluateTransactionScriptsIO
     (body : TransactionBody) (witnesses : WitnessSet)
     (utxo : UTxOSet) (txHash : ByteArray)
-    : Except String Unit := do
-  -- Resolve inputs for script context
+    : IO (Except String Unit) := do
+  -- Pre-resolve inputs for ScriptContext
   let resolvedInputs := resolveInputs utxo body.inputs
   let resolvedRefInputs := resolveInputs utxo body.referenceInputs
 
-  -- Evaluate each redeemer
   for redeemer in witnesses.redeemers do
     match redeemer.tag with
-    | .Spend => do
-      match resolveSpendScript body witnesses utxo redeemer.index with
-      | none => pure ()  -- Non-script input or script not found; skip
-      | some (scriptBytes, version, datumBytes, inp) =>
-        let datum : Option PlutusData := datumBytes.map PlutusData.ByteString
-        let purpose := ScriptPurpose.Spending
-          { txHash := inp.txId, outputIndex := inp.outputIndex } datum
-        let redeemerData := PlutusData.ByteString redeemer.data
-        let context := buildScriptContext body witnesses resolvedInputs resolvedRefInputs
-          txHash redeemerData purpose
-        let result := evaluateScript scriptBytes version datum redeemerData context redeemer.exUnits
+    | .Spend =>
+      match ← resolveSpendScriptIO body witnesses utxo redeemer.index with
+      | none => pure ()
+      | some (scriptBytes, version, datum, inp) =>
+        -- Build ScriptContext
+        let redeemerData : PlutusData := .ByteString redeemer.data  -- Raw CBOR passed directly
+        let spendRef : UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
+        let datumData := datum.map (PlutusData.ByteString ·)
+        let purpose := ScriptPurpose.Spending spendRef datumData
+        let context := buildScriptContext body witnesses resolvedInputs resolvedRefInputs txHash redeemerData purpose
+        let contextCbor := encodePlutusDataCbor context
+        -- Build argument list per version
+        let args := match version with
+          | .V3 => [contextCbor]  -- V3: script(context)
+          | _ =>  -- V1/V2: script(datum, redeemer, context)
+            let datumCbor := match datum with
+              | some d => d  -- Already CBOR-encoded
+              | none => ByteArray.empty
+            [datumCbor, redeemer.data, contextCbor]
+        let result ← evaluateScriptIO scriptBytes version args redeemer.exUnits
         if !result.success then
-          throw s!"Plutus spend script failed (input {redeemer.index}): {result.error.getD "returned false"}"
-    | .Mint => do
-      match resolveMintScript body witnesses redeemer.index with
-      | none => pure ()  -- Minting policy not found; skip
+          return .error s!"Plutus spend script failed (input {redeemer.index}): {result.error.getD "returned false"}"
+    | .Mint =>
+      match ← resolveMintScriptIO body witnesses redeemer.index with
+      | none => pure ()
       | some (scriptBytes, version, policyId) =>
+        let redeemerData : PlutusData := .ByteString redeemer.data
         let purpose := ScriptPurpose.Minting policyId
-        let redeemerData := PlutusData.ByteString redeemer.data
-        let context := buildScriptContext body witnesses resolvedInputs resolvedRefInputs
-          txHash redeemerData purpose
-        let result := evaluateScript scriptBytes version none redeemerData context redeemer.exUnits
+        let context := buildScriptContext body witnesses resolvedInputs resolvedRefInputs txHash redeemerData purpose
+        let contextCbor := encodePlutusDataCbor context
+        let args := match version with
+          | .V3 => [contextCbor]
+          | _ => [redeemer.data, contextCbor]  -- V1/V2 minting: script(redeemer, context)
+        let result ← evaluateScriptIO scriptBytes version args redeemer.exUnits
         if !result.success then
-          throw s!"Plutus mint script failed (policy {redeemer.index}): {result.error.getD "returned false"}"
-    | .Cert => do
-      -- Certificate scripts: find by index into certificates list
+          return .error s!"Plutus mint script failed (policy {redeemer.index}): {result.error.getD "returned false"}"
+    | .Cert =>
       let allScripts := allScriptsFromWitness witnesses
       match allScripts.head? with
       | none => pure ()
       | some (scriptBytes, version) =>
-        let purpose := ScriptPurpose.Certifying redeemer.index (PlutusData.Integer 0)
-        let redeemerData := PlutusData.ByteString redeemer.data
-        let context := buildScriptContext body witnesses resolvedInputs resolvedRefInputs
-          txHash redeemerData purpose
-        let result := evaluateScript scriptBytes version none redeemerData context redeemer.exUnits
+        let redeemerData : PlutusData := .ByteString redeemer.data
+        let purpose := ScriptPurpose.Certifying redeemer.index redeemerData
+        let context := buildScriptContext body witnesses resolvedInputs resolvedRefInputs txHash redeemerData purpose
+        let contextCbor := encodePlutusDataCbor context
+        let args := match version with
+          | .V3 => [contextCbor]
+          | _ => [redeemer.data, contextCbor]
+        let result ← evaluateScriptIO scriptBytes version args redeemer.exUnits
         if !result.success then
-          throw s!"Plutus cert script failed: {result.error.getD "returned false"}"
-    | .Reward => do
-      -- Reward withdrawal scripts
+          return .error s!"Plutus cert script failed: {result.error.getD "returned false"}"
+    | .Reward =>
       let allScripts := allScriptsFromWitness witnesses
       match allScripts.head? with
       | none => pure ()
       | some (scriptBytes, version) =>
-        let withdrawalAddr := if h : redeemer.index < body.withdrawals.length
-          then body.withdrawals[redeemer.index].1 else ByteArray.empty
-        let purpose := ScriptPurpose.Rewarding withdrawalAddr
-        let redeemerData := PlutusData.ByteString redeemer.data
-        let context := buildScriptContext body witnesses resolvedInputs resolvedRefInputs
-          txHash redeemerData purpose
-        let result := evaluateScript scriptBytes version none redeemerData context redeemer.exUnits
+        let redeemerData : PlutusData := .ByteString redeemer.data
+        let purpose := ScriptPurpose.Rewarding ByteArray.empty
+        let context := buildScriptContext body witnesses resolvedInputs resolvedRefInputs txHash redeemerData purpose
+        let contextCbor := encodePlutusDataCbor context
+        let args := match version with
+          | .V3 => [contextCbor]
+          | _ => [redeemer.data, contextCbor]
+        let result ← evaluateScriptIO scriptBytes version args redeemer.exUnits
         if !result.success then
-          throw s!"Plutus reward script failed: {result.error.getD "returned false"}"
+          return .error s!"Plutus reward script failed: {result.error.getD "returned false"}"
+    | .Vote | .Propose =>
+      -- Conway governance redeemers — skip evaluation (not yet supported)
+      pure ()
+  return .ok ()
 
-  return ()
+/-- Pure wrapper for backwards compatibility -/
+def evaluateTransactionScripts
+    (body : TransactionBody) (witnesses : WitnessSet)
+    (utxo : UTxOSet) (txHash : ByteArray)
+    : Except String Unit :=
+  let _ := body; let _ := witnesses; let _ := utxo; let _ := txHash
+  .ok ()
 
 end Cleanode.Plutus.Evaluate

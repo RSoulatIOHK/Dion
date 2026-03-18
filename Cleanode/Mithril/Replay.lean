@@ -105,9 +105,9 @@ def unwrapEraBlock (blockBytes : ByteArray) : Option ByteArray :=
 
 /-- Convert a raw certificate to a ledger certificate -/
 def rawCertToLedger : RawCertificate → Option Certificate
-  | .stakeKeyRegistration kh => some (.stakeKeyRegistration kh)
-  | .stakeKeyDeregistration kh => some (.stakeKeyDeregistration kh)
-  | .stakeDelegation kh pid => some (.stakeDelegation kh pid)
+  | .stakeKeyRegistration _ kh => some (.stakeKeyRegistration kh)
+  | .stakeKeyDeregistration _ kh => some (.stakeKeyDeregistration kh)
+  | .stakeDelegation _ kh pid => some (.stakeDelegation kh pid)
   | .poolRegistration pid vrfKH pledge cost _margin rewardAcct owners =>
       some (.poolRegistration {
         poolId := pid
@@ -121,15 +121,15 @@ def rawCertToLedger : RawCertificate → Option Certificate
         metadata := none
       })
   | .poolRetirement pid epoch => some (.poolRetirement pid epoch)
-  | .conwayRegistration kh deposit => some (.conwayRegistration kh deposit)
-  | .conwayDeregistration kh refund => some (.conwayDeregistration kh refund)
-  | .voteDelegation kh drepCred => some (.voteDelegation kh (.keyHash drepCred))
-  | .stakeVoteDelegation kh pid drepCred => some (.stakeVoteDelegation kh pid (.keyHash drepCred))
-  | .stakeRegDelegation kh pid deposit => some (.stakeRegDelegation kh pid deposit)
-  | .voteRegDelegation kh drepCred deposit => some (.voteRegDelegation kh (.keyHash drepCred) deposit)
-  | .stakeVoteRegDelegation kh pid drepCred deposit => some (.stakeVoteRegDelegation kh pid (.keyHash drepCred) deposit)
-  | .authCommitteeHot cold hot => some (.authCommitteeHot cold hot)
-  | .resignCommitteeCold cold => some (.resignCommitteeCold cold)
+  | .conwayRegistration _ kh deposit => some (.conwayRegistration kh deposit)
+  | .conwayDeregistration _ kh refund => some (.conwayDeregistration kh refund)
+  | .voteDelegation _ kh drepCred => some (.voteDelegation kh (.keyHash drepCred))
+  | .stakeVoteDelegation _ kh pid drepCred => some (.stakeVoteDelegation kh pid (.keyHash drepCred))
+  | .stakeRegDelegation _ kh pid deposit => some (.stakeRegDelegation kh pid deposit)
+  | .voteRegDelegation _ kh drepCred deposit => some (.voteRegDelegation kh (.keyHash drepCred) deposit)
+  | .stakeVoteRegDelegation _ kh pid drepCred deposit => some (.stakeVoteRegDelegation kh pid (.keyHash drepCred) deposit)
+  | .authCommitteeHot _ cold hot => some (.authCommitteeHot cold hot)
+  | .resignCommitteeCold _ cold => some (.resignCommitteeCold cold)
   | .unknown _ => none
 
 /-- Process a single block: parse transactions and apply UTxO changes.

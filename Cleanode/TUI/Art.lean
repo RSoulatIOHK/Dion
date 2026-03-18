@@ -25,6 +25,6 @@ def renderLogo : List String :=
 
 /-- Subtitle line -/
 def subtitle : String :=
-  s!"{Ansi.cyan}{Ansi.dim}  A Cardano Lean 4 Relay Node{Ansi.reset}"
+  s!"{Ansi.cyan}{Ansi.dim}  A Cardano LEAN 4 Node{Ansi.reset}"
 
 end Cleanode.TUI.Art

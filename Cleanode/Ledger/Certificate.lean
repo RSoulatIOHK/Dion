@@ -165,24 +165,24 @@ def applyCertificates (state : LedgerState) (certs : List Certificate) : LedgerS
     Note: pool registration loses some fields in the raw parse. -/
 def fromRawCertificate (raw : Cleanode.Network.ConwayBlock.RawCertificate) : Certificate :=
   match raw with
-  | .stakeKeyRegistration kh => .stakeKeyRegistration kh
-  | .stakeKeyDeregistration kh => .stakeKeyDeregistration kh
-  | .stakeDelegation kh pid => .stakeDelegation kh pid
+  | .stakeKeyRegistration _ kh => .stakeKeyRegistration kh
+  | .stakeKeyDeregistration _ kh => .stakeKeyDeregistration kh
+  | .stakeDelegation _ kh pid => .stakeDelegation kh pid
   | .poolRegistration pid vrfHash pledge cost _margin rewardAccount owners =>
     .poolRegistration {
       poolId := pid, vrfKeyHash := vrfHash, pledge, cost, margin := 0,
       rewardAccount, owners, relays := [], metadata := none
     }
   | .poolRetirement pid epoch => .poolRetirement pid epoch
-  | .conwayRegistration kh deposit => .conwayRegistration kh deposit
-  | .conwayDeregistration kh refund => .conwayDeregistration kh refund
-  | .voteDelegation kh drepCred => .voteDelegation kh (.keyHash drepCred)
-  | .stakeVoteDelegation kh pid drepCred => .stakeVoteDelegation kh pid (.keyHash drepCred)
-  | .stakeRegDelegation kh pid deposit => .stakeRegDelegation kh pid deposit
-  | .voteRegDelegation kh drepCred deposit => .voteRegDelegation kh (.keyHash drepCred) deposit
-  | .stakeVoteRegDelegation kh pid drepCred deposit => .stakeVoteRegDelegation kh pid (.keyHash drepCred) deposit
-  | .authCommitteeHot cold hot => .authCommitteeHot cold hot
-  | .resignCommitteeCold cold => .resignCommitteeCold cold
+  | .conwayRegistration _ kh deposit => .conwayRegistration kh deposit
+  | .conwayDeregistration _ kh refund => .conwayDeregistration kh refund
+  | .voteDelegation _ kh drepCred => .voteDelegation kh (.keyHash drepCred)
+  | .stakeVoteDelegation _ kh pid drepCred => .stakeVoteDelegation kh pid (.keyHash drepCred)
+  | .stakeRegDelegation _ kh pid deposit => .stakeRegDelegation kh pid deposit
+  | .voteRegDelegation _ kh drepCred deposit => .voteRegDelegation kh (.keyHash drepCred) deposit
+  | .stakeVoteRegDelegation _ kh pid drepCred deposit => .stakeVoteRegDelegation kh pid (.keyHash drepCred) deposit
+  | .authCommitteeHot _ cold hot => .authCommitteeHot cold hot
+  | .resignCommitteeCold _ cold => .resignCommitteeCold cold
   | .unknown _ => .stakeKeyRegistration ByteArray.empty  -- Fallback for unrecognized types
 
 -- ====================

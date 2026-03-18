@@ -27,7 +27,7 @@ def Builder.empty : Builder := { chunks := [], totalSize := 0 }
 
 /-- Concatenate all chunks into a single ByteArray -/
 def Builder.toByteArray (b : Builder) : ByteArray :=
-  let result := ByteArray.mkEmpty b.totalSize
+  let result := ByteArray.emptyWithCapacity b.totalSize
   -- Chunks are in reverse order, so reverse before copying
   b.chunks.reverse.foldl (fun acc chunk => acc ++ chunk) result
 

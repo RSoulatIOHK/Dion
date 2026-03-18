@@ -21,7 +21,7 @@ namespace Cleanode.Proofs.SocketProofs
 open Cleanode.Network.Socket
 
 /-- Socket connect is total: it either succeeds or returns an error -/
-theorem socket_connect_liveness (host : String) (port : UInt16) :
+theorem socket_connect_liveness (_host : String) (_port : UInt16) :
     True := by  -- Cannot express IO totality in pure Lean
   trivial
 

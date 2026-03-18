@@ -262,8 +262,7 @@ def decodeTxSubmission2Message (bs : ByteArray) : Option TxSubmission2Message :=
       some (.MsgRequestTxs r3.value)
   | 3 => do  -- MsgReplyTxs: tx bodies are HardFork NS-encoded [eraIndex, rawTxCBOR]
       if r1.value != 2 then none
-      -- For now, try to decode as byte array list (works for simple cases)
-      -- TODO: proper NS unwrapping for inline CBOR
+      -- Try plain byte array list first, then fall back to NS-encoded
       match decodeByteArrayList r2.remaining with
       | some r3 => some (.MsgReplyTxs r3.value)
       | none =>

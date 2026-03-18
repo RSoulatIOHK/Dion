@@ -120,9 +120,10 @@ def Mempool.addTx (pool : Mempool) (state : LedgerState)
     return .ok pool  -- Already have it, no-op
   -- Validate against ledger state
   let era := Cleanode.Network.EraTx.CardanoEra.Conway  -- Default to current era
-  match ← validateTransaction state tx.body tx.witnesses era with
-  | .error e => return .error e
-  | .ok () => do
+  let errs ← validateTransaction state tx.body tx.witnesses era
+  match errs with
+  | e :: _ => return .error e
+  | [] => do
       -- Check capacity
       if pool.entries.length >= pool.config.maxSize then
         return .error (.TxTooLarge 0 0)  -- Mempool full
@@ -132,7 +133,7 @@ def Mempool.addTx (pool : Mempool) (state : LedgerState)
         txHash := txHash
         transaction := tx
         rawBytes := rawBytes
-        addedAt := 0  -- TODO: use actual timestamp
+        addedAt := (← IO.monoNanosNow) / 1000000  -- milliseconds since boot
         size := rawBytes.size
       }
       return .ok {
@@ -230,10 +231,11 @@ def Mempool.addTxValidated (pool : Mempool) (rawBytes : ByteArray) (nowMs : Nat)
       ledger.utxo.contains id
     if !allInputsKnown then
       return .error "unknown inputs (UTxO not synced yet)"
-    match ← Cleanode.Ledger.Validation.validateTransaction
-        ledger body witnesses .Conway slot rawBytes.size with
-    | .error e => return .error s!"validation failed: {repr e}"
-    | .ok () =>
+    let valErrs ← Cleanode.Ledger.Validation.validateTransaction
+        ledger body witnesses .Conway slot rawBytes.size
+    if !valErrs.isEmpty then
+      return .error s!"validation failed: {String.intercalate ", " (valErrs.map fun e => s!"{repr e}")}"
+    do
       let entry : MempoolEntry := {
         txHash, rawBytes
         transaction := { body, witnesses := { witnesses with } }

@@ -7,6 +7,7 @@ import Cleanode.Network.N2C.LocalStateQuery
 import Cleanode.Network.N2C.LocalTxMonitor
 import Cleanode.Network.Mempool
 import Cleanode.Ledger.State
+import Std.Sync
 
 /-!
 # Node-to-Client Server
@@ -61,7 +62,7 @@ def N2CConnectionState.initial : N2CConnectionState :=
 /-- Handle a single N2C client connection.
     Runs handshake, then dispatches MUX frames to protocol handlers. -/
 partial def handleN2CConnection (sock : Socket)
-    (ledgerStateRef : IO.Ref LedgerState)
+    (ledgerStateRef : Std.Mutex LedgerState)
     (mempoolRef : IO.Ref Mempool)
     (network : NetworkMagic)
     (quiet : Bool := false)
@@ -124,7 +125,7 @@ partial def handleN2CConnection (sock : Socket)
 /-- Start the N2C server on a Unix domain socket.
     Accepts connections and spawns a handler task for each. -/
 partial def n2cServerLoop (socketPath : String)
-    (ledgerStateRef : IO.Ref LedgerState)
+    (ledgerStateRef : Std.Mutex LedgerState)
     (mempoolRef : IO.Ref Mempool)
     (network : NetworkMagic)
     (quiet : Bool := false)

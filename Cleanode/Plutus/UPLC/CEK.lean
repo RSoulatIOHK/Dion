@@ -190,7 +190,13 @@ def applyBuiltin (fun_ : BuiltinFun) (args : List CekValue) : Except String CekV
     else return .VConst (.Integer (a % b))
   | .ModInteger, [.VConst (.Integer a), .VConst (.Integer b)] =>
     if b == 0 then throw "division by zero"
-    else return .VConst (.Integer (a % b))  -- TODO: distinguish mod vs rem
+    else
+      -- Haskell `mod` uses floored division: result has the sign of the divisor.
+      -- Lean's Int.mod (%) uses truncated division (sign of dividend).
+      -- Floored mod: a - b * floor(a/b)
+      let r := a % b
+      let result := if r != 0 && ((r < 0) != (b < 0)) then r + b else r
+      return .VConst (.Integer result)
   | .EqualsInteger, [.VConst (.Integer a), .VConst (.Integer b)] =>
     return .VConst (.Bool (a == b))
   | .LessThanInteger, [.VConst (.Integer a), .VConst (.Integer b)] =>

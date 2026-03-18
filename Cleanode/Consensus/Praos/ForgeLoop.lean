@@ -3,9 +3,11 @@ import Cleanode.Consensus.Praos.ConsensusState
 import Cleanode.Consensus.Praos.StakeDistribution
 import Cleanode.Ledger.State
 import Cleanode.Ledger.Validation
+import Cleanode.Network.CborCursor
 import Cleanode.Network.ConwayBlock
 import Cleanode.Network.Crypto
 import Cleanode.Network.Mempool
+import Std.Sync
 
 /-!
 # Real-Time Block Forge Loop
@@ -240,11 +242,9 @@ def validateForgedBlock (block : ForgedBlock) (ledgerState : Cleanode.Ledger.Sta
 
   -- 3. Validate each parsed transaction against ledger rules
   for (idx, tx) in (List.range body.transactions.length).zip body.transactions do
-    let result ← Cleanode.Ledger.Validation.validateTransaction
+    let valErrs ← Cleanode.Ledger.Validation.validateTransaction
       ledgerState tx.body tx.witnesses .Conway block.slot
-    match result with
-    | .ok () => pure ()
-    | .error e =>
+    for e in valErrs do
       errors := s!"Tx {idx} validation FAILED: {repr e}" :: errors
 
   -- 4. Check header structure: body hash matches
@@ -274,7 +274,7 @@ def validateForgedBlock (block : ForgedBlock) (ledgerState : Cleanode.Ledger.Sta
 partial def runForgeLoop (stateRef : IO.Ref ForgeState)
     (mempoolRef : IO.Ref Cleanode.Network.Mempool.Mempool)
     (consensusRef : IO.Ref ConsensusState)
-    (ledgerStateRef : IO.Ref Cleanode.Ledger.State.LedgerState)
+    (ledgerStateRef : Std.Mutex Cleanode.Ledger.State.LedgerState)
     (prevHashRef : IO.Ref ByteArray)
     (blockNoRef : IO.Ref Nat)
     (forgedBlocksRef : IO.Ref (Array ForgedBlock))
@@ -309,7 +309,7 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
     let result ← forgeStep stateRef mempoolRef consensusRef prevHash blockNo
     match result with
     | .notYet _ => pure ()
-    | .notLeader slot =>
+    | .notLeader _slot =>
       -- Silent — too noisy to log every non-leader slot
       pure ()
     | .forged block => do
@@ -317,7 +317,7 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
       IO.println s!"[forge]   header: {block.headerBytes.size} bytes, body: {block.bodyComponents.serialize.size} bytes"
       IO.println s!"[forge]   txs: {block.selectedTxs.transactions.length}"
       -- Self-validate before announcing
-      let ls ← ledgerStateRef.get
+      let ls ← ledgerStateRef.atomically (fun ref => ref.get)
       let validationErrors ← validateForgedBlock block ls
       if validationErrors.isEmpty then
         IO.println s!"[forge]   ✓ self-validation PASSED"
@@ -325,11 +325,32 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
         IO.eprintln s!"[forge]   ✗ self-validation FAILED ({validationErrors.length} errors):"
         for err in validationErrors do
           IO.eprintln s!"[forge]     - {err}"
-      -- Push to announcement queue
-      forgedBlocksRef.modify fun arr => arr.push block
-      -- Advance block number and prev hash to our forged block
-      blockNoRef.set (blockNo + 1)
+      -- Apply forged block to ledger state (UTxO + fees)
       let blockHash ← Cleanode.Network.Crypto.blake2b_256 block.headerBytes
+      ledgerStateRef.atomically fun lsRef => do
+        let mut s ← lsRef.get
+        for tx in block.selectedTxs.transactions do
+          let cur := Cleanode.Network.CborCursor.Cursor.mk' tx.bodyRawBytes
+          match Cleanode.Network.ConwayBlock.parseTransactionBodyMapC cur with
+          | some bodyResult =>
+            let body := bodyResult.value
+            s := { s with utxo := s.utxo.applyTx tx.txHash body,
+                          epochFees := s.epochFees + body.fee }
+          | none => pure ()
+        lsRef.set { s with lastSlot := block.slot,
+                           lastBlockNo := block.blockNumber,
+                           lastBlockHash := blockHash }
+      -- Accumulate VRF nonce output into consensus state
+      let vrfBytes := ByteArray.mk block.vrfOutput.toArray
+      let cs ← consensusRef.get
+      let cs ← updateEvolvingNonceFromBlock cs block.slot vrfBytes
+      consensusRef.set cs
+      -- Remove forged txs from mempool
+      let txHashes := block.selectedTxs.transactions.map (·.txHash)
+      mempoolRef.modify (·.removeConfirmed txHashes)
+      -- Push to announcement queue and advance chain tip
+      forgedBlocksRef.modify fun arr => arr.push block
+      blockNoRef.set (blockNo + 1)
       prevHashRef.set blockHash
     | .forgeError slot err =>
       IO.eprintln s!"[forge] Error at slot {slot}: {err}"
@@ -340,7 +361,7 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
 def startForgeLoop (forgeParams : ForgeParams) (clock : SlotClock)
     (consensusRef : IO.Ref ConsensusState)
     (mempoolRef : IO.Ref Cleanode.Network.Mempool.Mempool)
-    (ledgerStateRef : IO.Ref Cleanode.Ledger.State.LedgerState)
+    (ledgerStateRef : Std.Mutex Cleanode.Ledger.State.LedgerState)
     (prevHashRef : IO.Ref ByteArray) (blockNoRef : IO.Ref Nat)
     : IO (Task (Except IO.Error Unit) × IO.Ref ForgeState × IO.Ref (Array ForgedBlock)) := do
   let cs ← consensusRef.get

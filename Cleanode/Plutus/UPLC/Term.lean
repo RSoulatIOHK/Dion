@@ -103,7 +103,7 @@ inductive BuiltinFun where
   -- V2 additions (50-52)
   | VerifyEcdsaSecp256k1Signature -- 50
   | VerifySchnorrSecp256k1Signature -- 51
-  | SerialiseData2        -- 52 (placeholder)
+  | SerialiseData2        -- 52 (V2 alias for SerialiseData)
   -- Integer/ByteString conversion (53-54)
   | IntegerToByteString   -- 53
   | ByteStringToInteger   -- 54
@@ -125,6 +125,10 @@ inductive BuiltinFun where
   | Bls12_381_millerLoop  -- 69
   | Bls12_381_mulMlResult -- 70
   | Bls12_381_finalVerify -- 71
+  -- V3 crypto additions (72-73)
+  | Keccak_256             -- 72  (#406)
+  | Blake2b_224            -- 73  (#407 uses index 73 in Plutus spec)
+  | Ripemd_160             -- 74  (#407)
   deriving BEq, Repr
 
 /-- Number of arguments each builtin expects (before saturation) -/
@@ -169,6 +173,7 @@ def BuiltinFun.arity : BuiltinFun → Nat
   | .Bls12_381_millerLoop => 2
   | .Bls12_381_mulMlResult => 2
   | .Bls12_381_finalVerify => 2
+  | .Keccak_256 | .Blake2b_224 | .Ripemd_160 => 1
 
 /-- Decode a builtin function from its Flat index -/
 def BuiltinFun.fromIndex : Nat → Option BuiltinFun
@@ -210,6 +215,8 @@ def BuiltinFun.fromIndex : Nat → Option BuiltinFun
   | 67 => some .Bls12_381_G2_compress | 68 => some .Bls12_381_G2_uncompress
   | 69 => some .Bls12_381_millerLoop | 70 => some .Bls12_381_mulMlResult
   | 71 => some .Bls12_381_finalVerify
+  | 72 => some .Keccak_256 | 73 => some .Blake2b_224
+  | 74 => some .Ripemd_160
   | _ => none
 
 -- ====================
@@ -293,6 +300,17 @@ partial def Term.repr : Term → String
 
 instance : Repr Term where
   reprPrec t _ := t.repr
+
+/-- Collect all unique builtin functions referenced in a term -/
+partial def Term.collectBuiltins : Term → List BuiltinFun
+  | .Builtin b => [b]
+  | .LamAbs body => body.collectBuiltins
+  | .Apply f x => (f.collectBuiltins ++ x.collectBuiltins).eraseDups
+  | .Force t => t.collectBuiltins
+  | .Delay t => t.collectBuiltins
+  | .Constr _ args => args.foldl (fun acc a => (acc ++ a.collectBuiltins).eraseDups) []
+  | .Case scrut cases => (scrut.collectBuiltins ++ cases.foldl (fun acc (c : Term) => acc ++ c.collectBuiltins) []).eraseDups
+  | _ => []
 
 -- ====================
 -- = Program          =

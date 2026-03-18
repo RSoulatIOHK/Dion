@@ -253,7 +253,7 @@ partial def parseByronBlockBody (bs : ByteArray) : Option ByronBlockBody := do
 
   -- Element 0: Transaction payloads (wrapped in another array/tag structure)
   -- Byron wraps txs as: [tag24([tx_payload_1, tx_payload_2, ...])]
-  let txsStart := r1.remaining
+  let _txsStart := r1.remaining
   let mut remaining := r1.remaining
   let mut txPayloads : List ByronTxPayload := []
 

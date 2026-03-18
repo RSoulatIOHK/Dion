@@ -4,6 +4,7 @@ import Cleanode.Network.N2C.StateQueryCodec
 import Cleanode.Network.N2C.PParamsCodec
 import Cleanode.Network.N2C.UTxOCodec
 import Cleanode.Ledger.State
+import Std.Sync
 import Cleanode.Storage.ChainDB
 
 /-!
@@ -60,7 +61,19 @@ partial def decodeLSQClientMessage (bs : ByteArray) : Option LSQClientMessage :=
   let r2 ← decodeUInt r1.remaining
   match r2.value with
   | 0 => -- MsgAcquire: [0, point] where point is [slot, hash]
-    some (.MsgAcquire none)  -- TODO: parse point
+    -- Parse the optional point from remaining CBOR
+    let point := match decodeArrayHeader r2.remaining with
+      | some r3 =>
+        if r3.value == 2 then  -- [slot, hash]
+          match decodeUInt r3.remaining with
+          | some slotR =>
+            let slot := slotR.value
+            let hash := slotR.remaining.extract 0 (min 32 slotR.remaining.size)
+            some (slot, hash)
+          | none => none
+        else none
+      | none => none
+    some (.MsgAcquire point)
   | 3 => -- MsgQuery: [3, queryBytes]
     some (.MsgQuery r2.remaining)
   | 5 => -- MsgReAcquire: [5, point]
@@ -184,7 +197,7 @@ inductive LSQState where
 
 /-- Handle one LocalStateQuery frame. Returns (continue, newState). -/
 def handleStateQueryFrame (sock : Socket) (payload : ByteArray)
-    (ledgerStateRef : IO.Ref LedgerState) (lsqState : LSQState)
+    (ledgerStateRef : Std.Mutex LedgerState) (lsqState : LSQState)
     (networkMagic : Nat := 764824073) (quiet : Bool := false)
     : IO (Bool × LSQState) := do
   let log (msg : String) : IO Unit := if !quiet then IO.eprintln msg else pure ()
@@ -217,7 +230,7 @@ def handleStateQueryFrame (sock : Socket) (payload : ByteArray)
     return (true, .Idle)
   | some (.MsgQuery queryBytes) => do
     log s!"[lsq] MsgQuery ({queryBytes.size} bytes)"
-    let state ← ledgerStateRef.get
+    let state ← ledgerStateRef.atomically (fun ref => ref.get)
     -- Parse two-layer query: outer Query wrapper + inner HardFork query
     let result ← match decodeTopLevelQuery queryBytes with
     | some (.BlockQuery hfBytes) =>

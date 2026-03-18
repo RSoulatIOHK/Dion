@@ -34,7 +34,7 @@ def findBestVersion (proposals : List (VersionNumber × VersionData))
   let compatible := proposals.filter fun (vn, _) => supportedVersions.contains vn.value
   -- Sort by version number descending and take the first
   let sorted := compatible.toArray.qsort (fun a b => a.1.value > b.1.value)
-  sorted.get? 0
+  sorted[0]?
 
 /-- Default supported versions for a Cleanode server -/
 def defaultSupportedVersions : List Nat := [14, 15]
@@ -108,7 +108,7 @@ def receiveAndRespondHandshake (sock : Socket)
 
 /-- The handshake protocol always terminates (client sends, server responds) -/
 theorem handshake_terminates :
-    ∀ (msg : HandshakeMessage) (supported : List Nat) (net : NetworkMagic),
+    ∀ (_msg : HandshakeMessage) (_supported : List Nat) (_net : NetworkMagic),
       True := by
   intros; trivial
 

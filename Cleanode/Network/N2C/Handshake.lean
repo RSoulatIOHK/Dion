@@ -117,7 +117,7 @@ def findBestN2CVersion (proposals : List (Nat × N2CVersionData))
   let compatible := proposals.filter fun (v, vd) =>
     supportedVersions.contains v && vd.networkMagic == networkMagic
   let sorted := compatible.toArray.qsort (fun a b => a.1 > b.1)
-  sorted.get? 0
+  sorted[0]?
 
 /-- Receive N2C handshake from cardano-cli and respond.
     Returns the accepted version on success. -/

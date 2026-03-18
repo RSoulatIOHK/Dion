@@ -49,13 +49,21 @@ def parseByronGenesis (j : Json) : Option ByronGenesis := do
   let maxHeaderSize ← (bvd.getObjValAs? Nat "maxHeaderSize").toOption
   let maxTxSize ← (bvd.getObjValAs? Nat "maxTxSize").toOption
 
-  -- startTime (ISO 8601 string, store as-is for now)
   let protocolMagic ← (protocolConsts.getObjValAs? Nat "protocolMagic").toOption
+
+  -- Parse startTime: try as number first, fall back to known ISO 8601 timestamps
+  let startTime := match (j.getObjValAs? Nat "startTime").toOption with
+    | some t => t
+    | none => match (j.getObjValAs? String "startTime").toOption with
+      | some "2017-09-23T21:44:51Z" => 1506203091  -- Byron mainnet
+      | some "2022-11-01T00:00:00Z" => 1667260800  -- Preprod
+      | some "2022-04-01T00:00:00Z" => 1648771200  -- Preview
+      | _ => 0  -- Unknown — safe default
 
   some {
     securityParameter := k,
     slotDuration := slotDuration,
-    startTime := 0,  -- TODO: parse ISO 8601 timestamp
+    startTime := startTime,
     protocolMagic := protocolMagic,
     maxBlockSize := maxBlockSize,
     maxHeaderSize := maxHeaderSize,
@@ -228,10 +236,39 @@ def parseConwayGenesis (j : Json) : Option ConwayGenesis := do
   let govActionDeposit := (j.getObjValAs? Nat "govActionDeposit").toOption |>.getD 100000000000
   let dRepDeposit := (j.getObjValAs? Nat "dRepDeposit").toOption |>.getD 500000000
   let dRepActivity := (j.getObjValAs? Nat "dRepActivity").toOption |>.getD 20
+  -- Parse DRep voting thresholds (nested JSON object)
+  let dRepVotingThresholds := match (j.getObjVal? "dRepVotingThresholds").toOption with
+    | some obj => some {
+        motionNoConfidence := (obj.getObjValAs? Float "motionNoConfidence").toOption |>.getD 0.67
+        committeeNormal := (obj.getObjValAs? Float "committeeNormal").toOption |>.getD 0.67
+        committeeNoConfidence := (obj.getObjValAs? Float "committeeNoConfidence").toOption |>.getD 0.60
+        updateToConstitution := (obj.getObjValAs? Float "updateToConstitution").toOption |>.getD 0.75
+        hardForkInitiation := (obj.getObjValAs? Float "hardForkInitiation").toOption |>.getD 0.60
+        ppNetworkGroup := (obj.getObjValAs? Float "ppNetworkGroup").toOption |>.getD 0.67
+        ppEconomicGroup := (obj.getObjValAs? Float "ppEconomicGroup").toOption |>.getD 0.67
+        ppTechnicalGroup := (obj.getObjValAs? Float "ppTechnicalGroup").toOption |>.getD 0.67
+        ppGovGroup := (obj.getObjValAs? Float "ppGovGroup").toOption |>.getD 0.75
+        treasuryWithdrawal := (obj.getObjValAs? Float "treasuryWithdrawal").toOption |>.getD 0.67
+      : VotingThresholds }
+    | none => none
+  -- Parse pool voting thresholds
+  let poolVotingThresholds := match (j.getObjVal? "poolVotingThresholds").toOption with
+    | some obj => some {
+        motionNoConfidence := (obj.getObjValAs? Float "motionNoConfidence").toOption |>.getD 0.51
+        committeeNormal := (obj.getObjValAs? Float "committeeNormal").toOption |>.getD 0.51
+        committeeNoConfidence := (obj.getObjValAs? Float "committeeNoConfidence").toOption |>.getD 0.51
+        updateToConstitution := (obj.getObjValAs? Float "updateToConstitution").toOption |>.getD 0.0
+        hardForkInitiation := (obj.getObjValAs? Float "hardForkInitiation").toOption |>.getD 0.51
+        ppNetworkGroup := (obj.getObjValAs? Float "ppNetworkGroup").toOption |>.getD 0.0
+        ppEconomicGroup := (obj.getObjValAs? Float "ppEconomicGroup").toOption |>.getD 0.0
+        ppTechnicalGroup := (obj.getObjValAs? Float "ppTechnicalGroup").toOption |>.getD 0.0
+        ppGovGroup := (obj.getObjValAs? Float "ppGovGroup").toOption |>.getD 0.0
+        treasuryWithdrawal := (obj.getObjValAs? Float "treasuryWithdrawal").toOption |>.getD 0.0
+      : VotingThresholds }
+    | none => none
   some {
     committeeMinSize, committeeMaxTermLength,
-    dRepVotingThresholds := none,  -- TODO: parse nested thresholds
-    poolVotingThresholds := none,
+    dRepVotingThresholds, poolVotingThresholds,
     govActionLifetime, govActionDeposit, dRepDeposit, dRepActivity
   }
 

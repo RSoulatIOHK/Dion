@@ -27,6 +27,7 @@ import Cleanode.Consensus.Praos.LeaderElection
 import Cleanode.Consensus.Praos.ConsensusState
 import Cleanode.Crypto.VRF.ECVRF
 import Cleanode.Crypto.Sign.Ed25519.Signature
+import Std.Sync
 import Pigment
 import Cleanode.TUI.State
 import Cleanode.TUI.Render
@@ -79,9 +80,9 @@ open Cleanode.TUI.Render
 /-- Convert a RawCertificate (from block parser) to a ledger Certificate.
     Pool registrations use a simplified FullPoolParams. -/
 def rawCertToLedger : RawCertificate → Option Cleanode.Ledger.Certificate.Certificate
-  | .stakeKeyRegistration kh => some (.stakeKeyRegistration kh)
-  | .stakeKeyDeregistration kh => some (.stakeKeyDeregistration kh)
-  | .stakeDelegation kh pid => some (.stakeDelegation kh pid)
+  | .stakeKeyRegistration _ kh => some (.stakeKeyRegistration kh)
+  | .stakeKeyDeregistration _ kh => some (.stakeKeyDeregistration kh)
+  | .stakeDelegation _ kh pid => some (.stakeDelegation kh pid)
   | .poolRegistration pid vrfKH pledge cost _margin rewardAcct owners =>
       some (.poolRegistration {
         poolId := pid
@@ -95,15 +96,15 @@ def rawCertToLedger : RawCertificate → Option Cleanode.Ledger.Certificate.Cert
         metadata := none
       })
   | .poolRetirement pid epoch => some (.poolRetirement pid epoch)
-  | .conwayRegistration kh deposit => some (.conwayRegistration kh deposit)
-  | .conwayDeregistration kh refund => some (.conwayDeregistration kh refund)
-  | .voteDelegation kh drepCred => some (.voteDelegation kh (.keyHash drepCred))
-  | .stakeVoteDelegation kh pid drepCred => some (.stakeVoteDelegation kh pid (.keyHash drepCred))
-  | .stakeRegDelegation kh pid deposit => some (.stakeRegDelegation kh pid deposit)
-  | .voteRegDelegation kh drepCred deposit => some (.voteRegDelegation kh (.keyHash drepCred) deposit)
-  | .stakeVoteRegDelegation kh pid drepCred deposit => some (.stakeVoteRegDelegation kh pid (.keyHash drepCred) deposit)
-  | .authCommitteeHot cold hot => some (.authCommitteeHot cold hot)
-  | .resignCommitteeCold cold => some (.resignCommitteeCold cold)
+  | .conwayRegistration _ kh deposit => some (.conwayRegistration kh deposit)
+  | .conwayDeregistration _ kh refund => some (.conwayDeregistration kh refund)
+  | .voteDelegation _ kh drepCred => some (.voteDelegation kh (.keyHash drepCred))
+  | .stakeVoteDelegation _ kh pid drepCred => some (.stakeVoteDelegation kh pid (.keyHash drepCred))
+  | .stakeRegDelegation _ kh pid deposit => some (.stakeRegDelegation kh pid deposit)
+  | .voteRegDelegation _ kh drepCred deposit => some (.voteRegDelegation kh (.keyHash drepCred) deposit)
+  | .stakeVoteRegDelegation _ kh pid drepCred deposit => some (.stakeVoteRegDelegation kh pid (.keyHash drepCred) deposit)
+  | .authCommitteeHot _ cold hot => some (.authCommitteeHot cold hot)
+  | .resignCommitteeCold _ cold => some (.resignCommitteeCold cold)
   | .unknown _ => none
 
 /-- Atomically check if a key is in the set; if not, add it.
@@ -781,7 +782,7 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
     (peerAddr : String := "")
     (mempoolRef : Option (IO.Ref Mempool) := none)
     (consensusRef : Option (IO.Ref ConsensusState) := none)
-    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none)
+    (ledgerStateRef : Option (Std.Mutex Cleanode.Ledger.State.LedgerState) := none)
     (prevHashRef : Option (IO.Ref ByteArray) := none)
     (blockNoRef : Option (IO.Ref Nat) := none) : IO Bool := do
   -- Extract the actual block point from the header (not the tip)
@@ -885,9 +886,10 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
               ref.modify (·.updateMempool pool.entries.length pool.totalBytes)
         | none => displayBlock header tip blockPoint blockBytes
         -- Update ledger state: validate each tx, apply certificates and UTxO changes
-        if let some lsRef := ledgerStateRef then
+        if let some lsMutex := ledgerStateRef then
           let parsedBody ← Cleanode.Network.ConwayBlock.parseConwayBlockBodyIO blockBytes
           if let some body := parsedBody then
+            lsMutex.atomically fun lsRef => do
             let mut s ← lsRef.get
             let mut validationOk := 0
             let mut validationFail := 0
@@ -895,6 +897,8 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
             let mut validationErrors : List String := []
             -- Collect failure details for file logging
             let mut failureDetails : List String := []
+            -- Track which inputs were actually missing at skip time (for unknown block log)
+            let mut skippedTxDetails : List (Nat × ByteArray × List String) := []
             let mut txIdx := 0
             for tx in body.transactions do
               -- Phase-2 invalid txs (Plutus failures — collateral taken, block still valid)
@@ -903,19 +907,25 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
                 txIdx := txIdx + 1
                 continue
               -- Check if all inputs exist in our UTxO set (skip tx if any missing)
-              let allInputsKnown := tx.body.inputs.all fun inp =>
-                let id : Cleanode.Ledger.UTxO.UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
-                s.utxo.contains id
+              -- Includes regular inputs, reference inputs, and collateral inputs
+              let allInputsKnown := tx.body.inputs.all (fun inp =>
+                s.utxo.contains { txHash := inp.txId, outputIndex := inp.outputIndex }) &&
+                tx.body.referenceInputs.all (fun inp =>
+                s.utxo.contains { txHash := inp.txId, outputIndex := inp.outputIndex }) &&
+                tx.body.collateralInputs.all (fun inp =>
+                s.utxo.contains { txHash := inp.txId, outputIndex := inp.outputIndex })
               if allInputsKnown && !tx.body.inputs.isEmpty then
-                let result ← Cleanode.Ledger.Validation.validateTransaction
+                let errs ← Cleanode.Ledger.Validation.validateTransaction
                   s tx.body tx.witnesses .Conway blockPoint.slot.toNat tx.serializedSize
-                match result with
-                | .ok () => validationOk := validationOk + 1
-                | .error e =>
+                if errs.isEmpty then
+                  validationOk := validationOk + 1
+                else
                   validationFail := validationFail + 1
-                  let errStr := s!"{repr e}"
-                  validationErrors := validationErrors ++ [errStr]
-                  let debugWit := s!"[validate] Block #{blockNo} tx FAILED: {errStr} | vkeys={tx.witnesses.vkeyWitnesses.length} bootstrap={tx.witnesses.bootstrapWitnesses.length} redeemers={tx.witnesses.redeemers.length}"
+                  for e in errs do
+                    let errStr := s!"{repr e}"
+                    validationErrors := validationErrors ++ [errStr]
+                  let errSummary := String.intercalate ", " (errs.map fun e => s!"{repr e}")
+                  let debugWit := s!"[validate] Block #{blockNo} tx FAILED: {errSummary} | vkeys={tx.witnesses.vkeyWitnesses.length} bootstrap={tx.witnesses.bootstrapWitnesses.length} redeemers={tx.witnesses.redeemers.length}"
                   match tuiRef with
                   | some ref => ref.modify (·.addLog debugWit)
                   | none => pure ()
@@ -924,20 +934,62 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
                   let txHashHex := bytesToHex txHashBytes
                   let mut lines : List String := []
                   lines := lines ++ [s!"  tx[{txIdx}] hash={(txHashHex.take 32)}..."]
-                  lines := lines ++ [s!"    error: {errStr}"]
+                  for e in errs do
+                    lines := lines ++ [s!"    error: {repr e}"]
                   lines := lines ++ [s!"    fee={tx.body.fee} serializedSize={tx.serializedSize} bodySize={tx.body.rawBytes.size}"]
-                  lines := lines ++ [s!"    inputs={tx.body.inputs.length} outputs={tx.body.outputs.length} mint={tx.body.mint.length} withdrawals={tx.body.withdrawals.length}"]
+                  lines := lines ++ [s!"    inputs={tx.body.inputs.length} refInputs={tx.body.referenceInputs.length} outputs={tx.body.outputs.length} mint={tx.body.mint.length} withdrawals={tx.body.withdrawals.length} certs={tx.body.certificates.length}"]
                   lines := lines ++ [s!"    vkeys={tx.witnesses.vkeyWitnesses.length} bootstrap={tx.witnesses.bootstrapWitnesses.length} redeemers={tx.witnesses.redeemers.length} native={tx.witnesses.nativeScripts.length}"]
                   lines := lines ++ [s!"    plutusV1={tx.witnesses.plutusV1Scripts.length} plutusV2={tx.witnesses.plutusV2Scripts.length} plutusV3={tx.witnesses.plutusV3Scripts.length}"]
                   if let some ttl := tx.body.ttl then lines := lines ++ [s!"    ttl={ttl}"]
                   if let some validFrom := tx.body.validityIntervalStart then lines := lines ++ [s!"    validFrom={validFrom}"]
+                  -- Diagnostic: print mint policy IDs
+                  for asset in tx.body.mint do
+                    lines := lines ++ [s!"    mintPolicy={bytesToHex asset.policyId} name={bytesToHex asset.assetName} amt={asset.signedAmount}"]
+                  -- Diagnostic: print spend input addresses (to find spurious script-locked)
+                  for inp in tx.body.inputs do
+                    let inpId : Cleanode.Ledger.UTxO.UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
+                    match s.utxo.lookup inpId with
+                    | none => pure ()
+                    | some out =>
+                      let addrHdr := if out.address.size > 0 then bytesToHex (out.address.extract 0 1) else "?"
+                      let addrCred := if out.address.size >= 29 then bytesToHex (out.address.extract 1 29) else "short"
+                      lines := lines ++ [s!"    spendInput={bytesToHex inp.txId}#{inp.outputIndex} addrHdr={addrHdr} payCredHash={addrCred}"]
+                  -- Diagnostic: print reference input script ref hashes
+                  for refInp in tx.body.referenceInputs do
+                    let refId : Cleanode.Ledger.UTxO.UTxOId := { txHash := refInp.txId, outputIndex := refInp.outputIndex }
+                    match s.utxo.lookup refId with
+                    | none => lines := lines ++ [s!"    refInput={bytesToHex refInp.txId}#{refInp.outputIndex} UTxO=MISSING"]
+                    | some out =>
+                      match out.scriptRef with
+                      | none => lines := lines ++ [s!"    refInput={bytesToHex refInp.txId}#{refInp.outputIndex} scriptRef=none"]
+                      | some refBytes =>
+                        let hdrStr := if refBytes.size >= 2 then bytesToHex (refBytes.extract 0 2) else "?"
+                        lines := lines ++ [s!"    refInput={bytesToHex refInp.txId}#{refInp.outputIndex} scriptRefSize={refBytes.size} header={hdrStr}"]
                   failureDetails := failureDetails ++ lines
-              else
+              else do
                 validationSkipped := validationSkipped + 1
+                -- Capture missing inputs NOW (against intermediate state, not final)
+                let txHashBytes ← blake2b_256 tx.body.rawBytes
+                let mut missing : List String := []
+                for inp in tx.body.inputs do
+                  if !s.utxo.contains { txHash := inp.txId, outputIndex := inp.outputIndex } then
+                    missing := s!"    missing input: {bytesToHex inp.txId}#{inp.outputIndex}" :: missing
+                for inp in tx.body.referenceInputs do
+                  if !s.utxo.contains { txHash := inp.txId, outputIndex := inp.outputIndex } then
+                    missing := s!"    missing ref-input: {bytesToHex inp.txId}#{inp.outputIndex}" :: missing
+                for inp in tx.body.collateralInputs do
+                  if !s.utxo.contains { txHash := inp.txId, outputIndex := inp.outputIndex } then
+                    missing := s!"    missing collateral: {bytesToHex inp.txId}#{inp.outputIndex}" :: missing
+                skippedTxDetails := (txIdx, txHashBytes, missing.reverse) :: skippedTxDetails
               -- Apply regardless (the chain is authoritative)
               let certs := tx.body.certificates.filterMap rawCertToLedger
               s := Cleanode.Ledger.Certificate.applyCertificates s certs
               let txHash ← blake2b_256 tx.body.rawBytes
+              -- DEBUG: log first few blocks to verify hash computation
+              if blockNo <= 4512095 then
+                IO.eprintln s!"[utxo-dbg] blk={blockNo} txHash={(bytesToHex txHash).take 16} rawSize={tx.body.rawBytes.size} outputs={tx.body.outputs.length}"
+                for inp in tx.body.inputs do
+                  IO.eprintln s!"[utxo-dbg]   input={(bytesToHex inp.txId).take 16}#{inp.outputIndex} found={s.utxo.contains { txHash := inp.txId, outputIndex := inp.outputIndex }}"
               s := { s with utxo := s.utxo.applyTx txHash tx.body,
                             epochFees := s.epochFees + tx.body.fee }
               txIdx := txIdx + 1
@@ -964,6 +1016,16 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
                   { tui with blocksFullyValid := tui.blocksFullyValid + 1 }
                 else tui  -- has skipped txs → "unknown"
             | none => pure ()
+            -- Log unknown blocks (skipped txs with no failures) for investigation
+            if validationSkipped > 0 && validationFail == 0 then
+              let h ← IO.FS.Handle.mk "validation_unknown.log" .append
+              h.putStrLn s!"═══ Block #{blockNo} | slot {blockPoint.slot.toNat} | txs {body.transactions.length} (ok={validationOk} skip={validationSkipped}) ═══"
+              for (idx, txHash, missingLines) in skippedTxDetails.reverse do
+                let txHashHex := bytesToHex txHash
+                h.putStrLn s!"  tx[{idx}] hash={(txHashHex.take 32)}..."
+                for line in missingLines do
+                  h.putStrLn line
+              h.putStrLn ""
             -- Log invalid blocks and save raw bytes for replay
             if validationFail > 0 then
               let h ← IO.FS.Handle.mk "validation_failures.log" .append
@@ -1009,26 +1071,27 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
           let slot := blockPoint.slot.toNat
           -- At epoch boundary, build real stake snapshot from ledger state
           let freshSnapshot ← match ledgerStateRef with
-            | some lsRef => do
-                let ls ← lsRef.get
+            | some lsMutex => do
+                let ls ← lsMutex.atomically (fun ref => ref.get)
                 pure (Cleanode.Consensus.Praos.StakeDistribution.buildSnapshotFromLedger ls)
             | none => do
                 let cs ← csRef.get
                 pure cs.stakeSnapshot
-          csRef.modify fun cs =>
-            let newEpoch := slotToEpoch cs slot
-            let cs := if needsEpochTransition cs slot then
-              processEpochTransition cs newEpoch freshSnapshot
-            else cs
-            -- Update evolving nonce with VRF output from block header
-            if header.era >= 1 then
-              match extractShelleyInfo header.headerBytes with
-              | some info =>
-                match info.vrfResult with
-                | some vrf => updateEvolvingNonce cs vrf.output
-                | none => cs
-              | none => cs
-            else cs
+          let cs ← csRef.get
+          let newEpoch := slotToEpoch cs slot
+          let cs ← if needsEpochTransition cs slot then
+            processEpochTransitionIO cs newEpoch freshSnapshot
+          else pure cs
+          -- Update evolving nonce with VRF output (Blake2b-256, stability window aware)
+          let cs ← if header.era >= 1 then
+            match extractShelleyInfo header.headerBytes with
+            | some info =>
+              match info.vrfResult with
+              | some vrf => updateEvolvingNonceFromBlock cs slot vrf.output
+              | none => pure cs
+            | none => pure cs
+          else pure cs
+          csRef.set cs
           -- Persist consensus state periodically (every 1000 blocks) for restart recovery
           if blockNo % 1000 == 0 then
             let csNow ← csRef.get
@@ -1094,7 +1157,7 @@ partial def pollResponderQueue (q : IO.Ref (List ByteArray)) : IO ByteArray := d
 partial def txSubmResponderLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
     (responderQueue : IO.Ref (List ByteArray))
     (tuiRef : Option (IO.Ref TUIState) := none)
-    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none)
+    (ledgerStateRef : Option (Std.Mutex Cleanode.Ledger.State.LedgerState) := none)
     (ackedSoFar : Nat := 0) (initialized : Bool := false) : IO Unit := do
   if !initialized then
     -- Wait for peer's MsgInit on the responder instance
@@ -1131,12 +1194,12 @@ partial def txSubmResponderLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
           | some (.MsgReplyTxs txBodies) => do
               let now ← Cleanode.TUI.Render.nowMs
               let slot ← match ledgerStateRef with
-                | some r => do let ls ← r.get; pure ls.lastSlot
+                | some r => do let ls ← r.atomically (fun ref => ref.get); pure ls.lastSlot
                 | none => pure 0
               for txBytes in txBodies do
                 let pool ← mempoolRef.get
                 let result ← match ledgerStateRef with
-                  | some lsRef => pool.addTxValidated txBytes now (← lsRef.get) slot
+                  | some lsRef => pool.addTxValidated txBytes now (← lsRef.atomically (fun ref => ref.get)) slot
                   | none => pool.addTxRaw txBytes now
                 match result with
                 | .ok newPool => mempoolRef.set newPool
@@ -1387,7 +1450,7 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
     (txSubmPeerRef : Option (IO.Ref TxSubmPeerState) := none)
     (txSubmResponderQueue : Option (IO.Ref (List ByteArray)) := none)
     (consensusRef : Option (IO.Ref ConsensusState) := none)
-    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none)
+    (ledgerStateRef : Option (Std.Mutex Cleanode.Ledger.State.LedgerState) := none)
     (prevHashRef : Option (IO.Ref ByteArray) := none)
     (blockNoRef : Option (IO.Ref Nat) := none) : IO SyncExit := do
   -- Request next block header
@@ -1608,7 +1671,7 @@ def peerFindTipAndSync (sock : Socket) (addrStr : String) (chainDb : ChainDB)
     (txSubmPeerRef : Option (IO.Ref TxSubmPeerState) := none)
     (txSubmResponderQueue : Option (IO.Ref (List ByteArray)) := none)
     (consensusRef : Option (IO.Ref ConsensusState) := none)
-    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none)
+    (ledgerStateRef : Option (Std.Mutex Cleanode.Ledger.State.LedgerState) := none)
     (prevHashRef : Option (IO.Ref ByteArray) := none)
     (blockNoRef : Option (IO.Ref Nat) := none) : IO SyncExit := do
   -- Check for saved sync state (e.g., from Mithril fast-sync or previous run)
@@ -1669,7 +1732,7 @@ def peerConnectAndSync (host : String) (port : UInt16) (addrStr : String)
     (tuiRef : Option (IO.Ref TUIState) := none)
     (mempoolRef : Option (IO.Ref Mempool) := none)
     (consensusRef : Option (IO.Ref ConsensusState) := none)
-    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none)
+    (ledgerStateRef : Option (Std.Mutex Cleanode.Ledger.State.LedgerState) := none)
     (prevHashRef : Option (IO.Ref ByteArray) := none)
     (blockNoRef : Option (IO.Ref Nat) := none) : IO SyncExit := do
   match ← socket_connect host port with
@@ -1741,7 +1804,7 @@ partial def peerReconnectLoop (host : String) (port : UInt16)
     (tuiRef : Option (IO.Ref TUIState) := none)
     (mempoolRef : Option (IO.Ref Mempool) := none)
     (consensusRef : Option (IO.Ref ConsensusState) := none)
-    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none)
+    (ledgerStateRef : Option (Std.Mutex Cleanode.Ledger.State.LedgerState) := none)
     (prevHashRef : Option (IO.Ref ByteArray) := none)
     (blockNoRef : Option (IO.Ref Nat) := none)
     (attempt : Nat := 0) : IO Unit := do
@@ -1776,7 +1839,7 @@ partial def peerSpawnerLoop (discoveryRef : IO.Ref DiscoveryState)
     (tuiRef : Option (IO.Ref TUIState) := none)
     (mempoolRef : Option (IO.Ref Mempool) := none)
     (consensusRef : Option (IO.Ref ConsensusState) := none)
-    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none)
+    (ledgerStateRef : Option (Std.Mutex Cleanode.Ledger.State.LedgerState) := none)
     (prevHashRef : Option (IO.Ref ByteArray) := none)
     (blockNoRef : Option (IO.Ref Nat) := none)
     (maxPeers : Nat := 20) : IO Unit := do
@@ -1819,7 +1882,7 @@ partial def inboundPeerLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
     (registryRef : IO.Ref PeerRegistry)
     (peerId : String)
     (pendingBlocks : IO.Ref (Array Cleanode.Consensus.Praos.BlockForge.ForgedBlock))
-    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none)
+    (ledgerStateRef : Option (Std.Mutex Cleanode.Ledger.State.LedgerState) := none)
     (ackedSoFar : Nat := 0) : IO Unit := do
   -- Read mux header (8 bytes)
   match ← socket_receive_exact sock 8 with
@@ -1910,12 +1973,12 @@ partial def inboundPeerLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
                 | some (.MsgReplyTxs txBodies) =>
                     let now ← Cleanode.TUI.Render.nowMs
                     let slot ← match ledgerStateRef with
-                      | some r => do let ls ← r.get; pure ls.lastSlot
+                      | some r => do let ls ← r.atomically (fun ref => ref.get); pure ls.lastSlot
                       | none => pure 0
                     for txBytes in txBodies do
                       let pool ← mempoolRef.get
                       let result ← match ledgerStateRef with
-                        | some lsRef => pool.addTxValidated txBytes now (← lsRef.get) slot
+                        | some lsRef => pool.addTxValidated txBytes now (← lsRef.atomically (fun ref => ref.get)) slot
                         | none => pool.addTxRaw txBytes now
                       match result with
                       | .ok newPool => mempoolRef.set newPool
@@ -1939,7 +2002,7 @@ partial def handleInboundPeer (sock : Socket) (mempoolRef : IO.Ref Mempool)
     (tuiRef : Option (IO.Ref TUIState))
     (registryRef : IO.Ref PeerRegistry)
     (network : NetworkMagic := .Mainnet)
-    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none) : IO Unit := do
+    (ledgerStateRef : Option (Std.Mutex Cleanode.Ledger.State.LedgerState) := none) : IO Unit := do
   IO.eprintln "[Inbound] New connection, starting handshake..."
   match ← receiveAndRespondHandshake sock (network := network) with
   | .error e =>
@@ -1963,7 +2026,7 @@ partial def acceptLoop (listenSock : Socket) (mempoolRef : IO.Ref Mempool)
     (tuiRef : Option (IO.Ref TUIState))
     (registryRef : IO.Ref PeerRegistry)
     (network : NetworkMagic := .Mainnet)
-    (ledgerStateRef : Option (IO.Ref Cleanode.Ledger.State.LedgerState) := none) : IO Unit := do
+    (ledgerStateRef : Option (Std.Mutex Cleanode.Ledger.State.LedgerState) := none) : IO Unit := do
   match ← socket_accept listenSock with
   | .error _ =>
       IO.sleep 1000
@@ -1980,6 +2043,7 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
     (metricsPort : Option UInt16 := none)
     (forgeParams : Option Cleanode.Consensus.Praos.BlockForge.ForgeParams := none)
     (socketPath : Option String := none)
+    (epochNonceSeed : Option String := none)
     (chainDb : ChainDB)
     (syncOrigin : Cleanode.TUI.State.SyncOrigin := .genesis)
     (replayedLedgerState : Option Cleanode.Ledger.State.LedgerState := none) : IO Unit := do
@@ -2020,7 +2084,7 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
         reserves := if networkName == "Preprod" then 13181724972929461 else 0
         protocolParams := { Cleanode.Ledger.State.ProtocolParamsState.mainnetDefaults with
           networkId := if networkName == "Preprod" then 0 else 1 } }
-  let ledgerStateRef ← IO.mkRef initialLedgerState
+  let ledgerStateRef ← Std.Mutex.new initialLedgerState
 
   -- Shared consensus state (epoch nonces, stake snapshots, chain selection)
   let genesis : Cleanode.Config.Genesis.ShelleyGenesis := {
@@ -2048,6 +2112,25 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
       pure initialCs
   let consensusRef ← IO.mkRef cs
 
+  -- Apply epoch nonce seed from CLI if provided (--epoch-nonce HEX)
+  if let some hexStr := epochNonceSeed then
+    let hexClean := hexStr.trim
+    if hexClean.length == 64 then
+      let nonceBytes := Cleanode.Network.ChainSync.hexToBytes hexClean
+      consensusRef.modify fun c => { c with epochNonce := nonceBytes }
+      IO.println s!"[consensus] Epoch nonce seeded from CLI: {hexClean.take 16}..."
+    else
+      IO.eprintln s!"[consensus] Warning: --epoch-nonce must be 64 hex chars (got {hexClean.length}), ignoring"
+
+  -- Seed initial stake snapshot from ledger state (don't wait for epoch boundary)
+  let initLs ← ledgerStateRef.atomically (fun ref => ref.get)
+  let initSnap := Cleanode.Consensus.Praos.StakeDistribution.buildSnapshotFromLedger initLs
+  if initSnap.totalStake > 0 then do
+    consensusRef.modify fun c => { c with stakeSnapshot := initSnap }
+    IO.println s!"[consensus] Initial stake snapshot: {initSnap.poolStakes.length} pools, {initSnap.totalStake} lovelace"
+  else
+    IO.println "[consensus] No stake data yet — forge loop will wait for epoch boundary"
+
   -- TUI state (always created — also used by metrics server)
   let now ← Cleanode.TUI.Render.nowMs
   let tuiStateRefInner ← IO.mkRef ({ TUIState.empty networkName now with syncOrigin := syncOrigin })
@@ -2064,7 +2147,7 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
   if tuiMode then
     let _ ← startTUI tuiStateRefInner
   else do
-    IO.println "Dion: a Cardano LEAN 4 Relay Node"
+    IO.println "Dion: a Cardano LEAN 4 Node"
     IO.println "===================================="
     IO.println s!"Network: {networkName}"
     IO.println ""
@@ -2125,7 +2208,6 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
       pure (ByteArray.mk (Array.replicate 32 0), 0)
   let prevHashRef ← IO.mkRef initPrevHash
   let blockNoRef ← IO.mkRef initBlockNo
-
   -- Launch per-peer reconnect loops — each task owns its connection lifecycle
   for (host, port) in peerAddrs do
     let task ← IO.asTask (do
@@ -2210,12 +2292,27 @@ def runNode (config : NodeConfig) : IO Unit := do
       syncOrigin := .mithril syncResult.snapshot.beacon.epoch syncResult.snapshot.beacon.immutableFileNumber syncResult.snapshot.createdAt syncResult.snapshot.digest
 
       -- Try loading UTxO snapshot first (fast path)
+      -- Verify snapshot matches current Mithril tip to avoid stale UTxO state
       let snapshotFile := s!"./data/{networkName.toLower}/utxo-snapshot.dat"
       let loaded ← Cleanode.Ledger.Snapshot.loadSnapshot snapshotFile
+      let mithrilTipSlot := syncResult.tipSlot
       match loaded with
       | some cachedState =>
-        IO.println s!"[snapshot] Using cached UTxO set — skipping replay"
-        replayedLedger := some cachedState
+        if cachedState.lastSlot == mithrilTipSlot then
+          IO.println s!"[snapshot] Using cached UTxO set (slot={cachedState.lastSlot} matches Mithril tip) — skipping replay"
+          replayedLedger := some cachedState
+        else
+          IO.println s!"[snapshot] Stale snapshot (slot={cachedState.lastSlot}, Mithril tip={mithrilTipSlot}) — replaying ImmutableDB..."
+          let initialState := { Cleanode.Ledger.State.LedgerState.initial with
+            treasury := if networkName == "Preprod" then 1766738361646723 else 0
+            reserves := if networkName == "Preprod" then 13181724972929461 else 0
+            protocolParams := { Cleanode.Ledger.State.ProtocolParamsState.mainnetDefaults with
+              networkId := if networkName == "Preprod" then 0 else 1 } }
+          let finalState ← Cleanode.Mithril.Replay.replayImmutableDB syncResult.dbPath initialState
+            Cleanode.Mithril.Replay.defaultReplayReporter 0
+          IO.println s!"[replay] UTxO set reconstructed: {finalState.utxo.size} entries"
+          Cleanode.Ledger.Snapshot.createSnapshot finalState ⟨s!"./data/{networkName.toLower}"⟩
+          replayedLedger := some finalState
       | none =>
         -- No snapshot — replay ImmutableDB to build UTxO set
         IO.println "[replay] No UTxO snapshot found, replaying ImmutableDB..."
@@ -2249,7 +2346,7 @@ def runNode (config : NodeConfig) : IO Unit := do
       spoForgeParams := some fp
 
   -- Run as multi-peer relay node (with optional block production)
-  relayNode proposal networkName config.tui config.port config.metricsPort spoForgeParams config.socketPath chainDb syncOrigin replayedLedger
+  relayNode proposal networkName config.tui config.port config.metricsPort spoForgeParams config.socketPath config.epochNonce chainDb syncOrigin replayedLedger
 
 /-- Handle query subcommands (reads status file from a running node) -/
 def runQuery (target : QueryTarget) : IO Unit := do
@@ -2369,10 +2466,10 @@ def runReplay (paths : List String) : IO Unit := do
           for (ci, cert) in (List.range tx.body.certificates.length).zip tx.body.certificates do
             if certRedeemerIdx.contains ci then
               let h := match cert with
-                | .stakeKeyDeregistration h | .stakeDelegation h _
-                | .conwayRegistration h _ | .conwayDeregistration h _
-                | .stakeRegDelegation h _ _ | .voteRegDelegation h _ _
-                | .stakeVoteRegDelegation h _ _ _ | .stakeKeyRegistration h => some h
+                | .stakeKeyDeregistration _ h | .stakeDelegation _ h _
+                | .conwayRegistration _ h _ | .conwayDeregistration _ h _
+                | .stakeRegDelegation _ h _ _ | .voteRegDelegation _ h _ _
+                | .stakeVoteRegDelegation _ h _ _ _ | .stakeKeyRegistration _ h => some h
                 | _ => none
               match h with | some h => neededHashes := h :: neededHashes | none => pure ()
           let mut scriptOk := true

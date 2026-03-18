@@ -178,6 +178,8 @@ structure ProtocolParamsState where
   a0Num  : Nat := 3       -- Pledge influence a₀ numerator     (default 0.3  = 3/10)
   a0Den  : Nat := 10      -- Pledge influence a₀ denominator
   desiredPools : Nat := 500  -- Optimal pool count k (nOpt)
+  -- Bootstrap phase: true during initial Conway period before first governance action
+  bootstrapPhase : Bool := false
   deriving Repr
 
 /-- Default mainnet protocol parameters -/

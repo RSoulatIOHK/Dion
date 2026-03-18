@@ -325,17 +325,18 @@ def renderStatusBar (state : TUIState) (width : Nat) : List String :=
 -- = Block Detail Panel   =
 -- ========================
 
-/-- The 25 ledger validation checks, in order -/
+/-- The 30 ledger validation checks, in order -/
 private def validationCheckNames : List String :=
-  [ "Tx size limit", "Validity interval (TTL)", "Input existence (UTxO)",
-    "Double-spend", "Balance (inputs >= outputs + fee)", "Min UTxO per output",
-    "Withdrawal amounts", "Fee >= minimum", "Ed25519 signatures",
-    "Native scripts", "Plutus scripts", "Collateral", "Script data hash",
-    -- New checks (#374–#410)
-    "Non-empty inputs", "Output value size", "Network ID",
-    "Collateral ADA-only", "Max collateral inputs", "Total collateral",
-    "Ref input disjointness", "Metadata hash", "ExUnits budget",
-    "Extra redeemers", "Plutus datum presence", "Validation tag" ]
+  [ "Tx size", "Validity interval", "Input existence",
+    "Double-spend", "Balance", "Min UTxO",
+    "Withdrawals", "Min fee", "Ed25519 sigs",
+    "Native scripts", "Plutus scripts", "Collateral", "ScriptDataHash",
+    "Non-empty inputs", "Output size", "Network ID",
+    "Collateral ADA-only", "Max collateral ins", "Total collateral",
+    "Ref/input disjoint", "Metadata hash", "ExUnits budget",
+    "Redeemers", "Datum presence", "Validation tag",
+    "Script witnesses", "Cert deposits", "Pool params",
+    "Delegatee reg", "Block-level" ]
 
 /-- Classify which check an error string belongs to (by prefix match) -/
 private def errorToCheckIdx (err : String) : Option Nat :=
@@ -362,9 +363,16 @@ private def errorToCheckIdx (err : String) : Option Nat :=
   else if err.startsWith "NonDisjointRefInputs" then some 19
   else if err.startsWith "MetadataHashMismatch" then some 20
   else if err.startsWith "ExUnitsTooBig" then some 21
-  else if err.startsWith "ExtraRedeemer" then some 22
-  else if err.startsWith "UnspendableUTxONoDatum" then some 23
+  else if err.startsWith "ExtraRedeemer" || err.startsWith "MissingRedeemer" then some 22
+  else if err.startsWith "UnspendableUTxONoDatum" || err.startsWith "MissingRequiredDatum" then some 23
   else if err.startsWith "ValidationTagMismatch" then some 24
+  else if err.startsWith "ExtraneousScriptWitness" || err.startsWith "MissingRequiredScript" then some 25
+  else if err.startsWith "CertDepositMismatch" || err.startsWith "StakeDeregNonZeroReward" then some 26
+  else if err.startsWith "PoolCostTooLow" then some 27
+  else if err.startsWith "DelegateeNotRegistered" then some 28
+  else if err.startsWith "WrongBlockBodySize" || err.startsWith "TooManyBlockExUnits"
+       || err.startsWith "RefScriptsSizeTooBig" || err.startsWith "HeaderProtVerTooHigh" then some 29
+  else if err.startsWith "Phase2CollateralInsufficient" then some 11
   else none
 
 /-- Render full-width block detail with validation checklist -/
@@ -407,10 +415,10 @@ def renderBlockDetailFull (block : BlockSummary) (width : Nat) (height : Nat) : 
       else
         s!"{Ansi.dim}  {block.skippedTxs} tx(s) skipped — UTxO inputs unknown during sync{Ansi.reset}"
     else if block.validTxs > 0 then
-      s!"{Ansi.brightGreen}  All {block.validTxs} transactions passed all 25 validation rules{Ansi.reset}"
+      s!"{Ansi.brightGreen}  All {block.validTxs} transactions passed all 30 validation rules{Ansi.reset}"
     else
       s!"{Ansi.dim}  (not validated){Ansi.reset}"
-  -- Build the checklist: 2-column layout for 25 checks
+  -- Build the checklist: 2-column layout for 30 checks
   -- Collect which checks failed (from error strings)
   let failedChecks : List Nat := block.validationErrors.filterMap errorToCheckIdx
   let checklistTitle := s!"{Ansi.brightCyan}{Ansi.bold}  VALIDATION CHECKLIST{Ansi.reset}"
@@ -457,7 +465,7 @@ def renderBlockDetailFull (block : BlockSummary) (width : Nat) (height : Nat) : 
 -- = Block Info Side Panel      =
 -- ==============================
 
-/-- Render selected block info in the right side panel (full height with 25 checks) -/
+/-- Render selected block info in the right side panel (full height with 30 checks) -/
 def renderBlockInfoPanel (block : BlockSummary) (width : Nat) (height : Nat) : List String :=
   let title := s!"{Ansi.brightCyan}{Ansi.bold}  BLOCK #{formatNum block.blockNo}{Ansi.reset}{Ansi.dim}  [Esc]{Ansi.reset}"
   let divider := s!"{Ansi.dim}  {hline '─' (width - 6)}{Ansi.reset}"
@@ -481,19 +489,12 @@ def renderBlockInfoPanel (block : BlockSummary) (width : Nat) (height : Nat) : L
     [s!"  {vrfSym} VRF  {kesSym} KES  {opcSym} OpCert"]
   else
     [s!"{Ansi.dim}  . Header not validated{Ansi.reset}"]
-  -- 25-check validation checklist
-  let checkNames := [ "Tx size", "Validity interval", "Input existence",
-    "Double-spend", "Balance check", "Min UTxO",
-    "Withdrawals", "Fee >= minimum", "Ed25519 sigs",
-    "Native scripts", "Plutus scripts", "Collateral", "Script data hash",
-    "Non-empty inputs", "Output value size", "Network ID",
-    "Collateral ADA-only", "Max collateral", "Total collateral",
-    "Ref input disjoint", "Metadata hash", "ExUnits budget",
-    "Extra redeemers", "Plutus datum", "Validation tag" ]
+  -- 30-check validation checklist (shared with full detail view)
+  let checkNames := validationCheckNames
   let failedChecks : List Nat := block.validationErrors.filterMap errorToCheckIdx
   let checklistTitle := s!"{Ansi.brightCyan}{Ansi.bold}  CHECKS{Ansi.reset}"
   let checklistDiv := s!"{Ansi.dim}  {hline '─' (width - 6)}{Ansi.reset}"
-  -- 2-column check layout: 13 rows × 2 = 26 slots for 25 checks
+  -- 2-column check layout: 15 rows × 2 = 30 slots for 30 checks
   -- Pad left-column names to fixed visual width so right column aligns
   let leftPadWidth := 17  -- len("Validity interval") = 17, longest left name
   let mkCell (i : Nat) (padTo : Nat) : String :=

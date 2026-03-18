@@ -6,3 +6,8 @@ native/sqlite3.c
 native/sqlite3.h
 /PlutusCore/
 /test_except.lean
+/failed_blocks/
+*.log
+*.log.bak
+tx.raw
+tx.signed

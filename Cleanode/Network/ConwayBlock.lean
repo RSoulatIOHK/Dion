@@ -138,40 +138,40 @@ instance : Repr WitnessSet where
     Kept lightweight to avoid circular dependencies with Ledger.Certificate.
     Convert to `Cleanode.Ledger.Certificate.Certificate` at the call site. -/
 inductive RawCertificate where
-  | stakeKeyRegistration (keyHash : ByteArray)
-  | stakeKeyDeregistration (keyHash : ByteArray)
-  | stakeDelegation (keyHash : ByteArray) (poolId : ByteArray)
+  | stakeKeyRegistration (credIsScript : Bool) (credHash : ByteArray)
+  | stakeKeyDeregistration (credIsScript : Bool) (credHash : ByteArray)
+  | stakeDelegation (credIsScript : Bool) (credHash : ByteArray) (poolId : ByteArray)
   | poolRegistration (poolId : ByteArray) (vrfKeyHash : ByteArray)
       (pledge cost margin : Nat) (rewardAccount : ByteArray)
       (owners : List ByteArray)
   | poolRetirement (poolId : ByteArray) (epoch : Nat)
-  | conwayRegistration (keyHash : ByteArray) (deposit : Nat)  -- type 7
-  | conwayDeregistration (keyHash : ByteArray) (refund : Nat)  -- type 8
-  | voteDelegation (keyHash : ByteArray) (drepCred : ByteArray)  -- type 9
-  | stakeVoteDelegation (keyHash : ByteArray) (poolId : ByteArray) (drepCred : ByteArray)  -- type 10
-  | stakeRegDelegation (keyHash : ByteArray) (poolId : ByteArray) (deposit : Nat)  -- type 11
-  | voteRegDelegation (keyHash : ByteArray) (drepCred : ByteArray) (deposit : Nat)  -- type 12
-  | stakeVoteRegDelegation (keyHash : ByteArray) (poolId : ByteArray) (drepCred : ByteArray) (deposit : Nat)  -- type 13
-  | authCommitteeHot (coldCredHash : ByteArray) (hotCredHash : ByteArray)  -- type 14
-  | resignCommitteeCold (coldCredHash : ByteArray)  -- type 15
+  | conwayRegistration (credIsScript : Bool) (credHash : ByteArray) (deposit : Nat)  -- type 7
+  | conwayDeregistration (credIsScript : Bool) (credHash : ByteArray) (refund : Nat)  -- type 8
+  | voteDelegation (credIsScript : Bool) (credHash : ByteArray) (drepCred : ByteArray)  -- type 9
+  | stakeVoteDelegation (credIsScript : Bool) (credHash : ByteArray) (poolId : ByteArray) (drepCred : ByteArray)  -- type 10
+  | stakeRegDelegation (credIsScript : Bool) (credHash : ByteArray) (poolId : ByteArray) (deposit : Nat)  -- type 11
+  | voteRegDelegation (credIsScript : Bool) (credHash : ByteArray) (drepCred : ByteArray) (deposit : Nat)  -- type 12
+  | stakeVoteRegDelegation (credIsScript : Bool) (credHash : ByteArray) (poolId : ByteArray) (drepCred : ByteArray) (deposit : Nat)  -- type 13
+  | authCommitteeHot (coldIsScript : Bool) (coldCredHash : ByteArray) (hotCredHash : ByteArray)  -- type 14
+  | resignCommitteeCold (coldIsScript : Bool) (coldCredHash : ByteArray)  -- type 15
   | unknown (certType : Nat)
 
 instance : Repr RawCertificate where
   reprPrec
-    | .stakeKeyRegistration _, _ => "StakeKeyReg"
-    | .stakeKeyDeregistration _, _ => "StakeKeyDereg"
-    | .stakeDelegation _ _, _ => "StakeDelegation"
+    | .stakeKeyRegistration _ _, _ => "StakeKeyReg"
+    | .stakeKeyDeregistration _ _, _ => "StakeKeyDereg"
+    | .stakeDelegation _ _ _, _ => "StakeDelegation"
     | .poolRegistration _ _ _ _ _ _ _, _ => "PoolRegistration"
     | .poolRetirement _ e, _ => s!"PoolRetirement(epoch={e})"
-    | .conwayRegistration _ d, _ => s!"ConwayRegistration(deposit={d})"
-    | .conwayDeregistration _ r, _ => s!"ConwayDeregistration(refund={r})"
-    | .voteDelegation _ _, _ => "VoteDelegation"
-    | .stakeVoteDelegation _ _ _, _ => "StakeVoteDelegation"
-    | .stakeRegDelegation _ _ d, _ => s!"StakeRegDelegation(deposit={d})"
-    | .voteRegDelegation _ _ d, _ => s!"VoteRegDelegation(deposit={d})"
-    | .stakeVoteRegDelegation _ _ _ d, _ => s!"StakeVoteRegDelegation(deposit={d})"
-    | .authCommitteeHot _ _, _ => "AuthCommitteeHot"
-    | .resignCommitteeCold _, _ => "ResignCommitteeCold"
+    | .conwayRegistration _ _ d, _ => s!"ConwayRegistration(deposit={d})"
+    | .conwayDeregistration _ _ r, _ => s!"ConwayDeregistration(refund={r})"
+    | .voteDelegation _ _ _, _ => "VoteDelegation"
+    | .stakeVoteDelegation _ _ _ _, _ => "StakeVoteDelegation"
+    | .stakeRegDelegation _ _ _ d, _ => s!"StakeRegDelegation(deposit={d})"
+    | .voteRegDelegation _ _ _ d, _ => s!"VoteRegDelegation(deposit={d})"
+    | .stakeVoteRegDelegation _ _ _ _ d, _ => s!"StakeVoteRegDelegation(deposit={d})"
+    | .authCommitteeHot _ _ _, _ => "AuthCommitteeHot"
+    | .resignCommitteeCold _ _, _ => "ResignCommitteeCold"
     | .unknown t, _ => s!"UnknownCert({t})"
 
 structure TransactionBody where
@@ -184,16 +184,16 @@ structure TransactionBody where
   auxiliaryDataHash : Option ByteArray := none      -- Key 7
   validityIntervalStart : Option Nat := none        -- Key 8: lower slot bound
   mint : List NativeAsset := []                     -- Key 9: minting/burning
-  scriptDataHash : Option ByteArray := none         -- Key 10
-  collateralInputs : List TxInput := []             -- Key 11
-  requiredSigners : List ByteArray := []            -- Key 13
-  collateralReturn : Option TxOutput := none        -- Key 15
-  totalCollateral : Option Nat := none              -- Key 16
-  referenceInputs : List TxInput := []              -- Key 17
-  votingProcedures : Option ByteArray := none       -- Key 18 (raw CBOR)
-  proposalProcedures : Option ByteArray := none     -- Key 19 (raw CBOR)
-  currentTreasuryValue : Option Nat := none         -- Key 20
-  donation : Option Nat := none                     -- Key 21
+  scriptDataHash : Option ByteArray := none         -- Key 11
+  collateralInputs : List TxInput := []             -- Key 13
+  requiredSigners : List ByteArray := []            -- Key 14
+  collateralReturn : Option TxOutput := none        -- Key 16
+  totalCollateral : Option Nat := none              -- Key 17
+  referenceInputs : List TxInput := []              -- Key 18
+  votingProcedures : Option ByteArray := none       -- Key 19 (raw CBOR)
+  proposalProcedures : Option ByteArray := none     -- Key 20 (raw CBOR)
+  currentTreasuryValue : Option Nat := none         -- Key 21
+  donation : Option Nat := none                     -- Key 22
   rawBytes : ByteArray  -- Raw CBOR bytes for computing TxId
 
 instance : Repr TransactionBody where
@@ -663,20 +663,20 @@ partial def parseCertificateC (c : Cursor) : Option (CResult RawCertificate) := 
   | 0 => do  -- stake_registration: [0, stake_credential]
       -- stake_credential = [0, key_hash] or [1, script_hash]
       let credR ← CborCursor.decodeArrayHeader cur
-      let _credType ← CborCursor.decodeUInt credR.cursor
-      let hashR ← CborCursor.decodeBytes _credType.cursor
-      some { value := .stakeKeyRegistration hashR.value, cursor := hashR.cursor }
+      let credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes credType.cursor
+      some { value := .stakeKeyRegistration (credType.value == 1) hashR.value, cursor := hashR.cursor }
   | 1 => do  -- stake_deregistration: [1, stake_credential]
       let credR ← CborCursor.decodeArrayHeader cur
-      let _credType ← CborCursor.decodeUInt credR.cursor
-      let hashR ← CborCursor.decodeBytes _credType.cursor
-      some { value := .stakeKeyDeregistration hashR.value, cursor := hashR.cursor }
+      let credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes credType.cursor
+      some { value := .stakeKeyDeregistration (credType.value == 1) hashR.value, cursor := hashR.cursor }
   | 2 => do  -- stake_delegation: [2, stake_credential, pool_keyhash]
       let credR ← CborCursor.decodeArrayHeader cur
-      let _credType ← CborCursor.decodeUInt credR.cursor
-      let hashR ← CborCursor.decodeBytes _credType.cursor
+      let credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes credType.cursor
       let poolR ← CborCursor.decodeBytes hashR.cursor
-      some { value := .stakeDelegation hashR.value poolR.value, cursor := poolR.cursor }
+      some { value := .stakeDelegation (credType.value == 1) hashR.value poolR.value, cursor := poolR.cursor }
   | 3 => do  -- pool_registration: [3, pool_params...]
       -- pool_params: operator(bytes), vrf_keyhash(bytes), pledge(uint), cost(uint),
       --   margin(tag30 rational), reward_account(bytes), pool_owners(set), relays, metadata
@@ -708,51 +708,51 @@ partial def parseCertificateC (c : Cursor) : Option (CResult RawCertificate) := 
       some { value := .poolRetirement poolR.value epochR.value, cursor := epochR.cursor }
   | 7 => do  -- conwayRegistration: [7, stake_credential, coin]
       let credR ← CborCursor.decodeArrayHeader cur
-      let _credType ← CborCursor.decodeUInt credR.cursor
-      let hashR ← CborCursor.decodeBytes _credType.cursor
+      let credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes credType.cursor
       let depositR ← CborCursor.decodeUInt hashR.cursor
-      some { value := .conwayRegistration hashR.value depositR.value, cursor := depositR.cursor }
+      some { value := .conwayRegistration (credType.value == 1) hashR.value depositR.value, cursor := depositR.cursor }
   | 8 => do  -- conwayDeregistration: [8, stake_credential, coin]
       let credR ← CborCursor.decodeArrayHeader cur
-      let _credType ← CborCursor.decodeUInt credR.cursor
-      let hashR ← CborCursor.decodeBytes _credType.cursor
+      let credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes credType.cursor
       let refundR ← CborCursor.decodeUInt hashR.cursor
-      some { value := .conwayDeregistration hashR.value refundR.value, cursor := refundR.cursor }
+      some { value := .conwayDeregistration (credType.value == 1) hashR.value refundR.value, cursor := refundR.cursor }
   | 9 => do  -- voteDelegation: [9, stake_credential, drep_credential]
       let credR ← CborCursor.decodeArrayHeader cur
-      let _credType ← CborCursor.decodeUInt credR.cursor
-      let hashR ← CborCursor.decodeBytes _credType.cursor
+      let credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes credType.cursor
       let drepR ← CborCursor.decodeArrayHeader hashR.cursor
       let drepType ← CborCursor.decodeUInt drepR.cursor
       -- DRep can be [0, keyhash], [1, scripthash], [2], [3]
       if drepR.value >= 2 then
         let drepHashR ← CborCursor.decodeBytes drepType.cursor
-        some { value := .voteDelegation hashR.value drepHashR.value, cursor := drepHashR.cursor }
+        some { value := .voteDelegation (credType.value == 1) hashR.value drepHashR.value, cursor := drepHashR.cursor }
       else
-        some { value := .voteDelegation hashR.value ByteArray.empty, cursor := drepType.cursor }
+        some { value := .voteDelegation (credType.value == 1) hashR.value ByteArray.empty, cursor := drepType.cursor }
   | 10 => do  -- stakeVoteDelegation: [10, stake_credential, pool_keyhash, drep_credential]
       let credR ← CborCursor.decodeArrayHeader cur
-      let _credType ← CborCursor.decodeUInt credR.cursor
-      let hashR ← CborCursor.decodeBytes _credType.cursor
+      let credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes credType.cursor
       let poolR ← CborCursor.decodeBytes hashR.cursor
       let drepR ← CborCursor.decodeArrayHeader poolR.cursor
       let drepType ← CborCursor.decodeUInt drepR.cursor
       if drepR.value >= 2 then
         let drepHashR ← CborCursor.decodeBytes drepType.cursor
-        some { value := .stakeVoteDelegation hashR.value poolR.value drepHashR.value, cursor := drepHashR.cursor }
+        some { value := .stakeVoteDelegation (credType.value == 1) hashR.value poolR.value drepHashR.value, cursor := drepHashR.cursor }
       else
-        some { value := .stakeVoteDelegation hashR.value poolR.value ByteArray.empty, cursor := drepType.cursor }
+        some { value := .stakeVoteDelegation (credType.value == 1) hashR.value poolR.value ByteArray.empty, cursor := drepType.cursor }
   | 11 => do  -- stakeRegDelegation: [11, stake_credential, pool_keyhash, coin]
       let credR ← CborCursor.decodeArrayHeader cur
-      let _credType ← CborCursor.decodeUInt credR.cursor
-      let hashR ← CborCursor.decodeBytes _credType.cursor
+      let credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes credType.cursor
       let poolR ← CborCursor.decodeBytes hashR.cursor
       let depositR ← CborCursor.decodeUInt poolR.cursor
-      some { value := .stakeRegDelegation hashR.value poolR.value depositR.value, cursor := depositR.cursor }
+      some { value := .stakeRegDelegation (credType.value == 1) hashR.value poolR.value depositR.value, cursor := depositR.cursor }
   | 12 => do  -- voteRegDelegation: [12, stake_credential, drep_credential, coin]
       let credR ← CborCursor.decodeArrayHeader cur
-      let _credType ← CborCursor.decodeUInt credR.cursor
-      let hashR ← CborCursor.decodeBytes _credType.cursor
+      let credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes credType.cursor
       let drepR ← CborCursor.decodeArrayHeader hashR.cursor
       let drepType ← CborCursor.decodeUInt drepR.cursor
       let afterDrep ← if drepR.value >= 2 then
@@ -761,11 +761,11 @@ partial def parseCertificateC (c : Cursor) : Option (CResult RawCertificate) := 
       else
         some (ByteArray.empty, drepType.cursor)
       let depositR ← CborCursor.decodeUInt afterDrep.2
-      some { value := .voteRegDelegation hashR.value afterDrep.1 depositR.value, cursor := depositR.cursor }
+      some { value := .voteRegDelegation (credType.value == 1) hashR.value afterDrep.1 depositR.value, cursor := depositR.cursor }
   | 13 => do  -- stakeVoteRegDelegation: [13, stake_credential, pool_keyhash, drep_credential, coin]
       let credR ← CborCursor.decodeArrayHeader cur
-      let _credType ← CborCursor.decodeUInt credR.cursor
-      let hashR ← CborCursor.decodeBytes _credType.cursor
+      let credType ← CborCursor.decodeUInt credR.cursor
+      let hashR ← CborCursor.decodeBytes credType.cursor
       let poolR ← CborCursor.decodeBytes hashR.cursor
       let drepR ← CborCursor.decodeArrayHeader poolR.cursor
       let drepType ← CborCursor.decodeUInt drepR.cursor
@@ -775,20 +775,20 @@ partial def parseCertificateC (c : Cursor) : Option (CResult RawCertificate) := 
       else
         some (ByteArray.empty, drepType.cursor)
       let depositR ← CborCursor.decodeUInt afterDrep.2
-      some { value := .stakeVoteRegDelegation hashR.value poolR.value afterDrep.1 depositR.value, cursor := depositR.cursor }
+      some { value := .stakeVoteRegDelegation (credType.value == 1) hashR.value poolR.value afterDrep.1 depositR.value, cursor := depositR.cursor }
   | 14 => do  -- authCommitteeHot: [14, cold_credential, hot_credential]
       let coldR ← CborCursor.decodeArrayHeader cur
-      let _coldType ← CborCursor.decodeUInt coldR.cursor
-      let coldHashR ← CborCursor.decodeBytes _coldType.cursor
+      let coldType ← CborCursor.decodeUInt coldR.cursor
+      let coldHashR ← CborCursor.decodeBytes coldType.cursor
       let hotR ← CborCursor.decodeArrayHeader coldHashR.cursor
       let _hotType ← CborCursor.decodeUInt hotR.cursor
       let hotHashR ← CborCursor.decodeBytes _hotType.cursor
-      some { value := .authCommitteeHot coldHashR.value hotHashR.value, cursor := hotHashR.cursor }
+      some { value := .authCommitteeHot (coldType.value == 1) coldHashR.value hotHashR.value, cursor := hotHashR.cursor }
   | 15 => do  -- resignCommitteeCold: [15, cold_credential]
       let coldR ← CborCursor.decodeArrayHeader cur
-      let _coldType ← CborCursor.decodeUInt coldR.cursor
-      let coldHashR ← CborCursor.decodeBytes _coldType.cursor
-      some { value := .resignCommitteeCold coldHashR.value, cursor := coldHashR.cursor }
+      let coldType ← CborCursor.decodeUInt coldR.cursor
+      let coldHashR ← CborCursor.decodeBytes coldType.cursor
+      some { value := .resignCommitteeCold (coldType.value == 1) coldHashR.value, cursor := coldHashR.cursor }
   | _ => do  -- unknown cert types — skip remaining fields
       for _ in [1:arrLen] do
         match skipValue cur with
@@ -859,7 +859,14 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
                 for _ in [0:arrResult.value] do
                   if cur.remaining ≥ 1 && cur.peek.toNat == 0xFF then cur := cur.advance 1; break
                   match parseTxOutputC cur with
-                  | none => break
+                  | none =>
+                      -- Output failed to parse: skip the CBOR value but add a placeholder
+                      -- to keep output indices aligned (UTxO IDs depend on index position)
+                      match skipValue cur with
+                      | some after =>
+                          outputs := { address := ByteArray.empty, amount := 0, datum := none, inlineDatum := none, scriptRef := none, nativeAssets := [] } :: outputs
+                          cur := after
+                      | none => break
                   | some outputResult => do
                       outputs := outputResult.value :: outputs
                       cur := outputResult.cursor
@@ -964,7 +971,7 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
                                         | none => (0, 0, nameR.cursor)
                                 mint := { policyId := policyR.value, assetName := nameR.value, amount, signedAmount := signedAmt } :: mint
                                 cur := afterAmt
-        | 10 => do  -- Script data hash
+        | 11 => do  -- Script data hash (CDDL key 11)
             match CborCursor.decodeBytes cur with
             | none => match skipValue cur with
                 | some after => cur := after
@@ -972,7 +979,7 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
             | some hashR => do
                 scriptDataHash := some hashR.value
                 cur := hashR.cursor
-        | 11 => do  -- Collateral inputs (may be wrapped in tag 258)
+        | 13 => do  -- Collateral inputs (CDDL key 13, may be wrapped in tag 258)
             let afterTag := match CborCursor.skipTag cur with
               | some tagResult => tagResult.cursor
               | none => cur
@@ -988,7 +995,7 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
                   | some inputResult => do
                       collateralInputs := inputResult.value :: collateralInputs
                       cur := inputResult.cursor
-        | 13 => do  -- Required signers (may be wrapped in tag 258)
+        | 14 => do  -- Required signers (CDDL key 14, may be wrapped in tag 258)
             let afterTag := match CborCursor.skipTag cur with
               | some tagResult => tagResult.cursor
               | none => cur
@@ -1004,7 +1011,7 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
                   | some hashR => do
                       requiredSigners := hashR.value :: requiredSigners
                       cur := hashR.cursor
-        | 15 => do  -- Collateral return output
+        | 16 => do  -- Collateral return output (CDDL key 16)
             match parseTxOutputC cur with
             | none => match skipValue cur with
                 | some after => cur := after
@@ -1012,7 +1019,7 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
             | some outResult => do
                 collateralReturn := some outResult.value
                 cur := outResult.cursor
-        | 16 => do  -- Total collateral
+        | 17 => do  -- Total collateral (CDDL key 17)
             match CborCursor.decodeUInt cur with
             | none => match skipValue cur with
                 | some after => cur := after
@@ -1020,7 +1027,7 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
             | some colR => do
                 totalCollateral := some colR.value
                 cur := colR.cursor
-        | 17 => do  -- Reference inputs (may be wrapped in tag 258)
+        | 18 => do  -- Reference inputs (CDDL key 18, may be wrapped in tag 258)
             let afterTag := match CborCursor.skipTag cur with
               | some tagResult => tagResult.cursor
               | none => cur
@@ -1036,21 +1043,21 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
                   | some inputResult => do
                       referenceInputs := inputResult.value :: referenceInputs
                       cur := inputResult.cursor
-        | 18 => do  -- Voting procedures (store raw CBOR)
+        | 19 => do  -- Voting procedures (CDDL key 19, store raw CBOR)
             let start := cur
             match skipValue cur with
             | none => break
             | some after => do
                 votingProcs := some (extractBetween start after)
                 cur := after
-        | 19 => do  -- Proposal procedures (store raw CBOR)
+        | 20 => do  -- Proposal procedures (CDDL key 20, store raw CBOR)
             let start := cur
             match skipValue cur with
             | none => break
             | some after => do
                 proposalProcs := some (extractBetween start after)
                 cur := after
-        | 20 => do  -- Current treasury value
+        | 21 => do  -- Current treasury value (CDDL key 21)
             match CborCursor.decodeUInt cur with
             | none => match skipValue cur with
                 | some after => cur := after
@@ -1058,7 +1065,7 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
             | some tR => do
                 treasuryVal := some tR.value
                 cur := tR.cursor
-        | 21 => do  -- Donation
+        | 22 => do  -- Donation (CDDL key 22)
             match CborCursor.decodeUInt cur with
             | none => match skipValue cur with
                 | some after => cur := after
@@ -1132,7 +1139,12 @@ partial def parseTransactionBodyArrayC (c : Cursor) : Option (CResult Transactio
 
           for _ in [0:outputsResult.value] do
             match parseTxOutputC cur with
-            | none => break
+            | none =>
+                match skipValue cur with
+                | some after =>
+                    outputs := { address := ByteArray.empty, amount := 0, datum := none, inlineDatum := none, scriptRef := none, nativeAssets := [] } :: outputs
+                    cur := after
+                | none => break
             | some outputResult => do
                 outputs := outputResult.value :: outputs
                 cur := outputResult.cursor

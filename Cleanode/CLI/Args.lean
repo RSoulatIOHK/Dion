@@ -66,12 +66,14 @@ structure NodeConfig where
   metricsPort : Option UInt16 := none
   spoKeyDir : Option String := none   -- Path to SPO key directory for block production
   socketPath : Option String := none  -- Unix socket path for cardano-cli (N2C)
+  epochNonce : Option String := none  -- 64-hex epoch nonce seed (from cardano-cli query protocol-state)
   deriving Repr
 
 /-- Top-level CLI command -/
 inductive Command where
   | run (config : NodeConfig)
   | query (target : QueryTarget)
+  | replay (paths : List String)   -- Replay saved block CBOR files for validation debugging
   | help
   | version
 
@@ -108,6 +110,8 @@ private def parseRunFlags (args : List String) (config : NodeConfig) : NodeConfi
     parseRunFlags rest { config with spoKeyDir := some dir }
   | "--socket-path" :: path :: rest =>
     parseRunFlags rest { config with socketPath := some path }
+  | "--epoch-nonce" :: hex :: rest =>
+    parseRunFlags rest { config with epochNonce := some hex }
   | _ :: rest => parseRunFlags rest config
 
 /-- Parse CLI arguments into a Command -/
@@ -123,6 +127,7 @@ def parseArgs (args : List String) : Command :=
   | "query" :: "peers" :: _ => .query .peers
   | "query" :: "mempool" :: _ => .query .mempool
   | "query" :: _ => .help  -- unknown query target
+  | "replay" :: files => .replay files
   | _ =>
     -- Backward compatibility: treat flags without "run" subcommand as run
     .run (parseRunFlags args {})
@@ -150,6 +155,7 @@ def printUsage : IO Unit := do
   IO.println "  --metrics-port <n> Enable Prometheus metrics on given port"
   IO.println "  --spo-keys <dir>   Path to SPO key directory for block production"
   IO.println "  --socket-path <p>  Unix socket path for cardano-cli (default: ./cleanode.socket)"
+  IO.println "  --epoch-nonce <h>  Seed epoch nonce (64 hex chars) from cardano-cli query protocol-state"
   IO.println ""
   IO.println "QUERY TARGETS:"
   IO.println "  tip                Show current chain tip"

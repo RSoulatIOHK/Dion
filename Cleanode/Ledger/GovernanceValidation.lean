@@ -197,9 +197,12 @@ def validateCommitteeOperational (state : LedgerState)
 -- = #409: Bootstrap  =
 -- ====================
 
-/-- Check if we're in the bootstrap phase (initial period after Conway HF) -/
-def isBootstrapPhase (_state : LedgerState) : Bool :=
-  false  -- TODO: detect from protocol state; bootstrap ended on mainnet
+/-- Check if we're in the bootstrap phase (initial period after Conway HF).
+    Bootstrap phase is tracked via the protocol params flag, set from genesis
+    and cleared when the first governance action (NewConstitution or
+    UpdateCommittee) is ratified. -/
+def isBootstrapPhase (state : LedgerState) : Bool :=
+  state.protocolParams.bootstrapPhase
 
 /-- Validate governance action is allowed (not during bootstrap) -/
 def validateNotBootstrap (state : LedgerState) (actionType : GovActionType)

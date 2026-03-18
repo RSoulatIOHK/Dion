@@ -62,7 +62,7 @@ instance : Repr Tip where
 structure Header where
   era : Nat  -- Era tag: 0=Byron, 1=Shelley, 2=Allegra, 3=Mary, 4=Alonzo, 5=Babbage, 6=Conway
   headerBytes : ByteArray  -- Raw CBOR bytes of the actual header (era-specific)
-  -- TODO: Parse era-specific header formats
+  -- Era-specific header parsing is done in ConwayBlock.lean (parseBlockHeader)
 
 instance : Repr Header where
   reprPrec h _ := s!"Header(era={h.era}, bytes={h.headerBytes.size}B)"

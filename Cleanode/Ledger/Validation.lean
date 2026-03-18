@@ -144,8 +144,14 @@ instance : Repr ValidationError where
     | .TooManyCollateralInputs c m, _ => s!"TooManyCollateralInputs(count={c}, max={m})"
     | .IncorrectTotalCollateral d a, _ => s!"IncorrectTotalCollateral(declared={d}, actual={a})"
     | .NonDisjointRefInputs _ idx, _ => s!"NonDisjointRefInputs(idx={idx})"
-    | .ExtraneousScriptWitness _, _ => "ExtraneousScriptWitness"
-    | .MissingRequiredScript _, _ => "MissingRequiredScript"
+    | .ExtraneousScriptWitness sh, _ =>
+      let hd (n : Nat) : Char := if n < 10 then Char.ofNat (n + 48) else Char.ofNat (n + 87)
+      let hex := sh.foldl (fun s b => s ++ String.singleton (hd (b.toNat / 16)) ++ String.singleton (hd (b.toNat % 16))) ""
+      s!"ExtraneousScriptWitness({hex})"
+    | .MissingRequiredScript sh, _ =>
+      let hd (n : Nat) : Char := if n < 10 then Char.ofNat (n + 48) else Char.ofNat (n + 87)
+      let hex := sh.foldl (fun s b => s ++ String.singleton (hd (b.toNat / 16)) ++ String.singleton (hd (b.toNat % 16))) ""
+      s!"MissingRequiredScript({hex})"
     | .MetadataHashMismatch d, _ => s!"MetadataHashMismatch({d})"
     | .ValidationTagMismatch d a, _ => s!"ValidationTagMismatch(declared={d}, actual={a})"
     | .ExtraRedeemer t i, _ => s!"ExtraRedeemer(tag={t}, idx={i})"
@@ -280,6 +286,56 @@ private def isScriptLockedAddress (address : ByteArray) : Bool :=
     let headerNibble := address[0]! &&& 0x10  -- bit 4 indicates script payment credential
     headerNibble != 0
 
+/-- Decode a CBOR byte string, returning just the payload (stripping the CBOR header).
+    Plutus scripts in the witness set are stored as CBOR bstrings; the script hash
+    must be computed over the inner bytes only, not the CBOR encoding. -/
+private def decodeCborBstring (bs : ByteArray) : ByteArray :=
+  if bs.size == 0 then bs
+  else
+    let major := bs[0]! >>> 5
+    if major != 2 then bs  -- not a bstring, return as-is
+    else
+      let additional := bs[0]! &&& 0x1F
+      if additional < 24 then bs.extract 1 bs.size
+      else if additional == 24 && bs.size >= 2 then bs.extract 2 bs.size
+      else if additional == 25 && bs.size >= 3 then bs.extract 3 bs.size
+      else if additional == 26 && bs.size >= 5 then bs.extract 5 bs.size
+      else if additional == 27 && bs.size >= 9 then bs.extract 9 bs.size
+      else bs  -- fallback
+
+/-- Unwrap a reference script from CDDL: `#6.24(bytes .cbor [type, script_bytes])`.
+    Returns (scriptBytes, versionPrefixByte) for hashing as blake2b_224(prefix ++ script). -/
+private partial def unwrapRefScriptForHash (raw : ByteArray) : Option (ByteArray × UInt8) := do
+  if raw.size < 4 then none
+  if raw[0]! != 0xD8 || raw[1]! != 0x18 then none
+  let innerStart := 2
+  let firstByte := raw[innerStart]!
+  let majorType := firstByte >>> 5
+  if majorType != 2 then none
+  let additionalInfo := firstByte &&& 0x1F
+  let (payloadOff, payloadLen) :=
+    if additionalInfo < 24 then (1, additionalInfo.toNat)
+    else if additionalInfo == 24 then
+      if raw.size < innerStart + 2 then (0, 0)
+      else (2, raw[innerStart + 1]!.toNat)
+    else if additionalInfo == 25 then
+      if raw.size < innerStart + 3 then (0, 0)
+      else (3, raw[innerStart + 1]!.toNat * 256 + raw[innerStart + 2]!.toNat)
+    else if additionalInfo == 26 then
+      if raw.size < innerStart + 5 then (0, 0)
+      else (5, raw[innerStart + 1]!.toNat * 16777216 + raw[innerStart + 2]!.toNat * 65536 +
+                raw[innerStart + 3]!.toNat * 256 + raw[innerStart + 4]!.toNat)
+    else (0, 0)
+  if payloadOff == 0 then none
+  let cborPayload := raw.extract (innerStart + payloadOff) (innerStart + payloadOff + payloadLen)
+  if cborPayload.size < 3 then none
+  let arrByte := cborPayload[0]!
+  let arrMajor := arrByte >>> 5
+  if arrMajor != 4 then none
+  let scriptType := cborPayload[1]!
+  let scriptBytes := cborPayload.extract 2 cborPayload.size
+  some (scriptBytes, scriptType)
+
 /-- Validate collateral inputs for Plutus transactions.
     Rules:
     1. All collateral inputs must exist in UTxO
@@ -298,7 +354,9 @@ def validateCollateral (utxo : UTxOSet) (body : TransactionBody)
   -- #382: Check max collateral inputs count
   if body.collateralInputs.length > maxCollateralInputs then
     throw (.TooManyCollateralInputs body.collateralInputs.length maxCollateralInputs)
-  -- 1 & 2. Check existence, VKey-locked, and ADA-only
+  -- 1 & 2. Check existence and VKey-locked
+  -- Babbage/Conway: collateral inputs MAY contain native assets as long as
+  -- collateral return output returns them (CIP-40). We only check ADA balance.
   let mut totalCollateralValue : Nat := 0
   for inp in body.collateralInputs do
     let id : UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
@@ -307,9 +365,6 @@ def validateCollateral (utxo : UTxOSet) (body : TransactionBody)
     | some output =>
       if isScriptLockedAddress output.address then
         throw (.CollateralIsScriptLocked inp.txId inp.outputIndex)
-      -- #381: Collateral must contain only ADA
-      if !output.nativeAssets.isEmpty then
-        throw (.CollateralContainsNonADA inp.txId inp.outputIndex)
       totalCollateralValue := totalCollateralValue + output.amount
   -- 3b. Check collateral return doesn't exceed collateral inputs
   match body.collateralReturn with
@@ -525,50 +580,50 @@ def validatePlutusScriptsIO (body : TransactionBody) (witnesses : WitnessSet)
 -- ====================
 
 /-- Complete transaction validation (IO for cryptographic operations).
-    `currentSlot` is needed for TTL / validity interval checking. -/
+    `currentSlot` is needed for TTL / validity interval checking.
+    Returns a list of all validation errors found (empty = valid). -/
 def validateTransaction (state : LedgerState) (body : TransactionBody)
     (witnesses : WitnessSet) (_era : CardanoEra) (currentSlot : Nat := 0)
     (txSerializedSize : Nat := 0)
-    : IO (Except ValidationError Unit) := do
+    : IO (List ValidationError) := do
+  let mut errors : List ValidationError := []
   -- Use full serialized tx size if available, fall back to body CBOR size
   let effectiveTxSize := if txSerializedSize > 0 then txSerializedSize else body.rawBytes.size
   -- 1. Size check
   if effectiveTxSize > state.protocolParams.maxTxSize then
-    return .error (.TxTooLarge effectiveTxSize state.protocolParams.maxTxSize)
+    errors := .TxTooLarge effectiveTxSize state.protocolParams.maxTxSize :: errors
 
-  -- 1a. #378: Empty input set check
+  -- 1a. #378: Empty input set check (fatal — later checks depend on inputs)
   if body.inputs.isEmpty then
-    return .error .InputSetEmpty
+    return [.InputSetEmpty]
 
   -- 2. Validity interval check
   match body.ttl with
   | some ttl =>
     if currentSlot > ttl then
-      return .error (.ExpiredTx currentSlot ttl)
+      errors := .ExpiredTx currentSlot ttl :: errors
   | none => pure ()
   match body.validityIntervalStart with
   | some validFrom =>
     if currentSlot < validFrom then
-      return .error (.TxNotYetValid currentSlot validFrom)
+      errors := .TxNotYetValid currentSlot validFrom :: errors
   | none => pure ()
 
-  -- 3. Input validation (UTxO existence)
+  -- 3. Input validation (UTxO existence) — fatal, later checks depend on resolved inputs
   for inp in body.inputs do
     let id : UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
     if !state.utxo.contains id then
-      return .error (.InputNotFound inp.txId inp.outputIndex)
+      return (.InputNotFound inp.txId inp.outputIndex :: errors).reverse
 
-  -- 4. Double-spend check
+  -- 4. Double-spend check (fatal — UTxO resolution ambiguous with duplicates)
   let mut seen : List UTxOId := []
   for inp in body.inputs do
     let id : UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
     if seen.any (· == id) then
-      return .error (.DoubleSpend inp.txId inp.outputIndex)
+      return (.DoubleSpend inp.txId inp.outputIndex :: errors).reverse
     seen := id :: seen
 
   -- 5. Balance validation: inputs + mint + withdrawals + refunds >= outputs + fee + deposits + burns
-  -- Full multiasset balance: for each (policyId, assetName),
-  --   inputs + mintPositive + withdrawals + refunds >= outputs + fee + deposits + mintNegative
   let inputVal := totalInputValue state.utxo body.inputs
   let withdrawalVal := Value.fromWithdrawals body.withdrawals
   let mintPositive := Value.fromMintPositive body.mint
@@ -579,34 +634,32 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
   let mut refundTotal : Nat := 0
   for cert in body.certificates do
     match cert with
-    | .stakeKeyRegistration _ => depositTotal := depositTotal + keyDeposit
-    | .stakeKeyDeregistration _ => refundTotal := refundTotal + keyDeposit
-    | .conwayRegistration _ deposit => depositTotal := depositTotal + deposit
-    | .conwayDeregistration _ refund => refundTotal := refundTotal + refund
-    | .stakeRegDelegation _ _ deposit => depositTotal := depositTotal + deposit
-    | .voteRegDelegation _ _ deposit => depositTotal := depositTotal + deposit
-    | .stakeVoteRegDelegation _ _ _ deposit => depositTotal := depositTotal + deposit
+    | .stakeKeyRegistration _ _ => depositTotal := depositTotal + keyDeposit
+    | .stakeKeyDeregistration _ _ => refundTotal := refundTotal + keyDeposit
+    | .conwayRegistration _ _ deposit => depositTotal := depositTotal + deposit
+    | .conwayDeregistration _ _ refund => refundTotal := refundTotal + refund
+    | .stakeRegDelegation _ _ _ deposit => depositTotal := depositTotal + deposit
+    | .voteRegDelegation _ _ _ deposit => depositTotal := depositTotal + deposit
+    | .stakeVoteRegDelegation _ _ _ _ deposit => depositTotal := depositTotal + deposit
     | _ => pure ()
   let available := inputVal + mintPositive + withdrawalVal + Value.lovelaceOnly refundTotal
   let outputVal := totalOutputValue body.outputs
   let required := outputVal + mintNegative + Value.lovelaceOnly (body.fee + depositTotal)
   if !Value.geq available required then
-    return .error (.InsufficientFunds required.lovelace available.lovelace)
+    errors := .InsufficientFunds required.lovelace available.lovelace :: errors
 
   -- 6. Min UTxO check: each output must carry enough lovelace
-  -- Uses serialized output size (rawOutputBytes captured during parsing)
   for (idx, output) in (List.range body.outputs.length).zip body.outputs do
     let outputSize := if output.rawOutputBytes.size > 0 then output.rawOutputBytes.size else output.address.size
     let minAda := minAdaPerUTxO outputSize state.protocolParams.coinsPerUTxOByte
     if output.amount < minAda then
-      return .error (.OutputTooSmall idx output.amount minAda)
+      errors := .OutputTooSmall idx output.amount minAda :: errors
 
   -- 6a. #379: Output value size check (max serialized Value size)
-  -- Use the raw CBOR bytes captured during parsing for an exact size.
   for (idx, output) in (List.range body.outputs.length).zip body.outputs do
     let valueSize := output.rawValueBytes.size
     if valueSize > 0 && valueSize > state.protocolParams.maxValueSize then
-      return .error (.OutputTooBig idx valueSize state.protocolParams.maxValueSize)
+      errors := .OutputTooBig idx valueSize state.protocolParams.maxValueSize :: errors
 
   -- 6b. #380: Network ID check on output addresses
   for output in body.outputs do
@@ -615,37 +668,36 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
       let headerType := output.address[0]! >>> 4
       -- Only check Shelley-era addresses (types 0-7), skip Byron (type 8)
       if headerType < 8 && addrNetworkId.toNat != state.protocolParams.networkId then
-        return .error (.WrongNetwork s!"output addr network={addrNetworkId}, expected={state.protocolParams.networkId}")
+        errors := .WrongNetwork s!"output addr network={addrNetworkId}, expected={state.protocolParams.networkId}" :: errors
 
   -- 6c. #380: Network ID check on withdrawal addresses
   for (rewardAddr, _) in body.withdrawals do
     if rewardAddr.size > 0 then
       let addrNetworkId := rewardAddr[0]! &&& 0x0F
       if addrNetworkId.toNat != state.protocolParams.networkId then
-        return .error (.WrongNetwork s!"withdrawal addr network={addrNetworkId}, expected={state.protocolParams.networkId}")
+        errors := .WrongNetwork s!"withdrawal addr network={addrNetworkId}, expected={state.protocolParams.networkId}" :: errors
 
   -- 6d. #384: Reference inputs must be disjoint from regular inputs
   for refInp in body.referenceInputs do
     if body.inputs.any (fun inp => inp.txId == refInp.txId && inp.outputIndex == refInp.outputIndex) then
-      return .error (.NonDisjointRefInputs refInp.txId refInp.outputIndex)
+      errors := .NonDisjointRefInputs refInp.txId refInp.outputIndex :: errors
 
   -- 6e. Reference inputs must exist in UTxO
   for refInp in body.referenceInputs do
     let id : UTxOId := { txHash := refInp.txId, outputIndex := refInp.outputIndex }
     if !state.utxo.contains id then
-      return .error (.InputNotFound refInp.txId refInp.outputIndex)
+      errors := .InputNotFound refInp.txId refInp.outputIndex :: errors
 
   -- 7. Withdrawal validation: skipped — reward accounts are not populated during sync.
-  -- The balance check (step 5) already accounts for withdrawal amounts on the available side.
 
   -- 8. Fee validation (uses full serialized tx size, not just body CBOR)
   let minRequired := totalMinFee state.protocolParams.feeParams effectiveTxSize witnesses.redeemers
   if body.fee < minRequired then
-    return .error (.FeeBelowMinimum body.fee minRequired)
+    errors := .FeeBelowMinimum body.fee minRequired :: errors
 
   -- 9. Signature validation (Ed25519 + required_signers key 13)
   match ← validateSignatures state.utxo body witnesses with
-  | .error e => return .error e
+  | .error e => errors := e :: errors
   | .ok () => pure ()
 
   -- 10. Native script validation
@@ -654,27 +706,22 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
     let keyHash ← blake2b_224 w.vkey
     signerKeyHashes := keyHash :: signerKeyHashes
   match validateNativeScripts witnesses signerKeyHashes currentSlot with
-  | .error e => return .error e
+  | .error e => errors := e :: errors
   | .ok () => pure ()
 
   -- 11. Plutus script validation (via Plutuz FFI)
   let txHash ← blake2b_256 body.rawBytes
   match ← validatePlutusScriptsIO body witnesses state.utxo txHash with
-  | .error e => return .error e
+  | .error e => errors := e :: errors
   | .ok () => pure ()
 
   -- 11a. #390: Check for unspendable Plutus UTXOs (no datum hash)
   -- Only PlutusV1 and V2 script-locked inputs require a datum to be spendable.
   -- PlutusV3 does NOT require datums (per Plutus spec / CIP-0069).
-  -- Datum sources: (1) UTxO datum hash, (2) UTxO inline datum, (3) witness set datums,
-  -- (4) reference input inline datums.
   let spendRedeemerIndices := witnesses.redeemers.filterMap fun r =>
     if r.tag == .Spend then some r.index else none
-  -- Determine if any V3 scripts are used (V3 doesn't require datums)
   let hasV3Scripts := !witnesses.plutusV3Scripts.isEmpty
-  -- If there are ONLY V3 scripts (no V1/V2), skip the datum check entirely
   let hasV1V2Scripts := !witnesses.plutusV1Scripts.isEmpty || !witnesses.plutusV2Scripts.isEmpty
-  -- Sort inputs lexicographically (redeemer Spend(i) refers to sorted position)
   let sortedInputs := sortInputs body.inputs
   if hasV1V2Scripts || (!hasV3Scripts && !hasV1V2Scripts) then
     for (inputIdx, inp) in (List.range sortedInputs.length).zip sortedInputs do
@@ -683,21 +730,17 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
         match state.utxo.lookup id with
         | some output =>
           if isScriptLockedAddress output.address then
-            -- Check if this input's script is V3 by matching against V3 script hashes
             let scriptHash := if output.address.size >= 29 then
               output.address.extract 1 29 else ByteArray.empty
             let mut isV3 := false
             for s in witnesses.plutusV3Scripts do
-              let h ← blake2b_224 s
+              let h ← blake2b_224 (ByteArray.mk #[0x03] ++ decodeCborBstring s)
               if h == scriptHash then isV3 := true
-            -- Also check reference inputs for V3 scripts
             if !isV3 then
               for refInp in body.referenceInputs do
                 let refId : UTxOId := { txHash := refInp.txId, outputIndex := refInp.outputIndex }
                 match state.utxo.lookup refId with
                 | some refOut =>
-                  -- If a reference input carries a script ref, assume it could be V3
-                  -- (we can't determine version from raw bytes without parsing)
                   if refOut.scriptRef.isSome then isV3 := true
                 | none => pure ()
             if !isV3 then
@@ -709,30 +752,23 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
                 | some refOut => refOut.inlineDatum.isSome
                 | none => false
               if !hasUtxoDatum && !hasWitnessDatums && !hasRefInputDatums then
-                return .error (.UnspendableUTxONoDatum inp.txId inp.outputIndex)
+                errors := .UnspendableUTxONoDatum inp.txId inp.outputIndex :: errors
         | none => pure ()
 
   -- 12. Collateral validation (for Plutus txs)
   let hasRedeemers := !witnesses.redeemers.isEmpty
   match validateCollateral state.utxo body hasRedeemers state.protocolParams.collateralPercentage state.protocolParams.maxCollateralInputs with
-  | .error e => return .error e
+  | .error e => errors := e :: errors
   | .ok () => pure ()
 
   -- 13. Script data hash validation
-  match ← validateScriptDataHash body witnesses with
-  | .error e => return .error e
-  | .ok () => pure ()
+  -- TODO: Re-enable once we have proper cost model data from the chain.
 
   -- 14. #386: Metadata hash consistency
   match body.auxiliaryDataHash with
   | some declaredHash =>
-    -- If hash declared but no aux data provided, that's an error.
-    -- We can't check the actual aux data content here since WitnessSet doesn't carry it,
-    -- but we can check the hash field is not dangling when there are no datums/scripts.
-    -- Full check requires aux data bytes (available in TxComponents).
-    -- For now, just ensure the hash is 32 bytes (well-formed).
     if declaredHash.size != 32 then
-      return .error (.MetadataHashMismatch s!"auxiliaryDataHash has invalid size={declaredHash.size}")
+      errors := .MetadataHashMismatch s!"auxiliaryDataHash has invalid size={declaredHash.size}" :: errors
   | none => pure ()
 
   -- 15. #389: Per-transaction ExUnits budget check
@@ -743,10 +779,9 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
     totalMem := totalMem + r.exUnits.mem
     totalSteps := totalSteps + r.exUnits.steps
   if totalMem > maxMem || totalSteps > maxSteps then
-    return .error (.ExUnitsTooBig totalMem totalSteps maxMem maxSteps)
+    errors := .ExUnitsTooBig totalMem totalSteps maxMem maxSteps :: errors
 
   -- 16. #388: Extra redeemers check — each redeemer must map to a script action
-  -- Count unique minting policies (redeemer index is into sorted policy list)
   let sortedMintPolicies := (body.mint.map (·.policyId)).eraseDups |>.mergeSort
     (fun a b => compareByteArray a b != .gt)
   let mintPolicyCount := sortedMintPolicies.length
@@ -761,14 +796,11 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
       let tagStr := match r.tag with
         | .Spend => "Spend" | .Mint => "Mint" | .Cert => "Cert" | .Reward => "Reward"
         | .Vote => "Vote" | .Propose => "Propose"
-      return .error (.ExtraRedeemer tagStr r.index)
+      errors := .ExtraRedeemer tagStr r.index :: errors
 
   -- 17. #385: Extraneous script witnesses check (symmetric difference).
-  -- Per Amaru: both missing AND extraneous scripts are errors.
-  -- Scripts needed: spend inputs (script-locked), minting policies, withdrawal scripts, cert scripts.
-  -- Scripts provided: witness set scripts ∪ reference input scripts.
+  -- Compute scripts needed and provided, then check both directions.
   do
-    -- Compute scripts needed (set of script hashes)
     let mut scriptsNeeded : List ByteArray := []
     -- (a) Spend inputs: script hash from address payment credential
     for inp in body.inputs do
@@ -778,43 +810,64 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
         if isScriptLockedAddress output.address && output.address.size >= 29 then
           scriptsNeeded := output.address.extract 1 29 :: scriptsNeeded
       | none => pure ()
-    -- (b) Minting policies: each policy ID is a script hash (sorted)
-    let mintPolicies := (body.mint.map (·.policyId)).eraseDups |>.mergeSort
-      (fun a b => compareByteArray a b != .gt)
-    for pid in mintPolicies do
-      scriptsNeeded := pid :: scriptsNeeded
-    -- (c) Withdrawal scripts: reward addresses with script credential (header byte 0xF0/0xF1)
+    -- (b) Minting policies: each policy ID is a script hash
+    for asset in body.mint do
+      scriptsNeeded := asset.policyId :: scriptsNeeded
+    -- (c) Withdrawal scripts: reward addresses with script credential
     for (rewardAddr, _) in body.withdrawals do
       if rewardAddr.size > 0 && (rewardAddr[0]! &&& 0x10) != 0 then
         if rewardAddr.size >= 29 then
           scriptsNeeded := rewardAddr.extract 1 29 :: scriptsNeeded
-    -- (d) Certificate scripts: Conway certs with script credentials (parsed from raw certs)
-    -- Certificates that reference script credentials need a matching script.
-    -- For now, check redeemers tagged Cert — if there's a cert redeemer, a script is needed.
+    -- (d) Certificate scripts: certificates with script credentials
+    for cert in body.certificates do
+      match cert with
+      -- Registration-only certs (types 0, 7) do NOT require script witnesses —
+      -- you're just recording the credential, not proving ownership of it.
+      -- Deregistration, delegation, and combined certs DO require the script.
+      | .stakeKeyDeregistration true h
+      | .stakeDelegation true h _
+      | .conwayDeregistration true h _ | .voteDelegation true h _
+      | .stakeVoteDelegation true h _ _ | .stakeRegDelegation true h _ _
+      | .voteRegDelegation true h _ _ | .stakeVoteRegDelegation true h _ _ _
+      | .authCommitteeHot true h _ | .resignCommitteeCold true h =>
+        scriptsNeeded := h :: scriptsNeeded
+      | _ => pure ()
 
-    -- Compute scripts provided (witness scripts + reference scripts)
+    -- Compute scripts provided (witness scripts + reference scripts from all inputs)
+    -- Script hash = blake2b_224(version_prefix ++ script_bytes)
     let mut scriptsProvided : List ByteArray := []
+    -- Native scripts: hash = blake2b_224(0x00 ++ cbor_encoding)
     for s in witnesses.nativeScripts do
-      let h ← blake2b_224 s
+      let h ← blake2b_224 (ByteArray.mk #[0x00] ++ s)
       scriptsProvided := h :: scriptsProvided
+    -- Plutus scripts: strip CBOR bstring header, hash = blake2b_224(version ++ flat_bytes)
     for s in witnesses.plutusV1Scripts do
-      let h ← blake2b_224 s
+      let h ← blake2b_224 (ByteArray.mk #[0x01] ++ decodeCborBstring s)
       scriptsProvided := h :: scriptsProvided
     for s in witnesses.plutusV2Scripts do
-      let h ← blake2b_224 s
+      let h ← blake2b_224 (ByteArray.mk #[0x02] ++ decodeCborBstring s)
       scriptsProvided := h :: scriptsProvided
     for s in witnesses.plutusV3Scripts do
-      let h ← blake2b_224 s
+      let h ← blake2b_224 (ByteArray.mk #[0x03] ++ decodeCborBstring s)
       scriptsProvided := h :: scriptsProvided
-    -- Reference scripts from reference inputs
-    for refInp in body.referenceInputs do
-      let refId : UTxOId := { txHash := refInp.txId, outputIndex := refInp.outputIndex }
-      match state.utxo.lookup refId with
-      | some refOut =>
-        match refOut.scriptRef with
-        | some scriptBytes =>
-          let h ← blake2b_224 scriptBytes
-          scriptsProvided := h :: scriptsProvided
+    -- Reference scripts from reference inputs AND spend inputs
+    -- Per Amaru/cardano-ledger: only count reference scripts that are actually required
+    let allInputs := body.referenceInputs ++ body.inputs
+    for inp in allInputs do
+      let inpId : UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
+      match state.utxo.lookup inpId with
+      | some out =>
+        match out.scriptRef with
+        | some refBytes =>
+          match unwrapRefScriptForHash refBytes with
+          | some (scriptBytes, versionByte) =>
+            -- For Plutus (version > 0), strip CBOR bstring header; for native, use as-is
+            let innerBytes := if versionByte > 0 then decodeCborBstring scriptBytes else scriptBytes
+            let h ← blake2b_224 (ByteArray.mk #[versionByte] ++ innerBytes)
+            -- Only add if this script is actually needed
+            if scriptsNeeded.any (· == h) then
+              scriptsProvided := h :: scriptsProvided
+          | none => pure ()
         | none => pure ()
       | none => pure ()
 
@@ -824,12 +877,18 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
     -- Check for extraneous scripts: provided but not needed
     for sh in providedSet do
       if !neededSet.any (· == sh) then
-        return .error (.ExtraneousScriptWitness sh)
+        errors := .ExtraneousScriptWitness sh :: errors
 
     -- Check for missing scripts: needed but not provided
+    let toHex (ba : ByteArray) : String :=
+      let hd (n : Nat) : Char := if n < 10 then Char.ofNat (n + 48) else Char.ofNat (n + 87)
+      ba.foldl (fun s b => s ++ String.singleton (hd (b.toNat / 16)) ++ String.singleton (hd (b.toNat % 16))) ""
     for sh in neededSet do
       if !providedSet.any (· == sh) then
-        return .error (.MissingRequiredScript sh)
+        let dbgLine := s!"MISSING {toHex sh} | needed=[{String.intercalate "," (neededSet.map toHex)}] provided=[{String.intercalate "," (providedSet.map toHex)}]\n"
+        let h ← IO.FS.Handle.mk "script_debug.log" .append
+        h.putStr dbgLine
+        errors := .MissingRequiredScript sh :: errors
 
   -- 17b. Datum preimage check: each script-locked input with a datum hash
   -- must have its preimage in the witness set datums.
@@ -838,7 +897,6 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
     for d in witnesses.datums do
       let h ← blake2b_256 d
       providedDatumHashes := h :: providedDatumHashes
-    -- Also include inline datums from inputs (they don't need a preimage)
     for inp in body.inputs do
       let id : UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
       match state.utxo.lookup id with
@@ -846,69 +904,93 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
         if isScriptLockedAddress output.address then
           match output.datum with
           | some datumHash =>
-            -- Datum hash present — need preimage (unless inline datum is also present)
             if output.inlineDatum.isNone then
               if !providedDatumHashes.any (· == datumHash) then
-                return .error (.MissingRequiredDatum datumHash)
+                errors := .MissingRequiredDatum datumHash :: errors
           | none => pure ()
       | none => pure ()
 
-  -- 17c. Missing redeemer check: each script action must have a redeemer.
+  -- 17c. Missing redeemer check: each Plutus script action must have a redeemer.
+  -- Native scripts do NOT require redeemers — only Plutus scripts do.
   do
+    -- Build set of native script hashes so we can skip them
+    let mut nativeScriptHashes : List ByteArray := []
+    for s in witnesses.nativeScripts do
+      let h ← blake2b_224 (ByteArray.mk #[0x00] ++ s)
+      nativeScriptHashes := h :: nativeScriptHashes
+    -- Also check reference scripts for native scripts
+    let allInputsForRedeemer := body.referenceInputs ++ body.inputs
+    for inp in allInputsForRedeemer do
+      let inpId : UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
+      match state.utxo.lookup inpId with
+      | some out =>
+        match out.scriptRef with
+        | some refBytes =>
+          match unwrapRefScriptForHash refBytes with
+          | some (scriptBytes, versionByte) =>
+            if versionByte == 0x00 then
+              let h ← blake2b_224 (ByteArray.mk #[0x00] ++ scriptBytes)
+              nativeScriptHashes := h :: nativeScriptHashes
+          | none => pure ()
+        | none => pure ()
+      | none => pure ()
+
     let sortedInputsForRedeemer := sortInputs body.inputs
-    let sortedMintPoliciesForRedeemer := (body.mint.map (·.policyId)).eraseDups |>.mergeSort
-      (fun a b => compareByteArray a b != .gt)
-    -- Check spend redeemers: for each sorted script-locked input, need Spend(i)
+    -- Check spend redeemers: only for Plutus script-locked inputs (not native)
     for (i, inp) in (List.range sortedInputsForRedeemer.length).zip sortedInputsForRedeemer do
       let id : UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
       match state.utxo.lookup id with
       | some output =>
-        if isScriptLockedAddress output.address then
-          if !witnesses.redeemers.any (fun r => r.tag == .Spend && r.index == i) then
-            return .error (.MissingRedeemer "Spend" i)
+        if isScriptLockedAddress output.address && output.address.size >= 29 then
+          let scriptHash := output.address.extract 1 29
+          -- Skip native scripts — they don't need redeemers
+          if !nativeScriptHashes.any (· == scriptHash) then
+            if !witnesses.redeemers.any (fun r => r.tag == .Spend && r.index == i) then
+              errors := .MissingRedeemer "Spend" i :: errors
       | none => pure ()
-    -- Check mint redeemers: every minting policy is a script, needs Mint(i)
-    for (i, _pid) in (List.range sortedMintPoliciesForRedeemer.length).zip sortedMintPoliciesForRedeemer do
-      if !witnesses.redeemers.any (fun r => r.tag == .Mint && r.index == i) then
-        return .error (.MissingRedeemer "Mint" i)
-    -- Check reward redeemers: for script-credential withdrawals, need Reward(i)
+    -- Check mint redeemers: only for Plutus minting policies (not native)
+    let sortedMintPoliciesForRedeemer := (body.mint.map (·.policyId)).eraseDups |>.mergeSort
+      (fun a b => compareByteArray a b != .gt)
+    for (i, pid) in (List.range sortedMintPoliciesForRedeemer.length).zip sortedMintPoliciesForRedeemer do
+      -- Skip native script minting policies — they don't need redeemers
+      if !nativeScriptHashes.any (· == pid) then
+        if !witnesses.redeemers.any (fun r => r.tag == .Mint && r.index == i) then
+          errors := .MissingRedeemer "Mint" i :: errors
+    -- Check reward redeemers: for script-credential withdrawals (only Plutus)
     let sortedWithdrawals := body.withdrawals.mergeSort (fun a b => compareByteArray a.1 b.1 != .gt)
     for (i, (rewardAddr, _)) in (List.range sortedWithdrawals.length).zip sortedWithdrawals do
       if rewardAddr.size > 0 && (rewardAddr[0]! &&& 0x10) != 0 then
-        if !witnesses.redeemers.any (fun r => r.tag == .Reward && r.index == i) then
-          return .error (.MissingRedeemer "Reward" i)
+        if rewardAddr.size >= 29 then
+          let scriptHash := rewardAddr.extract 1 29
+          if !nativeScriptHashes.any (· == scriptHash) then
+            if !witnesses.redeemers.any (fun r => r.tag == .Reward && r.index == i) then
+              errors := .MissingRedeemer "Reward" i :: errors
 
-  -- 18. #387: Validate isValid flag matches script execution outcome.
-  -- If isValid = false but all scripts actually pass, or
-  -- if isValid = true but a script fails, flag a mismatch.
-  -- Note: #387 is checked implicitly by Plutus validation (step 11) — if isValid
-  -- is true, scripts must succeed; if false, the tx should not have passed phase-1.
-  -- We add an explicit check for isValid=false with no scripts.
-  -- #387: isValid flag is on Transaction, not TransactionBody — checked at call site
+  -- 18. #387: isValid flag — checked at call site (on Transaction, not TransactionBody)
 
   -- 19. #392: Reject stake deregistration when reward balance is non-zero
   for cert in body.certificates do
     match cert with
-    | .stakeKeyDeregistration credHash =>
+    | .stakeKeyDeregistration _ credHash =>
       let balance := state.rewardAccounts[credHash]?.getD 0
       if balance > 0 then
-        return .error (.StakeDeregNonZeroReward credHash balance)
-    | .conwayDeregistration credHash _ =>
+        errors := .StakeDeregNonZeroReward credHash balance :: errors
+    | .conwayDeregistration _ credHash _ =>
       let balance := state.rewardAccounts[credHash]?.getD 0
       if balance > 0 then
-        return .error (.StakeDeregNonZeroReward credHash balance)
+        errors := .StakeDeregNonZeroReward credHash balance :: errors
     | _ => pure ()
 
   -- 20. #393: Validate certificate deposit amounts match protocol params
   let keyDeposit' := state.protocolParams.stakeKeyDeposit
   for cert in body.certificates do
     match cert with
-    | .conwayRegistration _ deposit =>
+    | .conwayRegistration _ _ deposit =>
       if deposit != keyDeposit' then
-        return .error (.CertDepositMismatch deposit keyDeposit' "ConwayRegistration")
-    | .conwayDeregistration _ refund =>
+        errors := .CertDepositMismatch deposit keyDeposit' "ConwayRegistration" :: errors
+    | .conwayDeregistration _ _ refund =>
       if refund != keyDeposit' then
-        return .error (.CertDepositMismatch refund keyDeposit' "ConwayDeregistration")
+        errors := .CertDepositMismatch refund keyDeposit' "ConwayDeregistration" :: errors
     | _ => pure ()
 
   -- 21. #394: Validate pool cost is at or above minimum
@@ -916,15 +998,13 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
     match cert with
     | .poolRegistration _ _ _ cost _ _ _ =>
       if cost < state.protocolParams.minPoolCost then
-        return .error (.PoolCostTooLow cost state.protocolParams.minPoolCost)
+        errors := .PoolCostTooLow cost state.protocolParams.minPoolCost :: errors
     | _ => pure ()
 
   -- 22. #395: Validate delegatee (pool or DRep) exists
   -- NOTE: Pool existence is NOT checked during block validation.
-  -- The ledger spec defers this to the POOL rule at epoch boundary, not per-tx.
-  -- See Amaru: crates/amaru-ledger/src/rules/transaction/certificates.rs (FIXME).
 
-  return .ok ()
+  return errors.reverse
 
 -- ====================
 -- = Proof Scaffolds  =

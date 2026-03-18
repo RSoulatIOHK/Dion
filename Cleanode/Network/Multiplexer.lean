@@ -25,7 +25,7 @@ inductive MiniProtocolId where
   | Handshake      -- 0x0000: Version negotiation
   | ChainSync      -- 0x0002: Block header synchronization
   | BlockFetch     -- 0x0003: Block body retrieval
-  | TxSubmission2  -- 0x0006: Transaction propagation (v2 with MsgInit)
+  | TxSubmission2  -- 0x0004: Transaction propagation (N2N, v2 with MsgInit)
   | KeepAlive      -- 0x0008: Connection health
   | PeerSharing    -- 0x000a: P2P peer discovery
   deriving Repr, BEq
@@ -44,7 +44,6 @@ def MiniProtocolId.fromUInt16 (n : UInt16) : Option MiniProtocolId :=
   | 0x0002 => some .ChainSync
   | 0x0003 => some .BlockFetch
   | 0x0004 => some .TxSubmission2
-  | 0x0006 => some .TxSubmission2  -- TxSubmission2 v2 protocol number
   | 0x0008 => some .KeepAlive
   | 0x000a => some .PeerSharing
   | _      => none
@@ -158,11 +157,12 @@ def decodeMuxFrame (bs : ByteArray) : Option MuxFrame := do
   let payload := bs.extract payloadStart payloadEnd
   some { header := header, payload := payload }
 
-/-- Get current timestamp in microseconds (placeholder) -/
+/-- Get current timestamp in microseconds.
+    Uses the system clock modulo 2^32 to fit the MUX header field. -/
 def getCurrentTimestamp : IO UInt32 := do
-  -- TODO: Implement proper microsecond timestamp
-  -- For now, return a placeholder
-  pure 0
+  let nanos ← IO.monoNanosNow
+  -- Convert nanoseconds to microseconds, wrap to UInt32
+  pure (UInt32.ofNat ((nanos / 1000) % (2 ^ 32)))
 
 /-- Create a MUX frame for sending -/
 def createFrame (protocolId : MiniProtocolId) (mode : Mode) (payload : ByteArray) : IO MuxFrame := do

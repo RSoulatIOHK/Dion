@@ -1,6 +1,7 @@
 import Cleanode.Network.Cbor
 import Cleanode.Network.N2C.Mux
 import Cleanode.Network.Mempool
+import Cleanode.Ledger.State
 
 /-!
 # LocalTxMonitor Mini-Protocol (N2C Protocol 9)
@@ -86,6 +87,7 @@ def encodeMsgReplyGetSizes (numTxs totalBytes : Nat) : ByteArray :=
 /-- Handle one LocalTxMonitor frame. Returns (continue, updatedSnapshot). -/
 def handleTxMonitorFrame (sock : Socket) (payload : ByteArray)
     (mempoolRef : IO.Ref Mempool) (snapshot : Option MempoolSnapshot)
+    (ledgerStateRef : IO.Ref Cleanode.Ledger.State.LedgerState)
     : IO (Bool × Option MempoolSnapshot) := do
   match decodeTxMonitorMessage payload with
   | none =>
@@ -97,7 +99,7 @@ def handleTxMonitorFrame (sock : Socket) (payload : ByteArray)
       let mempool ← mempoolRef.get
       let snap : MempoolSnapshot := {
         entries := mempool.entries
-        slot := 0  -- TODO: get current slot
+        slot := (← ledgerStateRef.get).lastSlot
         remaining := mempool.entries
       }
       let response := encodeMsgAcquired snap.slot

@@ -104,7 +104,7 @@ partial def handleN2CConnection (sock : Socket)
           if !cont then running := false
         | .LocalTxMonitor =>
           let (cont, newSnap) ← handleTxMonitorFrame sock frame.payload
-            mempoolRef connState.txMonitorSnapshot
+            mempoolRef connState.txMonitorSnapshot ledgerStateRef
           connState := { connState with txMonitorSnapshot := newSnap }
           if !cont then running := false
         | .ChainSync =>

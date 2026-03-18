@@ -40,7 +40,7 @@ structure SnapshotInfo where
 /-- Snapshot file format header (magic + version) -/
 structure SnapshotHeader where
   magic : UInt32 := 0x434C4E44    -- "CLND"
-  version : UInt32 := 3           -- v3: native assets + datum hash + scriptRef + inlineDatum
+  version : UInt32 := 4           -- v4: + pool registrations + delegation state
   info : SnapshotInfo
   deriving Repr
 
@@ -135,6 +135,31 @@ private def serializeUTxOEntry (entry : UTxOEntry) : ByteArray :=
     serializeOptBytes entry.output.inlineDatum
 
 -- ====================
+-- = Pool/Deleg Ser   =
+-- ====================
+
+/-- Serialize a PoolParams entry.
+    Format: poolId(28) | vrfKeyHash(32) | pledge(8) | cost(8) | margin(8)
+          | rewardAcctLen(4) | rewardAcct | ownerCount(4) | [ownerLen(4)|owner]...
+          | metaLen(4) | meta -/
+private def serializePoolParams (p : PoolParams) : ByteArray :=
+  p.poolId ++
+  p.vrfKeyHash ++
+  encodeNat64 p.pledge ++
+  encodeNat64 p.cost ++
+  encodeNat64 p.margin ++
+  serializeOptBytes (some p.rewardAccount) ++
+  encodeU32 (UInt32.ofNat p.owners.length) ++
+  p.owners.foldl (fun acc o => acc ++ serializeOptBytes (some o)) ByteArray.empty ++
+  serializeOptBytes p.metadata
+
+/-- Serialize a DelegationEntry.
+    Format: stakeKeyHashLen(4) | stakeKeyHash | poolId(28) -/
+private def serializeDelegationEntry (d : DelegationEntry) : ByteArray :=
+  serializeOptBytes (some d.stakeKeyHash) ++
+  d.poolId
+
+-- ====================
 -- = Snapshot I/O     =
 -- ====================
 
@@ -158,9 +183,24 @@ partial def createSnapshot (state : LedgerState) (snapshotDir : FilePath) : IO U
   for entry in state.utxo.toList do
     data := data ++ serializeUTxOEntry entry
 
+  -- Serialize pool registrations: count(8) + entries
+  data := data ++ encodeNat64 state.pools.registeredPools.length
+  for pool in state.pools.registeredPools do
+    data := data ++ serializePoolParams pool
+
+  -- Serialize delegation entries: count(8) + entries
+  data := data ++ encodeNat64 state.delegation.delegations.length
+  for d in state.delegation.delegations do
+    data := data ++ serializeDelegationEntry d
+
+  -- Serialize registered stake keys: count(8) + each key (variable, with len prefix)
+  data := data ++ encodeNat64 state.delegation.registeredStakeKeys.length
+  for key in state.delegation.registeredStakeKeys do
+    data := data ++ serializeOptBytes (some key)
+
   let filename := snapshotDir / "utxo-snapshot.dat"
   IO.FS.writeBinFile filename data
-  IO.println s!"[snapshot] Saved: {filename} — epoch={si.epoch}, slot={si.slot}, utxos={si.utxoCount}, size={data.size} bytes"
+  IO.println s!"[snapshot] Saved: {filename} — epoch={si.epoch}, slot={si.slot}, utxos={si.utxoCount}, pools={state.pools.registeredPools.length}, delegations={state.delegation.delegations.length}, size={data.size} bytes"
 
 /-- Deserialize native assets from snapshot binary data.
     Returns (assets, newOffset). -/
@@ -189,21 +229,22 @@ private def deserializeOptBytes (data : ByteArray) (off : Nat) : Option ByteArra
     else if off + 4 + len > data.size then (none, off + 4)
     else (some (data.extract (off + 4) (off + 4 + len)), off + 4 + len)
 
-/-- Deserialize UTxO entries from snapshot binary data (v3 format) -/
-private partial def deserializeUTxOEntries (data : ByteArray) (offset : Nat) (count : Nat) : UTxOSet :=
-  let rec go (off : Nat) (remaining : Nat) (m : Std.HashMap UTxOId TxOutput) : Std.HashMap UTxOId TxOutput :=
-    if remaining == 0 || off + 44 > data.size then m
+/-- Deserialize UTxO entries from snapshot binary data (v3 format).
+    Returns (UTxOSet, finalOffset). -/
+private partial def deserializeUTxOEntries (data : ByteArray) (offset : Nat) (count : Nat) : UTxOSet × Nat :=
+  let rec go (off : Nat) (remaining : Nat) (m : Std.HashMap UTxOId TxOutput) : Std.HashMap UTxOId TxOutput × Nat :=
+    if remaining == 0 || off + 44 > data.size then (m, off)
     else
       let txHash := data.extract off (off + 32)
       let outputIndex := decodeNat64 data (off + 32)
       let addrLen := (decodeU32 data (off + 40)).toNat
-      if off + 44 + addrLen + 8 > data.size then m
+      if off + 44 + addrLen + 8 > data.size then (m, off)
       else
         let address := data.extract (off + 44) (off + 44 + addrLen)
         let amount := decodeNat64 data (off + 44 + addrLen)
         let afterAmount := off + 44 + addrLen + 8
         -- Datum hash: 1 byte flag + 0|32 bytes
-        if afterAmount >= data.size then m
+        if afterAmount >= data.size then (m, off)
         else
           let datumFlag := data[afterAmount]!.toNat
           let (datum, afterDatum) := if datumFlag == 1 && afterAmount + 33 <= data.size then
@@ -211,7 +252,7 @@ private partial def deserializeUTxOEntries (data : ByteArray) (offset : Nat) (co
           else
             (none, afterAmount + 1)
           -- Native assets: count(4) + entries
-          if afterDatum + 4 > data.size then m
+          if afterDatum + 4 > data.size then (m, off)
           else
             let assetCount := (decodeU32 data afterDatum).toNat
             let (assets, afterAssets) := deserializeNativeAssets data (afterDatum + 4) assetCount
@@ -222,7 +263,59 @@ private partial def deserializeUTxOEntries (data : ByteArray) (offset : Nat) (co
             let id : UTxOId := { txHash, outputIndex }
             let output : TxOutput := { address, amount, datum, inlineDatum, scriptRef, nativeAssets := assets }
             go afterInlineDatum (remaining - 1) (m.insert id output)
-  { map := go offset count Std.HashMap.emptyWithCapacity }
+  let (m, finalOff) := go offset count Std.HashMap.emptyWithCapacity
+  ({ map := m }, finalOff)
+
+/-- Deserialize pool params. Returns (pool, newOffset) or none on error. -/
+private def deserializePoolParams (data : ByteArray) (off : Nat) : Option (PoolParams × Nat) :=
+  if off + 28 + 32 + 8 + 8 + 8 > data.size then none
+  else
+    let poolId := data.extract off (off + 28)
+    let vrfKeyHash := data.extract (off + 28) (off + 60)
+    let pledge := decodeNat64 data (off + 60)
+    let cost := decodeNat64 data (off + 68)
+    let margin := decodeNat64 data (off + 76)
+    let (rewardAcctOpt, off2) := deserializeOptBytes data (off + 84)
+    let rewardAccount := rewardAcctOpt.getD ByteArray.empty
+    if off2 + 4 > data.size then none
+    else
+      let ownerCount := (decodeU32 data off2).toNat
+      let (owners, off3) := (List.range ownerCount).foldl (fun (acc, o) _ =>
+        let (keyOpt, o') := deserializeOptBytes data o
+        (acc ++ [keyOpt.getD ByteArray.empty], o')) ([], off2 + 4)
+      let (metadata, off4) := deserializeOptBytes data off3
+      some ({ poolId, vrfKeyHash, pledge, cost, margin, rewardAccount, owners, metadata }, off4)
+
+/-- Deserialize pool entries from binary data. -/
+private partial def deserializePoolEntries (data : ByteArray) (off : Nat) (count : Nat) : List PoolParams × Nat :=
+  let rec go (o : Nat) (rem : Nat) (acc : List PoolParams) : List PoolParams × Nat :=
+    if rem == 0 then (acc.reverse, o)
+    else match deserializePoolParams data o with
+    | none => (acc.reverse, o)
+    | some (p, o') => go o' (rem - 1) (p :: acc)
+  go off count []
+
+/-- Deserialize delegation entries from binary data. -/
+private partial def deserializeDelegationEntries (data : ByteArray) (off : Nat) (count : Nat) : List DelegationEntry × Nat :=
+  let rec go (o : Nat) (rem : Nat) (acc : List DelegationEntry) : List DelegationEntry × Nat :=
+    if rem == 0 then (acc.reverse, o)
+    else
+      let (skOpt, o') := deserializeOptBytes data o
+      if o' + 28 > data.size then (acc.reverse, o)
+      else
+        let stakeKeyHash := skOpt.getD ByteArray.empty
+        let poolId := data.extract o' (o' + 28)
+        go (o' + 28) (rem - 1) ({ stakeKeyHash, poolId } :: acc)
+  go off count []
+
+/-- Deserialize stake keys from binary data. -/
+private partial def deserializeStakeKeys (data : ByteArray) (off : Nat) (count : Nat) : List ByteArray × Nat :=
+  let rec go (o : Nat) (rem : Nat) (acc : List ByteArray) : List ByteArray × Nat :=
+    if rem == 0 then (acc.reverse, o)
+    else
+      let (keyOpt, o') := deserializeOptBytes data o
+      go o' (rem - 1) (keyOpt.getD ByteArray.empty :: acc)
+  go off count []
 
 /-- Load a snapshot from disk -/
 def loadSnapshot (filename : FilePath) : IO (Option LedgerState) := do
@@ -235,8 +328,8 @@ def loadSnapshot (filename : FilePath) : IO (Option LedgerState) := do
     if magic != 0x434C4E44 then return none  -- Bad magic
 
     let version := decodeU32 data 4
-    if version != 3 then
-      IO.println s!"[snapshot] Incompatible snapshot version {version} (expected 3). Please re-sync to create a new snapshot."
+    if version != 3 && version != 4 then
+      IO.println s!"[snapshot] Incompatible snapshot version {version} (expected 3 or 4). Please re-sync to create a new snapshot."
       return none
 
     -- Read info
@@ -245,18 +338,44 @@ def loadSnapshot (filename : FilePath) : IO (Option LedgerState) := do
     let blockNo := decodeNat64 data 24
     let utxoCount := decodeNat64 data 32
 
-    -- Deserialize UTxO entries (header is 56 bytes: 8 + 8*6 = 56)
+    -- Deserialize UTxO entries (header is 56 bytes: 4+4+6*8)
     IO.println s!"[snapshot] Loading {utxoCount} UTxO entries from {filename}..."
-    let utxo := deserializeUTxOEntries data 56 utxoCount
+    let (utxo, afterUtxo) := deserializeUTxOEntries data 56 utxoCount
+
+    -- Read v4 pool/delegation sections (if present)
+    let (pools, delegation) ←
+      if version == 4 && afterUtxo + 8 <= data.size then do
+        -- Pool registrations
+        let poolCount := decodeNat64 data afterUtxo
+        let (poolList, afterPools) := deserializePoolEntries data (afterUtxo + 8) poolCount
+        -- Delegation entries
+        let (delegList, afterDelegs) :=
+          if afterPools + 8 <= data.size then
+            let delegCount := decodeNat64 data afterPools
+            deserializeDelegationEntries data (afterPools + 8) delegCount
+          else ([], afterPools)
+        -- Registered stake keys
+        let stakeKeys :=
+          if afterDelegs + 8 <= data.size then
+            let keyCount := decodeNat64 data afterDelegs
+            (deserializeStakeKeys data (afterDelegs + 8) keyCount).1
+          else []
+        IO.println s!"[snapshot] v4: loaded {poolList.length} pools, {delegList.length} delegations, {stakeKeys.length} stake keys"
+        pure ({ PoolState.empty with registeredPools := poolList },
+              { DelegationState.empty with delegations := delegList, registeredStakeKeys := stakeKeys })
+      else
+        pure (PoolState.empty, DelegationState.empty)
 
     let ledgerState := {
       LedgerState.initial with
       lastSlot := slot,
       lastBlockNo := blockNo,
       utxo := utxo,
+      pools := pools,
+      delegation := delegation,
       protocolParams := { ProtocolParamsState.mainnetDefaults with epoch := epoch }
     }
-    IO.println s!"[snapshot] Loaded: slot={slot}, block={blockNo}, UTxO={utxo.size} entries"
+    IO.println s!"[snapshot] Loaded: slot={slot}, block={blockNo}, UTxO={utxo.size} entries, pools={pools.registeredPools.length}, delegations={delegation.delegations.length}"
     return some ledgerState
   catch e =>
     IO.println s!"[snapshot] Failed to load {filename}: {e}"

@@ -724,7 +724,9 @@ def validateBlockHeader (shelleyInfo : ShelleyBlockHeader)
           pure (computed == vrf.output)
         else pure true
         let slotBytes := natToBE8 shelleyInfo.slot
-        let alpha := if epochNonce.size > 0 then epochNonce ++ slotBytes else slotBytes
+        -- Praos VRF input: epochNonce || 0x4C (leader tag) || BE(slot)
+        let leaderTag := ByteArray.mk #[0x4C]
+        let alpha := if epochNonce.size > 0 then epochNonce ++ leaderTag ++ slotBytes else leaderTag ++ slotBytes
         let vrfCryptoOk ← vrf_verify_ffi shelleyInfo.vrfVKey alpha vrf.proof
         if hashOk || vrfCryptoOk then do
           ref.modify (·.updateConsensus fun c => { c with vrfValid := c.vrfValid + 1 })

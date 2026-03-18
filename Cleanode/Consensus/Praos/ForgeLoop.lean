@@ -196,9 +196,11 @@ def forgeStep (stateRef : IO.Ref ForgeState)
   -- Compute KES period
   let kesPeriod := state.clock.slotKESPeriod currentSlot
 
-  -- Select transactions from mempool
+  -- Prune time-expired mempool entries and select transactions
+  let nowMs ← getUnixTimeMs
+  mempoolRef.modify (·.prune nowMs.toNat)
   let mempool ← mempoolRef.get
-  let blockBody := Cleanode.Consensus.Praos.TxSelection.selectTransactions mempool 90112
+  let blockBody := Cleanode.Consensus.Praos.TxSelection.selectTransactions mempool 90112 currentSlot
 
   stateRef.modify fun s => { s with leaderChecks := s.leaderChecks + 1 }
 

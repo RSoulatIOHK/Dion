@@ -53,11 +53,15 @@ private def feeDensity (fee size : Nat) : Nat :=
 
 /-- Select transactions from the mempool for inclusion in a new block.
     maxBodySize: maximum block body size in bytes
+    currentSlot: current slot number (used to filter expired transactions)
     Returns the selected transactions and their total size/fees. -/
 def selectTransactions (mempool : Mempool) (maxBodySize : Nat)
-    : BlockBody :=
-  -- Get available entries from mempool
-  let available := mempool.entries
+    (currentSlot : Nat := 0) : BlockBody :=
+  -- Get available entries from mempool, filtering out expired txs
+  let available := mempool.entries.filter fun e =>
+    match e.transaction.body.ttl with
+    | some ttl => ttl >= currentSlot
+    | none => true  -- No TTL = never expires
   -- Sort by fee density (descending) - higher fee density first
   let sorted := available.toArray
     |>.qsort (fun a b =>

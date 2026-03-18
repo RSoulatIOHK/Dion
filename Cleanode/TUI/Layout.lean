@@ -145,8 +145,8 @@ def renderHeader (state : TUIState) (width : Nat) (nowMs : Nat) : List String :=
   ]
   -- Interleave logo and info: logo on left, info on right
   let headerLines := List.range 5 |>.map fun i =>
-    let logo := (logoLines.get? i).getD ""
-    let info := (infoLines.get? i).getD ""
+    let logo := (logoLines[i]?).getD ""
+    let info := (infoLines[i]?).getD ""
     -- Logo is ~23 chars wide; pad to 26 then append info
     let logoPadded := padRight logo 30  -- Note: ANSI codes inflate length, use raw padding
     boxLine (s!"{logoPadded}  {info}") width
@@ -351,7 +351,7 @@ private def errorToCheckIdx (err : String) : Option Nat :=
   else if err.startsWith "NativeScriptFailure" then some 9
   else if err.startsWith "ScriptFailure" then some 10
   else if err.startsWith "CollateralNotFound" || err.startsWith "CollateralIsScriptLocked"
-       || err.startsWith "InsufficientCollateral" || err.startsWith "CollateralOverlap" then some 11
+       || err.startsWith "InsufficientCollateral" || err.startsWith "NoCollateral" then some 11
   else if err.startsWith "InvalidScriptDataHash" then some 12
   else if err.startsWith "InputSetEmpty" then some 13
   else if err.startsWith "OutputTooBig" then some 14
@@ -581,7 +581,7 @@ def renderConsensusDetail (state : TUIState) (width : Nat) (height : Nat) : List
     - Separator
     - Status bar — 3 rows
     - Bottom border -/
-def renderFrame (state : TUIState) (nowMs : Nat) (width : Nat := 160) (height : Nat := 42) : String :=
+def renderFrame (state : TUIState) (nowMs : Nat) (width : Nat := 160) (_height : Nat := 42) : String :=
   let leftWidth := width / 2
   let rightWidth := width - leftWidth
   let panelHeight := 14
@@ -608,18 +608,18 @@ def renderFrame (state : TUIState) (nowMs : Nat) (width : Nat := 160) (height : 
       | none => List.replicate fullHeight ""
     -- Top section: 3 columns (blocks | mempool | block info)
     let topRows := List.range panelHeight |>.map fun i =>
-      let l := (blockLines.get? i).getD ""
-      let m := (midLines.get? i).getD ""
-      let r := (rightLines.get? i).getD ""
+      let l := (blockLines[i]?).getD ""
+      let m := (midLines[i]?).getD ""
+      let r := (rightLines[i]?).getD ""
       triLine l m r leftWidth rightWidth col3w
     -- Mid separator: left two merge, right continues with content
-    let midSepContent := (rightLines.get? panelHeight).getD ""
+    let midSepContent := (rightLines[panelHeight]?).getD ""
     let midSep := midSepMergeLeftWithContent leftWidth rightWidth midSepContent col3w
     -- Bottom section: peers (full normal width) | block info continues
     let peerLines := renderPeerPanel state.peers width peerHeight
     let bottomRows := List.range peerHeight |>.map fun i =>
-      let l := (peerLines.get? i).getD ""
-      let r := (rightLines.get? (panelHeight + 1 + i)).getD ""
+      let l := (peerLines[i]?).getD ""
+      let r := (rightLines[panelHeight + 1 + i]?).getD ""
       splitLineWide l r width col3w
     -- Status bar at extended width
     let statusLines := renderStatusBar state totalW
@@ -638,8 +638,8 @@ def renderFrame (state : TUIState) (nowMs : Nat) (width : Nat := 160) (height : 
       | .consensusFull => renderConsensusDetail state rightWidth panelHeight
       | _ => renderMempoolPanel state rightWidth panelHeight
     let panelRows := List.range panelHeight |>.map fun i =>
-      let left := (blockLines.get? i).getD ""
-      let right := (rightLines.get? i).getD ""
+      let left := (blockLines[i]?).getD ""
+      let right := (rightLines[i]?).getD ""
       splitLine left right leftWidth rightWidth
     let peerLines := renderPeerPanel state.peers width peerHeight
     let peerRows := peerLines.map fun line => boxLine line width

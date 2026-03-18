@@ -225,15 +225,40 @@ private def findScriptByHashIO (scripts : List (ByteArray × PlutusVersion))
       return some (scriptBytes, version)
   return none
 
+/-- Lexicographic comparison of ByteArrays. -/
+private def compareByteArray (a b : ByteArray) : Ordering :=
+  go 0 (min a.size b.size) a b
+where
+  go (i : Nat) (len : Nat) (a b : ByteArray) : Ordering :=
+    if i >= len then compare a.size b.size
+    else
+      let va := a[i]!
+      let vb := b[i]!
+      if va < vb then .lt
+      else if va > vb then .gt
+      else go (i + 1) len a b
+
+/-- Lexicographic comparison of TxInputs. -/
+private def compareTxInput (a b : TxInput) : Ordering :=
+  match compareByteArray a.txId b.txId with
+  | .eq => compare a.outputIndex b.outputIndex
+  | ord => ord
+
+/-- Sort inputs lexicographically (redeemer Spend(i) refers to sorted position). -/
+private def sortInputs (inputs : List TxInput) : List TxInput :=
+  inputs.mergeSort (fun a b => compareTxInput a b != .gt)
+
 /-- Resolve the script for a Spend redeemer.
-    1. Look up the spent UTxO output
+    1. Look up the spent UTxO output (using sorted input list)
     2. Extract script hash from the address
     3. Find matching script in witnesses or reference inputs by hash -/
 private def resolveSpendScriptIO (body : TransactionBody) (witnesses : WitnessSet)
     (utxo : UTxOSet) (index : Nat) :
     IO (Option (ByteArray × PlutusVersion × Option ByteArray × TxInput)) := do
-  if h : index < body.inputs.length then
-    let inp := body.inputs[index]
+  -- Sort inputs lexicographically: redeemer Spend(i) refers to sorted position
+  let sorted := sortInputs body.inputs
+  if h : index < sorted.length then
+    let inp := sorted[index]
     let id : UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
     match utxo.lookup id with
     | none => return none
@@ -261,10 +286,12 @@ private def resolveSpendScriptIO (body : TransactionBody) (witnesses : WitnessSe
           return some (scriptBytes, version, datum, inp)
   else return none
 
-/-- Resolve the script for a Mint redeemer by policy ID hash matching. -/
+/-- Resolve the script for a Mint redeemer by policy ID hash matching (sorted). -/
 private def resolveMintScriptIO (body : TransactionBody) (witnesses : WitnessSet)
     (index : Nat) : IO (Option (ByteArray × PlutusVersion × ByteArray)) := do
-  let policyIds := body.mint.map (·.policyId) |>.eraseDups
+  -- Sort policy IDs lexicographically: redeemer Mint(i) refers to sorted position
+  let policyIds := body.mint.map (·.policyId) |>.eraseDups |>.mergeSort
+    (fun a b => compareByteArray a b != .gt)
   if h : index < policyIds.length then
     let policyId := policyIds[index]
     let allScripts := allScriptsFromWitness witnesses

@@ -436,7 +436,7 @@ def testChainSync (host : String) (port : UInt16) (proposal : HandshakeMessage) 
                                                     | some (.MsgAwaitReply) => do
                                                         IO.println "✓ Caught up! Waiting for new blocks..."
                                                         break
-                                                    | some (.MsgRollBackward point tip) => do
+                                                    | some (.MsgRollBackward point _tip) => do
                                                         IO.println s!"✓ Rollback to slot {point.slot}"
                                                     | some other => do
                                                         IO.println s!"✓ Received: {repr other}"
@@ -2017,7 +2017,9 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
     | some ls => ls
     | none => { Cleanode.Ledger.State.LedgerState.initial with
         treasury := if networkName == "Preprod" then 1766738361646723 else 0
-        reserves := if networkName == "Preprod" then 13181724972929461 else 0 }
+        reserves := if networkName == "Preprod" then 13181724972929461 else 0
+        protocolParams := { Cleanode.Ledger.State.ProtocolParamsState.mainnetDefaults with
+          networkId := if networkName == "Preprod" then 0 else 1 } }
   let ledgerStateRef ← IO.mkRef initialLedgerState
 
   -- Shared consensus state (epoch nonces, stake snapshots, chain selection)
@@ -2219,7 +2221,9 @@ def runNode (config : NodeConfig) : IO Unit := do
         IO.println "[replay] No UTxO snapshot found, replaying ImmutableDB..."
         let initialState := { Cleanode.Ledger.State.LedgerState.initial with
           treasury := if networkName == "Preprod" then 1766738361646723 else 0
-          reserves := if networkName == "Preprod" then 13181724972929461 else 0 }
+          reserves := if networkName == "Preprod" then 13181724972929461 else 0
+          protocolParams := { Cleanode.Ledger.State.ProtocolParamsState.mainnetDefaults with
+            networkId := if networkName == "Preprod" then 0 else 1 } }
         let finalState ← Cleanode.Mithril.Replay.replayImmutableDB syncResult.dbPath initialState
           Cleanode.Mithril.Replay.defaultReplayReporter 0
         IO.println s!"[replay] UTxO set reconstructed: {finalState.utxo.size} entries"
@@ -2280,8 +2284,10 @@ def runReplay (paths : List String) : IO Unit := do
   allFiles := allFiles.reverse
   IO.println s!"Replaying {allFiles.length} block(s)...\n"
 
-  -- Minimal ledger state with default preprod params
-  let state := Cleanode.Ledger.State.LedgerState.initial
+  -- Minimal ledger state with preprod params
+  let state : Cleanode.Ledger.State.LedgerState := { Cleanode.Ledger.State.LedgerState.initial with
+    protocolParams := { Cleanode.Ledger.State.ProtocolParamsState.mainnetDefaults with
+      maxValueSize := 5000, networkId := 0 } }
 
   for file in allFiles do
     let blockBytes ← IO.FS.readBinFile file
@@ -2340,6 +2346,52 @@ def runReplay (paths : List String) : IO Unit := do
           match Cleanode.Ledger.Validation.validateNativeScripts tx.witnesses signerKeyHashes slot with
           | .ok () => IO.println s!"    ✓ NATIVE SCRIPTS"
           | .error e => IO.println s!"    ✗ NATIVE SCRIPTS: {repr e}"
+
+          -- Output value size check (maxValueSize)
+          let mut outputSizeOk := true
+          for (oi, output) in (List.range tx.body.outputs.length).zip tx.body.outputs do
+            let sz := output.rawValueBytes.size
+            if sz > 0 && sz > state.protocolParams.maxValueSize then
+              IO.println s!"    ✗ OUTPUT SIZE: idx={oi} size={sz} > max={state.protocolParams.maxValueSize}"
+              outputSizeOk := false
+          if outputSizeOk then
+            IO.println s!"    ✓ OUTPUT SIZE (max rawValue={tx.body.outputs.foldl (fun acc o => max acc o.rawValueBytes.size) 0})"
+
+          -- Extraneous script witness check (withdrawal + cert sources)
+          let mut neededHashes : List ByteArray := []
+          for asset in tx.body.mint do
+            neededHashes := asset.policyId :: neededHashes
+          for (rewardAddr, _) in tx.body.withdrawals do
+            if rewardAddr.size >= 29 && rewardAddr[0]!.toNat &&& 0x10 != 0 then
+              neededHashes := (rewardAddr.extract 1 29) :: neededHashes
+          let certRedeemerIdx := tx.witnesses.redeemers.filterMap fun r =>
+            if r.tag == .Cert then some r.index else none
+          for (ci, cert) in (List.range tx.body.certificates.length).zip tx.body.certificates do
+            if certRedeemerIdx.contains ci then
+              let h := match cert with
+                | .stakeKeyDeregistration h | .stakeDelegation h _
+                | .conwayRegistration h _ | .conwayDeregistration h _
+                | .stakeRegDelegation h _ _ | .voteRegDelegation h _ _
+                | .stakeVoteRegDelegation h _ _ _ | .stakeKeyRegistration h => some h
+                | _ => none
+              match h with | some h => neededHashes := h :: neededHashes | none => pure ()
+          let mut scriptOk := true
+          for scriptBytes in tx.witnesses.plutusV1Scripts ++ tx.witnesses.plutusV2Scripts ++ tx.witnesses.plutusV3Scripts do
+            let scriptHash ← blake2b_224 scriptBytes
+            -- Check non-UTxO sources (minting + withdrawal + cert); UTxO spending needs full state
+            if !neededHashes.any (· == scriptHash) then
+              IO.println s!"    ⚠ SCRIPT WITNESS: hash={bytesToHex scriptHash} not in non-UTxO needed set (may match spending input)"
+              scriptOk := false
+          if scriptOk && !(tx.witnesses.plutusV1Scripts ++ tx.witnesses.plutusV2Scripts ++ tx.witnesses.plutusV3Scripts).isEmpty then
+            IO.println s!"    ✓ SCRIPT WITNESSES (all matched non-UTxO sources)"
+
+          -- Datum presence check
+          let mut datumInfo : List String := []
+          for (oi, output) in (List.range tx.body.outputs.length).zip tx.body.outputs do
+            if output.datum.isSome then datumInfo := s!"out[{oi}]:hash" :: datumInfo
+            if output.inlineDatum.isSome then datumInfo := s!"out[{oi}]:inline" :: datumInfo
+          if !datumInfo.isEmpty then
+            IO.println s!"    ℹ DATUMS: {datumInfo} witness_datums={tx.witnesses.datums.length}"
 
           -- Plutus script check
           let txHash ← blake2b_256 tx.body.rawBytes

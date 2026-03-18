@@ -96,9 +96,12 @@ inductive ValidationError where
   | NonDisjointRefInputs (txHash : ByteArray) (idx : Nat)  -- #384
   -- Phase 2: Witness/Script checks (#385-391)
   | ExtraneousScriptWitness (scriptHash : ByteArray)  -- #385
+  | MissingRequiredScript (scriptHash : ByteArray)   -- #385 (missing side)
   | MetadataHashMismatch (detail : String)  -- #386
   | ValidationTagMismatch (declared actual : Bool)  -- #387
   | ExtraRedeemer (tag : String) (idx : Nat)  -- #388
+  | MissingRedeemer (tag : String) (idx : Nat)      -- #388 (missing side)
+  | MissingRequiredDatum (datumHash : ByteArray)     -- datum preimage missing
   | ExUnitsTooBig (mem steps maxMem maxSteps : Nat)  -- #389
   | UnspendableUTxONoDatum (txHash : ByteArray) (idx : Nat)  -- #390
   -- Certificate/delegation checks (#391-395)
@@ -142,9 +145,12 @@ instance : Repr ValidationError where
     | .IncorrectTotalCollateral d a, _ => s!"IncorrectTotalCollateral(declared={d}, actual={a})"
     | .NonDisjointRefInputs _ idx, _ => s!"NonDisjointRefInputs(idx={idx})"
     | .ExtraneousScriptWitness _, _ => "ExtraneousScriptWitness"
+    | .MissingRequiredScript _, _ => "MissingRequiredScript"
     | .MetadataHashMismatch d, _ => s!"MetadataHashMismatch({d})"
     | .ValidationTagMismatch d a, _ => s!"ValidationTagMismatch(declared={d}, actual={a})"
     | .ExtraRedeemer t i, _ => s!"ExtraRedeemer(tag={t}, idx={i})"
+    | .MissingRedeemer t i, _ => s!"MissingRedeemer(tag={t}, idx={i})"
+    | .MissingRequiredDatum _, _ => "MissingRequiredDatum"
     | .ExUnitsTooBig m s mm ms, _ => s!"ExUnitsTooBig(mem={m}, steps={s}, maxMem={mm}, maxSteps={ms})"
     | .UnspendableUTxONoDatum _ idx, _ => s!"UnspendableUTxONoDatum(idx={idx})"
     | .Phase2CollateralInsufficient d, _ => s!"Phase2CollateralInsufficient({d})"
@@ -807,6 +813,58 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
     for sh in providedSet do
       if !neededSet.any (· == sh) then
         return .error (.ExtraneousScriptWitness sh)
+
+    -- Check for missing scripts: needed but not provided
+    for sh in neededSet do
+      if !providedSet.any (· == sh) then
+        return .error (.MissingRequiredScript sh)
+
+  -- 17b. Datum preimage check: each script-locked input with a datum hash
+  -- must have its preimage in the witness set datums.
+  do
+    let mut providedDatumHashes : List ByteArray := []
+    for d in witnesses.datums do
+      let h ← blake2b_256 d
+      providedDatumHashes := h :: providedDatumHashes
+    -- Also include inline datums from inputs (they don't need a preimage)
+    for inp in body.inputs do
+      let id : UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
+      match state.utxo.lookup id with
+      | some output =>
+        if isScriptLockedAddress output.address then
+          match output.datum with
+          | some datumHash =>
+            -- Datum hash present — need preimage (unless inline datum is also present)
+            if output.inlineDatum.isNone then
+              if !providedDatumHashes.any (· == datumHash) then
+                return .error (.MissingRequiredDatum datumHash)
+          | none => pure ()
+      | none => pure ()
+
+  -- 17c. Missing redeemer check: each script action must have a redeemer.
+  do
+    let sortedInputsForRedeemer := sortInputs body.inputs
+    let sortedMintPoliciesForRedeemer := (body.mint.map (·.policyId)).eraseDups |>.mergeSort
+      (fun a b => compareByteArray a b != .gt)
+    -- Check spend redeemers: for each sorted script-locked input, need Spend(i)
+    for (i, inp) in (List.range sortedInputsForRedeemer.length).zip sortedInputsForRedeemer do
+      let id : UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
+      match state.utxo.lookup id with
+      | some output =>
+        if isScriptLockedAddress output.address then
+          if !witnesses.redeemers.any (fun r => r.tag == .Spend && r.index == i) then
+            return .error (.MissingRedeemer "Spend" i)
+      | none => pure ()
+    -- Check mint redeemers: every minting policy is a script, needs Mint(i)
+    for (i, _pid) in (List.range sortedMintPoliciesForRedeemer.length).zip sortedMintPoliciesForRedeemer do
+      if !witnesses.redeemers.any (fun r => r.tag == .Mint && r.index == i) then
+        return .error (.MissingRedeemer "Mint" i)
+    -- Check reward redeemers: for script-credential withdrawals, need Reward(i)
+    let sortedWithdrawals := body.withdrawals.mergeSort (fun a b => compareByteArray a.1 b.1 != .gt)
+    for (i, (rewardAddr, _)) in (List.range sortedWithdrawals.length).zip sortedWithdrawals do
+      if rewardAddr.size > 0 && (rewardAddr[0]! &&& 0x10) != 0 then
+        if !witnesses.redeemers.any (fun r => r.tag == .Reward && r.index == i) then
+          return .error (.MissingRedeemer "Reward" i)
 
   -- 18. #387: Validate isValid flag matches script execution outcome.
   -- If isValid = false but all scripts actually pass, or

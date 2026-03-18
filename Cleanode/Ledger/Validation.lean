@@ -311,6 +311,12 @@ def validateCollateral (utxo : UTxOSet) (body : TransactionBody)
       if !output.nativeAssets.isEmpty then
         throw (.CollateralContainsNonADA inp.txId inp.outputIndex)
       totalCollateralValue := totalCollateralValue + output.amount
+  -- 3b. Check collateral return doesn't exceed collateral inputs
+  match body.collateralReturn with
+  | some ret =>
+    if ret.amount > totalCollateralValue then
+      throw (.InsufficientCollateral totalCollateralValue ret.amount)
+  | none => pure ()
   -- 4. Check sufficient collateral
   let providedCollateral := match body.totalCollateral with
     | some tc => tc
@@ -622,6 +628,12 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
   for refInp in body.referenceInputs do
     if body.inputs.any (fun inp => inp.txId == refInp.txId && inp.outputIndex == refInp.outputIndex) then
       return .error (.NonDisjointRefInputs refInp.txId refInp.outputIndex)
+
+  -- 6e. Reference inputs must exist in UTxO
+  for refInp in body.referenceInputs do
+    let id : UTxOId := { txHash := refInp.txId, outputIndex := refInp.outputIndex }
+    if !state.utxo.contains id then
+      return .error (.InputNotFound refInp.txId refInp.outputIndex)
 
   -- 7. Withdrawal validation: skipped — reward accounts are not populated during sync.
   -- The balance check (step 5) already accounts for withdrawal amounts on the available side.

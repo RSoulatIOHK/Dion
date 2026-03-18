@@ -72,10 +72,12 @@ def validateFee (params : FeeParams) (body : TransactionBody) (witnesses : Witne
   let required := totalMinFee params txSize witnesses.redeemers
   body.fee >= required
 
-/-- Calculate the minimum ADA required for a UTxO (min-ada-per-utxo) -/
-def minAdaPerUTxO (outputSize : Nat) (coinsPerUTxOByte : Nat := 4310) : Nat :=
-  -- Babbage formula: max(lovelace, coinsPerUTxOByte * (utxoEntrySizeWithoutVal + 160 + outputSize))
-  coinsPerUTxOByte * (160 + outputSize)
+/-- Calculate the minimum ADA required for a UTxO (min-ada-per-utxo).
+    Babbage/Conway formula: coinsPerUTxOByte * (serializedOutputSize + 160)
+    The +160 accounts for the UTxO entry overhead (tx hash + output index in the UTxO map).
+    `serializedOutputSize` is the CBOR-serialized size of the entire output. -/
+def minAdaPerUTxO (serializedOutputSize : Nat) (coinsPerUTxOByte : Nat := 4310) : Nat :=
+  coinsPerUTxOByte * (serializedOutputSize + 160)
 
 -- ====================
 -- = Era-Specific     =

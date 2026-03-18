@@ -91,6 +91,28 @@ def Value.fromNativeAssets (nas : List NativeAsset) : Value :=
   ) (Std.HashMap.emptyWithCapacity : Std.HashMap AssetId Nat)
   { lovelace := 0, assets }
 
+/-- Build a Value from mint entries — positive amounts only (mints, not burns) -/
+def Value.fromMintPositive (nas : List NativeAsset) : Value :=
+  let assets := nas.foldl (fun acc (na : NativeAsset) =>
+    if na.signedAmount > 0 then
+      let aid : AssetId := { policyId := na.policyId, assetName := na.assetName }
+      let cur := acc[aid]?.getD 0
+      acc.insert aid (cur + na.signedAmount.toNat)
+    else acc
+  ) (Std.HashMap.emptyWithCapacity : Std.HashMap AssetId Nat)
+  { lovelace := 0, assets }
+
+/-- Build a Value from mint entries — negative amounts only (burns, as absolute values) -/
+def Value.fromMintNegative (nas : List NativeAsset) : Value :=
+  let assets := nas.foldl (fun acc (na : NativeAsset) =>
+    if na.signedAmount < 0 then
+      let aid : AssetId := { policyId := na.policyId, assetName := na.assetName }
+      let cur := acc[aid]?.getD 0
+      acc.insert aid (cur + (-na.signedAmount).toNat)
+    else acc
+  ) (Std.HashMap.emptyWithCapacity : Std.HashMap AssetId Nat)
+  { lovelace := 0, assets }
+
 /-- Build a Value from withdrawals (lovelace only, summed) -/
 def Value.fromWithdrawals (withdrawals : List (ByteArray × Nat)) : Value :=
   let total := withdrawals.foldl (fun acc (_, amount) => acc + amount) 0

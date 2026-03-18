@@ -554,11 +554,13 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
       return .error (.DoubleSpend inp.txId inp.outputIndex)
     seen := id :: seen
 
-  -- 5. Balance validation: inputs + withdrawals + refunds >= outputs + fee + deposits
-  -- Note: native asset balance check is deferred until UTxO set tracks assets
-  -- from ImmutableDB replay (snapshot currently strips native assets).
+  -- 5. Balance validation: inputs + mint + withdrawals + refunds >= outputs + fee + deposits + burns
+  -- Full multiasset balance: for each (policyId, assetName),
+  --   inputs + mintPositive + withdrawals + refunds >= outputs + fee + deposits + mintNegative
   let inputVal := totalInputValue state.utxo body.inputs
   let withdrawalVal := Value.fromWithdrawals body.withdrawals
+  let mintPositive := Value.fromMintPositive body.mint
+  let mintNegative := Value.fromMintNegative body.mint
   -- Compute certificate deposits and refunds
   let keyDeposit := state.protocolParams.stakeKeyDeposit  -- 2 ADA default
   let mut depositTotal : Nat := 0
@@ -573,15 +575,17 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
     | .voteRegDelegation _ _ deposit => depositTotal := depositTotal + deposit
     | .stakeVoteRegDelegation _ _ _ deposit => depositTotal := depositTotal + deposit
     | _ => pure ()
-  let availableAda := inputVal.lovelace + withdrawalVal.lovelace + refundTotal
+  let available := inputVal + mintPositive + withdrawalVal + Value.lovelaceOnly refundTotal
   let outputVal := totalOutputValue body.outputs
-  let requiredAda := outputVal.lovelace + body.fee + depositTotal
-  if availableAda < requiredAda then
-    return .error (.InsufficientFunds requiredAda availableAda)
+  let required := outputVal + mintNegative + Value.lovelaceOnly (body.fee + depositTotal)
+  if !Value.geq available required then
+    return .error (.InsufficientFunds required.lovelace available.lovelace)
 
   -- 6. Min UTxO check: each output must carry enough lovelace
+  -- Uses serialized output size (rawOutputBytes captured during parsing)
   for (idx, output) in (List.range body.outputs.length).zip body.outputs do
-    let minAda := minAdaPerUTxO output.address.size state.protocolParams.coinsPerUTxOByte
+    let outputSize := if output.rawOutputBytes.size > 0 then output.rawOutputBytes.size else output.address.size
+    let minAda := minAdaPerUTxO outputSize state.protocolParams.coinsPerUTxOByte
     if output.amount < minAda then
       return .error (.OutputTooSmall idx output.amount minAda)
 

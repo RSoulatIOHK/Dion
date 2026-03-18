@@ -63,7 +63,8 @@ instance : Repr TxInput where
 structure NativeAsset where
   policyId : ByteArray    -- Policy ID (28 bytes)
   assetName : ByteArray   -- Asset name (up to 32 bytes)
-  amount : Nat            -- Token amount
+  amount : Nat            -- Token amount (absolute value for outputs; for mint, use signedAmount)
+  signedAmount : Int := amount  -- Signed amount (negative = burn, used for minting field)
 
 instance : Repr NativeAsset where
   reprPrec a _ := s!"NativeAsset(policy={a.policyId.size}B, name={a.assetName.size}B, amount={a.amount})"
@@ -77,6 +78,7 @@ structure TxOutput where
   scriptRef : Option ByteArray    -- Reference script from output key 4 (Babbage+)
   nativeAssets : List NativeAsset  -- Native tokens (non-ADA assets)
   rawValueBytes : ByteArray := ByteArray.empty  -- Raw CBOR of the value field (key 1)
+  rawOutputBytes : ByteArray := ByteArray.empty -- Raw CBOR of the entire output (for minUTxO)
 
 instance : Repr TxOutput where
   reprPrec o _ := s!"TxOutput(addr={o.address.size}B, amount={o.amount}, assets={o.nativeAssets.length})"
@@ -347,7 +349,8 @@ partial def parseTxOutputC (c : Cursor) : Option (CResult TxOutput) := do
               | some after => cur := after
               | none => break
 
-    some { value := { address, amount, datum := datumHash, inlineDatum, scriptRef, nativeAssets, rawValueBytes }, cursor := cur }
+    let rawOutputBytes := extractBetween c cur
+    some { value := { address, amount, datum := datumHash, inlineDatum, scriptRef, nativeAssets, rawValueBytes, rawOutputBytes }, cursor := cur }
   else do  -- Array format (pre-Babbage)
     let r1 ← CborCursor.decodeArrayHeader c
     if r1.value < 2 then none
@@ -371,12 +374,27 @@ partial def parseTxOutputC (c : Cursor) : Option (CResult TxOutput) := do
         amount := r3.value
 
       let mut cur := r3.cursor
-      for _ in [2:r1.value] do
+      -- Alonzo array format: [address, value, datum_hash?]
+      -- Parse the 3rd element as a 32-byte datum hash if present
+      let mut datumHash : Option ByteArray := none
+      if r1.value >= 3 then
+        match CborCursor.decodeBytes cur with
+        | some hashR =>
+          if hashR.value.size == 32 then
+            datumHash := some hashR.value
+          cur := hashR.cursor
+        | none =>
+          match skipValue cur with
+          | some after => cur := after
+          | none => pure ()
+      -- Skip any remaining elements beyond the 3rd
+      for _ in [3:r1.value] do
         match skipValue cur with
         | some after => cur := after
         | none => break
 
-      some { value := { address := r2.value, amount, datum := none, inlineDatum := none, scriptRef := none, nativeAssets }, cursor := cur }
+      let rawOutputBytes := extractBetween c cur
+      some { value := { address := r2.value, amount, datum := datumHash, inlineDatum := none, scriptRef := none, nativeAssets, rawOutputBytes }, cursor := cur }
 
 /-- Parse a single redeemer from CBOR array [tag, index, data, ex_units] -/
 partial def parseRedeemerC (c : Cursor) : Option (CResult Redeemer) := do
@@ -928,22 +946,23 @@ partial def parseTransactionBodyMapC (c : Cursor) : Option (CResult TransactionB
                             | none => break
                             | some nameR =>
                                 -- Amounts can be negative (burns) — major type 1 in CBOR.
-                                -- Parse positive or negative; for counting purposes amount=0 is fine.
-                                let (amount, afterAmt) :=
+                                let (amount, signedAmt, afterAmt) :=
                                   match CborCursor.decodeUInt nameR.cursor with
-                                  | some amtR => (amtR.value, amtR.cursor)
+                                  | some amtR => (amtR.value, (amtR.value : Int), amtR.cursor)
                                   | none =>
                                     -- Try negative integer (major type 1): value = -1 - n
                                     match CborCursor.decodeHead nameR.cursor with
                                     | some h =>
-                                      if h.value.1 == 1 then (0, h.cursor)
+                                      if h.value.1 == 1 then
+                                        let magnitude := h.value.2 + 1
+                                        (magnitude, -(magnitude : Int), h.cursor)
                                       else match skipValue nameR.cursor with
-                                        | some after => (0, after)
-                                        | none => (0, nameR.cursor)
+                                        | some after => (0, 0, after)
+                                        | none => (0, 0, nameR.cursor)
                                     | _ => match skipValue nameR.cursor with
-                                        | some after => (0, after)
-                                        | none => (0, nameR.cursor)
-                                mint := { policyId := policyR.value, assetName := nameR.value, amount } :: mint
+                                        | some after => (0, 0, after)
+                                        | none => (0, 0, nameR.cursor)
+                                mint := { policyId := policyR.value, assetName := nameR.value, amount, signedAmount := signedAmt } :: mint
                                 cur := afterAmt
         | 10 => do  -- Script data hash
             match CborCursor.decodeBytes cur with

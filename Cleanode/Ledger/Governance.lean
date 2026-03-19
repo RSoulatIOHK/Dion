@@ -1,4 +1,5 @@
 import Std.Data.HashMap
+import Cleanode.Network.CborCursor
 
 /-!
 # Conway Governance State
@@ -179,6 +180,40 @@ instance : Repr VoteEntry where
   reprPrec v _ := s!"VoteEntry({repr v.voter}, {repr v.vote})"
 
 -- ====================
+-- = Param Updates    =
+-- ====================
+
+/-- Sparse protocol parameters update (all fields optional).
+    Only the fields present in the on-chain governance action are populated.
+    Conway CDDL: pparams_update = {* uint => any} -/
+structure ProtocolParamsUpdate where
+  maxTxExUnits    : Option (Nat × Nat) := none  -- key 17
+  maxBlockExUnits : Option (Nat × Nat) := none  -- key 18
+  maxTxSize       : Option Nat         := none  -- key 2
+  maxBlockSize    : Option Nat         := none  -- key 13 (maxBBSize)
+  minFeeA         : Option Nat         := none  -- key 0
+  minFeeB         : Option Nat         := none  -- key 1
+  stakeKeyDeposit : Option Nat         := none  -- key 5
+  poolDeposit     : Option Nat         := none  -- key 6
+  maxValueSize    : Option Nat         := none  -- key 22 (maxValSize)
+  collateralPct   : Option Nat         := none  -- key 25 (collateralPercentage)
+  maxCollateral   : Option Nat         := none  -- key 26 (maxCollateralInputs)
+  govActionDeposit: Option Nat         := none  -- key 37
+  dRepDeposit     : Option Nat         := none  -- key 38
+  deriving Repr
+
+/-- A pending parameter change: the update itself + the epoch it was proposed.
+    Enacted at the epoch boundary AFTER ratification (tracked via votes). -/
+structure PendingParamChange where
+  proposedEpoch : Nat
+  update : ProtocolParamsUpdate
+  actionId : GovActionId
+  /-- True once we've seen enough votes (simplified: set when first SPO votes Yes,
+      or after govActionLifetime epochs — full DRep/CC ratification is #TODO). -/
+  ratified : Bool := false
+  deriving Repr
+
+-- ====================
 -- = Full Gov State   =
 -- ====================
 
@@ -190,6 +225,8 @@ structure GovernanceState where
   proposals : List (GovActionId × GovProposal)
   /-- Accumulated votes on active proposals -/
   votes : List VoteEntry
+  /-- Pending protocol parameter changes from ParameterChangeAction proposals -/
+  pendingParamChanges : List PendingParamChange
   /-- Constitution hash (Blake2b-256 of the constitution document) -/
   constitutionHash : ByteArray
   /-- Constitution script hash (optional guardrail script) -/
@@ -203,6 +240,7 @@ def GovernanceState.empty : GovernanceState :=
     committee := CommitteeState.empty
     proposals := []
     votes := []
+    pendingParamChanges := []
     constitutionHash := ByteArray.mk (Array.replicate 32 0)
     constitutionScriptHash := none }
 
@@ -240,5 +278,141 @@ def GovernanceState.pruneProposals (gs : GovernanceState)
   { gs with
     proposals := gs.proposals.filter (fun (id, _) => !toRemove.any (· == id))
     votes := gs.votes.filter (fun v => !toRemove.any (· == v.actionId)) }
+
+-- ====================
+-- = Param Update CBOR=
+-- ====================
+
+open Cleanode.Network.CborCursor in
+/-- Parse one key-value entry from pparams_update map, return updated acc and next cursor. -/
+private def parsePParamsEntry (kR : CResult Nat) (acc : ProtocolParamsUpdate)
+    : Option (ProtocolParamsUpdate × Cursor) :=
+  match kR.value with
+  | 0  => (decodeUInt kR.cursor).map fun vR => ({ acc with minFeeA := some vR.value }, vR.cursor)
+  | 1  => (decodeUInt kR.cursor).map fun vR => ({ acc with minFeeB := some vR.value }, vR.cursor)
+  | 2  => (decodeUInt kR.cursor).map fun vR => ({ acc with maxTxSize := some vR.value }, vR.cursor)
+  | 5  => (decodeUInt kR.cursor).map fun vR => ({ acc with stakeKeyDeposit := some vR.value }, vR.cursor)
+  | 6  => (decodeUInt kR.cursor).map fun vR => ({ acc with poolDeposit := some vR.value }, vR.cursor)
+  | 13 => (decodeUInt kR.cursor).map fun vR => ({ acc with maxBlockSize := some vR.value }, vR.cursor)
+  | 17 => do  -- maxTxExUnits = [mem, steps]
+    let aR ← decodeArrayHeader kR.cursor
+    let memR ← decodeUInt aR.cursor
+    let stepsR ← decodeUInt memR.cursor
+    some ({ acc with maxTxExUnits := some (memR.value, stepsR.value) }, stepsR.cursor)
+  | 18 => do  -- maxBlockExUnits = [mem, steps]
+    let aR ← decodeArrayHeader kR.cursor
+    let memR ← decodeUInt aR.cursor
+    let stepsR ← decodeUInt memR.cursor
+    some ({ acc with maxBlockExUnits := some (memR.value, stepsR.value) }, stepsR.cursor)
+  | 22 => (decodeUInt kR.cursor).map fun vR => ({ acc with maxValueSize := some vR.value }, vR.cursor)
+  | 25 => (decodeUInt kR.cursor).map fun vR => ({ acc with collateralPct := some vR.value }, vR.cursor)
+  | 26 => (decodeUInt kR.cursor).map fun vR => ({ acc with maxCollateral := some vR.value }, vR.cursor)
+  | 37 => (decodeUInt kR.cursor).map fun vR => ({ acc with govActionDeposit := some vR.value }, vR.cursor)
+  | 38 => (decodeUInt kR.cursor).map fun vR => ({ acc with dRepDeposit := some vR.value }, vR.cursor)
+  | _  => (skipValue kR.cursor).map fun after => (acc, after)
+
+open Cleanode.Network.CborCursor in
+/-- Parse a Conway pparams_update CBOR map {* uint => any} into a ProtocolParamsUpdate.
+    Only extracts the fields we care about; unknown keys are skipped. -/
+private partial def parsePParamsUpdateMap (cur : Cursor) : ProtocolParamsUpdate :=
+  match decodeMapHeader cur with
+  | none => {}
+  | some mR =>
+    (List.range mR.value).foldl (fun (state : ProtocolParamsUpdate × Cursor) _ =>
+      let (acc, c) := state
+      match decodeUInt c with
+      | none => (acc, c)
+      | some kR => match parsePParamsEntry kR acc with
+        | some (newAcc, next) => (newAcc, next)
+        | none => (acc, c)
+    ) ({}, mR.cursor) |>.1
+
+open Cleanode.Network.CborCursor in
+/-- Try to parse one proposal_procedure and return (parsed update or none, next cursor). -/
+private def parseOneProposal (c : Cursor)
+    : Option (Option ProtocolParamsUpdate × Cursor) :=
+  -- Each proposal_procedure = [deposit, reward_account, gov_action, anchor]
+  match decodeArrayHeader c with
+  | none => skipValue c |>.map (none, ·)
+  | some arrR =>
+    if arrR.value < 4 then skipValue c |>.map (none, ·)
+    else
+      match decodeUInt arrR.cursor with   -- deposit
+      | none => none
+      | some depR =>
+      match decodeBytes depR.cursor with  -- reward_account
+      | none => none
+      | some raR =>
+      match decodeArrayHeader raR.cursor with  -- gov_action array header
+      | none => none
+      | some gaR =>
+      if gaR.value == 0 then skipValue c |>.map (none, ·)
+      else
+        match decodeUInt gaR.cursor with  -- action type tag
+        | none => none
+        | some typeR =>
+        if typeR.value != 0 then
+          -- Not ParameterChange — skip whole proposal_procedure
+          skipValue c |>.map (none, ·)
+        else
+          -- ParameterChange = [0, prev_action_id/null, pparams_update, policy/null]
+          match skipValue typeR.cursor with  -- skip prev_action_id
+          | none => none
+          | some afterPrev =>
+          let update := parsePParamsUpdateMap afterPrev
+          match skipValue afterPrev with    -- skip pparams_update map
+          | none => none
+          | some afterMap =>
+          match skipValue afterMap with     -- skip policy_hash
+          | none => none
+          | some afterGovA =>
+          match skipValue afterGovA with    -- skip anchor
+          | none => none
+          | some afterAnchor => some (some update, afterAnchor)
+
+open Cleanode.Network.CborCursor in
+/-- Parse proposal_procedures raw CBOR, extract all ParameterChangeAction param updates.
+    Conway CDDL: proposal_procedures = #{+ proposal_procedure}
+    proposal_procedure = [deposit, reward_account, gov_action, anchor]
+    gov_action (ParameterChange) = [0, prev_action_id / null, pparams_update, policy_hash / null] -/
+def parseProposalParamUpdates (raw : ByteArray) : List ProtocolParamsUpdate :=
+  let cur := Cursor.mk' raw
+  -- CBOR tag 258 (set) has header 0xd9 0x01 0x02 — skip 3 bytes if present
+  let cur := if cur.data.size > 2 && cur.data[cur.pos]! == 0xd9 then
+    { cur with pos := cur.pos + 3 } else cur
+  match decodeArrayHeader cur with
+  | none => []
+  | some aR =>
+    (List.range aR.value).foldl (fun (state : List ProtocolParamsUpdate × Cursor) _ =>
+      let (acc, c) := state
+      match parseOneProposal c with
+      | some (some u, next) => (u :: acc, next)
+      | some (none,   next) => (acc, next)
+      | none                => (acc, c)
+    ) ([], aR.cursor) |>.1
+
+/-- Add a pending param change from a ParameterChangeAction proposal. -/
+def GovernanceState.addPendingParamChange (gs : GovernanceState)
+    (actionId : GovActionId) (epoch : Nat) (update : ProtocolParamsUpdate)
+    : GovernanceState :=
+  let entry : PendingParamChange := { proposedEpoch := epoch, update, actionId }
+  { gs with pendingParamChanges := entry :: gs.pendingParamChanges }
+
+/-- At epoch boundary: mark proposals as ratified if they received any SPO Yes vote.
+    TODO: implement full DRep + CC ratification per CIP-1694. -/
+def GovernanceState.ratifyPendingChanges (gs : GovernanceState) : GovernanceState :=
+  let spoYesIds := gs.votes.filterMap fun v =>
+    match v.voter, v.vote with
+    | .StakePoolOperator _, .Yes => some v.actionId
+    | _, _ => none
+  let updated := gs.pendingParamChanges.map fun p =>
+    if spoYesIds.any (· == p.actionId) then { p with ratified := true } else p
+  { gs with pendingParamChanges := updated }
+
+/-- Extract all ratified param updates and remove them from pending list. -/
+def GovernanceState.drainRatifiedChanges (gs : GovernanceState)
+    : List ProtocolParamsUpdate × GovernanceState :=
+  let (ready, waiting) := gs.pendingParamChanges.partition (·.ratified)
+  (ready.map (·.update), { gs with pendingParamChanges := waiting })
 
 end Cleanode.Ledger.Governance

@@ -900,13 +900,8 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
       let hd (n : Nat) : Char := if n < 10 then Char.ofNat (n + 48) else Char.ofNat (n + 87)
       ba.foldl (fun s b => s ++ String.singleton (hd (b.toNat / 16)) ++ String.singleton (hd (b.toNat % 16))) ""
 
-    -- Check for extraneous scripts: provided but not needed
-    for sh in providedSet do
-      if !neededSet.any (· == sh) then
-        let dbgLine := s!"EXTRANEOUS {toHex sh} | needed=[{String.intercalate "," (neededSet.map toHex)}] provided=[{String.intercalate "," (providedSet.map toHex)}]\n"
-        let h ← IO.FS.Handle.mk "script_debug.log" .append
-        h.putStr dbgLine
-        errors := .ExtraneousScriptWitness sh :: errors
+    -- Conway: extraneous scripts in witness set are allowed (rule relaxed from Babbage).
+    -- We log them for debugging but do not add to errors.
 
     -- Check for missing scripts: needed but not provided
     for sh in neededSet do

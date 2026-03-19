@@ -156,7 +156,7 @@ structure ProtocolParamsState where
   currentEra : CardanoEra            -- Current era
   -- Alonzo+ parameters
   maxValueSize : Nat := 5000         -- Max serialized Value size in bytes
-  maxTxExUnits : (Nat × Nat) := (14000000, 10000000000) -- (mem, steps) per tx
+  maxTxExUnits : (Nat × Nat) := (14000000, 10000000000) -- (mem, steps) per tx (base; governance actions may update)
   maxBlockExUnits : (Nat × Nat) := (62000000, 20000000000) -- (mem, steps) per block
   collateralPercentage : Nat := 150  -- Collateral percentage (e.g. 150 = 150%)
   maxCollateralInputs : Nat := 3     -- Max number of collateral inputs
@@ -410,7 +410,8 @@ instance : Repr TxApplicationError where
     treasury (key 20), and donation (key 21). -/
 def processGovernance (state : LedgerState) (txHash : ByteArray)
     (body : TransactionBody) : LedgerState :=
-  -- Proposals (key 19): add raw CBOR as a proposal
+  let currentEpoch := state.protocolParams.epoch
+  -- Proposals (key 20): parse ParameterChangeAction entries, store pending param changes
   let gs := match body.proposalProcedures with
     | some rawCbor =>
       let actionId : Governance.GovActionId := { txHash, index := 0 }
@@ -421,7 +422,10 @@ def processGovernance (state : LedgerState) (txHash : ByteArray)
         anchor := none
         rawCbor
       }
-      state.governance.addProposal actionId proposal
+      let gs1 := state.governance.addProposal actionId proposal
+      -- Parse ParameterChangeAction param updates and record as pending
+      let updates := Governance.parseProposalParamUpdates rawCbor
+      updates.foldl (fun g u => g.addPendingParamChange actionId currentEpoch u) gs1
     | none => state.governance
   -- Donation (key 21): add to treasury
   let treasury := match body.donation with
@@ -461,7 +465,27 @@ def applyBlock (state : LedgerState) (slot blockNo : Nat) (blockHash : ByteArray
     s ← applyTransaction s txHash tx
   return { s with lastSlot := slot, lastBlockNo := blockNo, lastBlockHash := blockHash }
 
-/-- Process epoch boundary transition: distribute rewards, retire pools, take snapshot. -/
+/-- Apply a sparse ProtocolParamsUpdate to the current params. -/
+def applyParamUpdate (p : ProtocolParamsState) (u : Governance.ProtocolParamsUpdate)
+    : ProtocolParamsState :=
+  { p with
+    maxTxExUnits    := u.maxTxExUnits.getD    p.maxTxExUnits
+    maxBlockExUnits := u.maxBlockExUnits.getD p.maxBlockExUnits
+    maxTxSize       := u.maxTxSize.getD       p.maxTxSize
+    maxBlockSize    := u.maxBlockSize.getD    p.maxBlockSize
+    feeParams       := { p.feeParams with
+      minFeeA := u.minFeeA.getD p.feeParams.minFeeA
+      minFeeB := u.minFeeB.getD p.feeParams.minFeeB }
+    stakeKeyDeposit := u.stakeKeyDeposit.getD p.stakeKeyDeposit
+    poolDeposit     := u.poolDeposit.getD     p.poolDeposit
+    maxValueSize    := u.maxValueSize.getD    p.maxValueSize
+    collateralPercentage := u.collateralPct.getD p.collateralPercentage
+    maxCollateralInputs  := u.maxCollateral.getD p.maxCollateralInputs
+    govActionDeposit     := u.govActionDeposit.getD p.govActionDeposit
+    dRepDeposit          := u.dRepDeposit.getD      p.dRepDeposit }
+
+/-- Process epoch boundary transition: distribute rewards, retire pools, take snapshot,
+    and enact any ratified governance parameter changes. -/
 def processEpochBoundary (state : LedgerState) (newEpoch : Nat) : LedgerState :=
   -- 1. Distribute epoch rewards (updates rewardAccounts, treasury, reserves; resets counters)
   let state := computeEpochRewards state
@@ -469,10 +493,16 @@ def processEpochBoundary (state : LedgerState) (newEpoch : Nat) : LedgerState :=
   let pools := state.pools.processEpochBoundary newEpoch
   -- 3. Build stake snapshot for the new epoch
   let snapshot := createEpochSnapshot pools state.delegation state.utxo newEpoch
+  -- 4. Ratify pending governance param changes (SPO vote check; full DRep/CC TODO)
+  let gs1 := state.governance.ratifyPendingChanges
+  let (enacted, gs2) := gs1.drainRatifiedChanges
+  let newParams := enacted.foldl applyParamUpdate
+    { state.protocolParams with epoch := newEpoch }
   { state with
     pools := pools,
+    governance := gs2,
     epochBoundary := some snapshot,
-    protocolParams := { state.protocolParams with epoch := newEpoch } }
+    protocolParams := newParams }
 
 /-- Add rewards to a stake credential's reward account -/
 def LedgerState.addReward (state : LedgerState) (stakeCredHash : ByteArray) (amount : Nat) : LedgerState :=

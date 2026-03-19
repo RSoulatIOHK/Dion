@@ -4,6 +4,7 @@ import Cleanode.Ledger.Fee
 import Cleanode.Ledger.Value
 import Cleanode.Plutus.Evaluate
 import Cleanode.Network.Cbor
+import Cleanode.Network.CborCursor
 import Cleanode.Network.Crypto
 import Cleanode.Network.CryptoSpec
 import Cleanode.Network.EraTx
@@ -832,6 +833,27 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
       | .authCommitteeHot true h _ | .resignCommitteeCold true h =>
         scriptsNeeded := h :: scriptsNeeded
       | _ => pure ()
+    -- (e) Voting procedure voters with script credentials (Conway)
+    --     voter = [0,keyhash] / [1,scripthash] / [2,keyhash] / [3,scripthash] / [4,keyhash]
+    --     Types 1 (CC hot script) and 3 (DRep script) require the script.
+    if let some vpBytes := body.votingProcedures then
+      let vp0 := Cleanode.Network.CborCursor.Cursor.mk' vpBytes
+      if let some outerMap := Cleanode.Network.CborCursor.decodeMapHeader vp0 then
+        let mut vpCur := outerMap.cursor
+        for _ in [0:outerMap.value] do
+          -- Each key is a voter: [voter_type, credential]
+          if let some arrR := Cleanode.Network.CborCursor.decodeArrayHeader vpCur then
+            if let some typeR := Cleanode.Network.CborCursor.decodeUInt arrR.cursor then
+              if let some credR := Cleanode.Network.CborCursor.decodeBytes typeR.cursor then
+                if typeR.value == 1 || typeR.value == 3 then
+                  -- Script credential voter: add hash to scriptsNeeded
+                  scriptsNeeded := credR.value :: scriptsNeeded
+                if let some after := Cleanode.Network.CborCursor.skipValue credR.cursor then
+                  vpCur := after
+                else break
+              else break
+            else break
+          else break
 
     -- Compute scripts provided (witness scripts + reference scripts from all inputs)
     -- Script hash = blake2b_224(version_prefix ++ script_bytes)
@@ -874,15 +896,19 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
     let neededSet := scriptsNeeded.eraseDups
     let providedSet := scriptsProvided.eraseDups
 
-    -- Check for extraneous scripts: provided but not needed
-    for sh in providedSet do
-      if !neededSet.any (· == sh) then
-        errors := .ExtraneousScriptWitness sh :: errors
-
-    -- Check for missing scripts: needed but not provided
     let toHex (ba : ByteArray) : String :=
       let hd (n : Nat) : Char := if n < 10 then Char.ofNat (n + 48) else Char.ofNat (n + 87)
       ba.foldl (fun s b => s ++ String.singleton (hd (b.toNat / 16)) ++ String.singleton (hd (b.toNat % 16))) ""
+
+    -- Check for extraneous scripts: provided but not needed
+    for sh in providedSet do
+      if !neededSet.any (· == sh) then
+        let dbgLine := s!"EXTRANEOUS {toHex sh} | needed=[{String.intercalate "," (neededSet.map toHex)}] provided=[{String.intercalate "," (providedSet.map toHex)}]\n"
+        let h ← IO.FS.Handle.mk "script_debug.log" .append
+        h.putStr dbgLine
+        errors := .ExtraneousScriptWitness sh :: errors
+
+    -- Check for missing scripts: needed but not provided
     for sh in neededSet do
       if !providedSet.any (· == sh) then
         let dbgLine := s!"MISSING {toHex sh} | needed=[{String.intercalate "," (neededSet.map toHex)}] provided=[{String.intercalate "," (providedSet.map toHex)}]\n"

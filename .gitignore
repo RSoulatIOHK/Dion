@@ -11,3 +11,4 @@ native/sqlite3.h
 *.log.bak
 tx.raw
 tx.signed
+keys/

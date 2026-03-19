@@ -51,7 +51,9 @@ def mainnetRelayPeers : List (String × UInt16) := [
 
 /-- Known Cardano preprod bootstrap peers -/
 def preprodBootstrapPeers : List (String × UInt16) := [
-  ("preprod-node.world.dev.cardano.org", 30000)
+  ("preprod-node.world.dev.cardano.org", 30000),
+  ("preprod-node.play.dev.cardano.org", 3001),
+  ("backbone.preprod.cardanofoundation.org", 3001)
 ]
 
 /-- Known Cardano preview bootstrap peers -/

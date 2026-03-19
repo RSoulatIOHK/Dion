@@ -173,6 +173,7 @@ inductive ForgeStepResult where
 def forgeStep (stateRef : IO.Ref ForgeState)
     (mempoolRef : IO.Ref Cleanode.Network.Mempool.Mempool)
     (consensusRef : IO.Ref ConsensusState)
+    (ledgerStateRef : Std.Mutex Cleanode.Ledger.State.LedgerState)
     (prevHash : ByteArray) (blockNumber : Nat)
     : IO ForgeStepResult := do
   let state ← stateRef.get
@@ -193,14 +194,25 @@ def forgeStep (stateRef : IO.Ref ForgeState)
     IO.println s!"[forge] Epoch transition detected: {cs.currentEpoch} → {currentEpoch}"
     return .epochTransition currentEpoch
 
-  -- Compute KES period
+  -- Compute KES period and warn if approaching expiry
   let kesPeriod := state.clock.slotKESPeriod currentSlot
+  let certStartPeriod := state.forgeParams.operationalCert.kesPeriod
+  let maxKESEvolutions := 62  -- standard Cardano max KES evolutions
+  let periodsRemaining := if kesPeriod >= certStartPeriod then
+    let used := kesPeriod - certStartPeriod
+    if used >= maxKESEvolutions then 0 else maxKESEvolutions - used
+  else maxKESEvolutions
+  if periodsRemaining == 0 then
+    IO.eprintln s!"[forge] CRITICAL: KES key EXPIRED (cert period {certStartPeriod}, current {kesPeriod}, max evolutions {maxKESEvolutions}) — rotate opcert immediately!"
+  else if periodsRemaining <= 5 then
+    IO.eprintln s!"[forge] WARNING: KES key expiring soon — {periodsRemaining} period(s) remaining (~{periodsRemaining * 36}h). Rotate opcert!"
 
   -- Prune time-expired mempool entries and select transactions
   let nowMs ← getUnixTimeMs
   mempoolRef.modify (·.prune nowMs.toNat)
   let mempool ← mempoolRef.get
-  let blockBody := Cleanode.Consensus.Praos.TxSelection.selectTransactions mempool 90112 currentSlot
+  let maxBlockBodySize := (← ledgerStateRef.atomically (fun ref => ref.get)).protocolParams.maxBlockSize
+  let blockBody := Cleanode.Consensus.Praos.TxSelection.selectTransactions mempool maxBlockBodySize currentSlot
 
   stateRef.modify fun s => { s with leaderChecks := s.leaderChecks + 1 }
 
@@ -308,7 +320,7 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
     let prevHash ← prevHashRef.get
     let blockNo ← blockNoRef.get
 
-    let result ← forgeStep stateRef mempoolRef consensusRef prevHash blockNo
+    let result ← forgeStep stateRef mempoolRef consensusRef ledgerStateRef prevHash blockNo
     match result with
     | .notYet _ => pure ()
     | .notLeader _slot =>

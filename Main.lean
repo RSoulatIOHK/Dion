@@ -956,6 +956,14 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
                       let addrHdr := if out.address.size > 0 then bytesToHex (out.address.extract 0 1) else "?"
                       let addrCred := if out.address.size >= 29 then bytesToHex (out.address.extract 1 29) else "short"
                       lines := lines ++ [s!"    spendInput={bytesToHex inp.txId}#{inp.outputIndex} addrHdr={addrHdr} payCredHash={addrCred}"]
+                  -- Diagnostic: print withdrawal addresses
+                  for (rewardAddr, amt) in tx.body.withdrawals do
+                    let hdr := if rewardAddr.size > 0 then bytesToHex (rewardAddr.extract 0 1) else "?"
+                    let cred := if rewardAddr.size >= 29 then bytesToHex (rewardAddr.extract 1 29) else "short"
+                    lines := lines ++ [s!"    withdrawal=hdr:{hdr} cred:{cred} amt:{amt}"]
+                  -- Diagnostic: print certificates
+                  for cert in tx.body.certificates do
+                    lines := lines ++ [s!"    cert={repr cert}"]
                   -- Diagnostic: print reference input script ref hashes
                   for refInp in tx.body.referenceInputs do
                     let refId : Cleanode.Ledger.UTxO.UTxOId := { txHash := refInp.txId, outputIndex := refInp.outputIndex }

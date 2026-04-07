@@ -1,5 +1,5 @@
 /*
- * Ed25519 Digital Signature FFI for Cleanode
+ * Ed25519 Digital Signature FFI for Dion
  *
  * This implements Ed25519 signature verification using the TweetNaCl reference
  * implementation (public domain). Only verification is strictly needed for a

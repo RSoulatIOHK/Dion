@@ -1,5 +1,5 @@
 #!/bin/bash
-# Comprehensive script to create ALL GitHub issues for Cleanode project
+# Comprehensive script to create ALL GitHub issues for Dion project
 # With full descriptions for every task
 
 set -e
@@ -22,7 +22,7 @@ create_issue() {
 }
 
 echo "========================================"
-echo "Creating ALL Cleanode GitHub Issues"
+echo "Creating ALL Dion GitHub Issues"
 echo "========================================"
 echo ""
 echo "This will create:"
@@ -68,7 +68,7 @@ PI1=$(create_issue \
 - [ ] Chain sync protocol receiving and parsing block headers
 
 ## Motivation
-This PI establishes the foundation for the entire Cleanode project. Without proper infrastructure, crypto primitives, and network layer, we cannot communicate with the Cardano network or parse blockchain data. The formal verification aspects ensure correctness from the ground up.
+This PI establishes the foundation for the entire Dion project. Without proper infrastructure, crypto primitives, and network layer, we cannot communicate with the Cardano network or parse blockchain data. The formal verification aspects ensure correctness from the ground up.
 
 ## Epics in this PI
 This PI Objective contains 4 epics:
@@ -174,7 +174,7 @@ Create the foundational directory structure that organizes code by functional do
 
 ## Directory Structure to Create
 \`\`\`
-Cleanode/
+Dion/
 ├── Network/      # Network layer implementation
 │   ├── Mux/      # Multiplexer/demultiplexer
 │   ├── Protocol/ # Mini-protocols
@@ -212,7 +212,7 @@ Each directory should have:
 
 ## Commands
 \`\`\`bash
-mkdir -p Cleanode/{Network/{Mux,Protocol,Socket},Ledger/{Block,Tx,UTxO},Crypto/{Hash,Sign,VRF},Consensus/Praos,Node/Chain,Config/Genesis}
+mkdir -p Dion/{Network/{Mux,Protocol,Socket},Ledger/{Block,Tx,UTxO},Crypto/{Hash,Sign,VRF},Consensus/Praos,Node/Chain,Config/Genesis}
 \`\`\`" \
     "task,phase-1")
 
@@ -228,17 +228,17 @@ Configure Lake build system with proper package metadata, targets, and dependenc
 
 ## What to Configure
 1. **Package metadata:**
-   - name: \"Cleanode\"
+   - name: \"Dion\"
    - version: \"0.1.0\"
    - description
    - license (already have LICENSE file)
 
 2. **Library target:**
-   - Library name: \"Cleanode\"
+   - Library name: \"Dion\"
    - Source root
 
 3. **Executable target:**
-   - Executable name: \"cleanode\"
+   - Executable name: \"dion\"
    - Main entry point
 
 4. **Dependencies:**
@@ -252,19 +252,19 @@ Configure Lake build system with proper package metadata, targets, and dependenc
 - [ ] Executable target configured
 - [ ] Dependencies listed
 - [ ] \`lake build\` succeeds (even if just building empty modules)
-- [ ] \`lake exe cleanode\` runs
+- [ ] \`lake exe dion\` runs
 
 ## Example lakefile.toml Structure
 \`\`\`toml
-name = \"Cleanode\"
+name = \"Dion\"
 version = \"0.1.0\"
-defaultTargets = [\"Cleanode\", \"cleanode\"]
+defaultTargets = [\"Dion\", \"dion\"]
 
 [[lean_lib]]
-name = \"Cleanode\"
+name = \"Dion\"
 
 [[lean_exe]]
-name = \"cleanode\"
+name = \"dion\"
 root = \"Main\"
 
 # Dependencies
@@ -342,12 +342,12 @@ Create \`Basic.lean\` containing:
 
 4. **References** to specs
 
-## Example: Cleanode/Network/Basic.lean
+## Example: Dion/Network/Basic.lean
 \`\`\`lean
 /-!
 # Network Module
 
-This module implements the Ouroboros network layer for Cleanode.
+This module implements the Ouroboros network layer for Dion.
 
 ## Responsibilities
 - TCP socket management
@@ -369,14 +369,14 @@ It provides a typed interface for communicating with Cardano peers.
 - [Cardano Blueprint Network](https://cardano-scaling.github.io/cardano-blueprint/network/)
 -/
 
-namespace Cleanode.Network
+namespace Dion.Network
 
 -- Placeholder types (will be properly defined later)
 structure Peer where
   addr : String
   port : Nat
 
-end Cleanode.Network
+end Dion.Network
 \`\`\`
 
 ## Acceptance Criteria
@@ -387,12 +387,12 @@ end Cleanode.Network
 - [ ] Documentation explains architecture
 
 ## Modules to Document
-- Cleanode/Network/Basic.lean
-- Cleanode/Ledger/Basic.lean
-- Cleanode/Crypto/Basic.lean
-- Cleanode/Consensus/Basic.lean
-- Cleanode/Node/Basic.lean
-- Cleanode/Config/Basic.lean" \
+- Dion/Network/Basic.lean
+- Dion/Ledger/Basic.lean
+- Dion/Crypto/Basic.lean
+- Dion/Consensus/Basic.lean
+- Dion/Node/Basic.lean
+- Dion/Config/Basic.lean" \
     "task,phase-1,documentation")
 
 ALL_ISSUES+=("Task 1.1.1.4:#$T1_1_1_4")
@@ -475,7 +475,7 @@ for issue in "${ALL_ISSUES[@]}"; do
     echo "  ✓ $issue"
 done
 echo ""
-echo "View all issues: https://github.com/RSoulatIOHK/Cleanode/issues"
+echo "View all issues: https://github.com/RSoulatIOHK/Dion/issues"
 echo ""
 echo "Next steps:"
 echo "1. Link sub-issues in GitHub UI"

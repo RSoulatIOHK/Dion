@@ -53,8 +53,8 @@ The \`validateSignatures\` function is currently a stub (always returns \`.ok ()
 
 ## References
 - Cardano Ledger Spec: UTXOW rule
-- \`Cleanode/Ledger/Validation.lean\` lines 83–90 (stub)
-- \`Cleanode/Network/ConwayBlock.lean\` lines 106–109 (incomplete WitnessSet)" \
+- \`Dion/Ledger/Validation.lean\` lines 83–90 (stub)
+- \`Dion/Network/ConwayBlock.lean\` lines 106–109 (incomplete WitnessSet)" \
     "story,phase-2,ledger,crypto")
 
 echo "  Created Story 2.3.5: #$S2_3_5"
@@ -76,7 +76,7 @@ Extend the \`WitnessSet\` structure in \`ConwayBlock.lean\` to include:
 
 Define the \`VKeyWitness\` and \`BootstrapWitness\` structures per CDDL spec.
 
-**File:** \`Cleanode/Network/ConwayBlock.lean\` lines 106–109" \
+**File:** \`Dion/Network/ConwayBlock.lean\` lines 106–109" \
     "task,phase-2,ledger" > /dev/null
 
 create_issue "[Task 2.3.5.2] Implement CBOR decoder for extended WitnessSet" \
@@ -95,7 +95,7 @@ The witness set is a CBOR map with well-known integer keys:
 
 Update \`parseWitnessSet\` in \`ConwayBlock.lean\` accordingly.
 
-**File:** \`Cleanode/Network/ConwayBlock.lean\`" \
+**File:** \`Dion/Network/ConwayBlock.lean\`" \
     "task,phase-2,ledger" > /dev/null
 
 create_issue "[Task 2.3.5.3] Implement transaction hash computation" \
@@ -108,7 +108,7 @@ This hash is what witnesses sign and what identifies the transaction.
 - Hash with \`blake2b_256\`
 - Use this hash for signature verification and as the canonical TxId
 
-**File:** \`Cleanode/Ledger/Validation.lean\`" \
+**File:** \`Dion/Ledger/Validation.lean\`" \
     "task,phase-2,ledger,crypto" > /dev/null
 
 create_issue "[Task 2.3.5.4] Implement vkey witness verification (Ed25519)" \
@@ -122,7 +122,7 @@ For each \`VKeyWitness\` in the witness set:
 This requires IO (FFI calls to Ed25519), so \`validateSignatures\` needs to become
 an IO function or use a pure verification wrapper.
 
-**File:** \`Cleanode/Ledger/Validation.lean\` lines 83–90" \
+**File:** \`Dion/Ledger/Validation.lean\` lines 83–90" \
     "task,phase-2,ledger,crypto" > /dev/null
 
 create_issue "[Task 2.3.5.5] Extract required signers from input addresses" \
@@ -134,7 +134,7 @@ Implement \`requiredSigners\` properly:
 - Include any \`requiredSigners\` field from the transaction body (Alonzo+)
 - Verify that the set of verified key hashes covers all required signers
 
-**File:** \`Cleanode/Ledger/Validation.lean\` lines 66–76" \
+**File:** \`Dion/Ledger/Validation.lean\` lines 66–76" \
     "task,phase-2,ledger" > /dev/null
 
 create_issue "[Task 2.3.5.6] Wire signature validation into validateTransaction" \
@@ -150,7 +150,7 @@ real implementation that:
 Note: This changes \`validateTransaction\` from pure to IO. Update the Mempool
 integration accordingly.
 
-**Files:** \`Cleanode/Ledger/Validation.lean\`, \`Cleanode/Network/Mempool.lean\`" \
+**Files:** \`Dion/Ledger/Validation.lean\`, \`Dion/Network/Mempool.lean\`" \
     "task,phase-2,ledger" > /dev/null
 
 create_issue "[Task 2.3.5.7] Implement bootstrap witness validation (Byron)" \
@@ -161,7 +161,7 @@ Handle Byron-era bootstrap witnesses which use a different format:
 - Address derivation differs from Shelley
 - Required for spending from Byron-era addresses still in the UTxO set
 
-**File:** \`Cleanode/Ledger/Validation.lean\`" \
+**File:** \`Dion/Ledger/Validation.lean\`" \
     "task,phase-2,ledger,crypto" > /dev/null
 
 # ============================================================================
@@ -205,7 +205,7 @@ S2_3_6=$(create_issue \
 - Cardano Ledger Spec: UTXOS rule
 - CIP-0032: Alonzo validation
 - CIP-0055: Plutus V2
-- \`Cleanode/Ledger/Validation.lean\` lines 118–137 (stubs)" \
+- \`Dion/Ledger/Validation.lean\` lines 118–137 (stubs)" \
     "story,phase-2,ledger")
 
 echo "  Created Story 2.3.6: #$S2_3_6"
@@ -222,7 +222,7 @@ The \`evaluateNativeScript\` function exists and is correctly implemented but
 3. Evaluate with the set of verified signers and current slot
 4. Return \`NativeScriptFailure\` on failure
 
-**Files:** \`Cleanode/Ledger/Validation.lean\` lines 106–121" \
+**Files:** \`Dion/Ledger/Validation.lean\` lines 106–121" \
     "task,phase-2,ledger" > /dev/null
 
 create_issue "[Task 2.3.6.2] Validate script data hash" \
@@ -239,7 +239,7 @@ This requires:
 - Computing the hash from witness set contents
 - Comparing and rejecting on mismatch
 
-**Files:** \`Cleanode/Network/ConwayBlock.lean\`, \`Cleanode/Ledger/Validation.lean\`" \
+**Files:** \`Dion/Network/ConwayBlock.lean\`, \`Dion/Ledger/Validation.lean\`" \
     "task,phase-2,ledger" > /dev/null
 
 create_issue "[Task 2.3.6.3] Implement collateral input validation" \
@@ -253,7 +253,7 @@ For transactions containing Plutus scripts, validate collateral:
 5. Collateral inputs must be pure ADA (no multi-assets)
 6. Total collateral >= percentage of tx fee (protocol param)
 
-**Files:** \`Cleanode/Network/ConwayBlock.lean\`, \`Cleanode/Ledger/Validation.lean\`" \
+**Files:** \`Dion/Network/ConwayBlock.lean\`, \`Dion/Ledger/Validation.lean\`" \
     "task,phase-2,ledger" > /dev/null
 
 create_issue "[Task 2.3.6.4] Implement execution budget enforcement" \
@@ -265,7 +265,7 @@ Enforce execution unit limits from protocol parameters:
 3. Reject if total exceeds \`maxTxExUnits\`
 4. Add per-block execution unit tracking for block validation
 
-**Files:** \`Cleanode/Ledger/Validation.lean\`, \`Cleanode/Ledger/State.lean\`" \
+**Files:** \`Dion/Ledger/Validation.lean\`, \`Dion/Ledger/State.lean\`" \
     "task,phase-2,ledger" > /dev/null
 
 create_issue "[Task 2.3.6.5] Design UPLC interpreter integration strategy" \
@@ -298,7 +298,7 @@ Build the \`ScriptContext\` (Plutus \`Data\`) that is passed to Plutus scripts:
 This is a complex data structure that must exactly match the Plutus specification
 for each script language version (V1, V2, V3).
 
-**File:** New file \`Cleanode/Ledger/ScriptContext.lean\`" \
+**File:** New file \`Dion/Ledger/ScriptContext.lean\`" \
     "task,phase-2,ledger" > /dev/null
 
 create_issue "[Task 2.3.6.7] Implement Plutus V1/V2/V3 script execution" \
@@ -313,7 +313,7 @@ Implement actual Plutus script execution using the strategy from Task 2.3.6.5:
 
 Depends on Tasks 2.3.6.5 and 2.3.6.6.
 
-**File:** \`Cleanode/Ledger/Validation.lean\`, potentially new \`Cleanode/Ledger/PlutusEval.lean\`" \
+**File:** \`Dion/Ledger/Validation.lean\`, potentially new \`Dion/Ledger/PlutusEval.lean\`" \
     "task,phase-2,ledger" > /dev/null
 
 # ============================================================================
@@ -356,7 +356,7 @@ these fields are not yet implemented.
 
 ## References
 - Cardano Ledger Spec: UTXO, UTXOW rules (Babbage/Conway)
-- \`Cleanode/Network/ConwayBlock.lean\` lines 111–119 (simplified body)" \
+- \`Dion/Network/ConwayBlock.lean\` lines 111–119 (simplified body)" \
     "story,phase-2,ledger")
 
 echo "  Created Story 2.3.7: #$S2_3_7"
@@ -382,7 +382,7 @@ Extend \`TransactionBody\` to include all fields per Conway CDDL:
 
 Update CBOR parsing to populate these fields.
 
-**File:** \`Cleanode/Network/ConwayBlock.lean\` lines 111–119" \
+**File:** \`Dion/Network/ConwayBlock.lean\` lines 111–119" \
     "task,phase-2,ledger" > /dev/null
 
 create_issue "[Task 2.3.7.2] Implement min-ADA per output validation" \
@@ -396,7 +396,7 @@ The \`OutputTooSmall\` error is defined but never thrown. Implement:
 
 The Babbage formula: \`max(minUTxOValue, utxoEntrySizeWithoutVal + 160 + numAssets * 28) * coinsPerUTxOByte\`
 
-**Files:** \`Cleanode/Ledger/Validation.lean\`, \`Cleanode/Ledger/Fee.lean\` lines 75–78" \
+**Files:** \`Dion/Ledger/Validation.lean\`, \`Dion/Ledger/Fee.lean\` lines 75–78" \
     "task,phase-2,ledger" > /dev/null
 
 create_issue "[Task 2.3.7.3] Implement multi-asset balance validation" \
@@ -408,7 +408,7 @@ Current balance validation only checks lovelace. Extend to multi-assets:
 3. Balance check: for each policy+asset, input amount = output amount + mint/burn
 4. Lovelace: input amount >= output amount + fee
 
-**Files:** \`Cleanode/Ledger/UTxO.lean\`, \`Cleanode/Ledger/Validation.lean\`" \
+**Files:** \`Dion/Ledger/UTxO.lean\`, \`Dion/Ledger/Validation.lean\`" \
     "task,phase-2,ledger" > /dev/null
 
 create_issue "[Task 2.3.7.4] Implement validity interval (TTL) validation" \
@@ -421,7 +421,7 @@ Validate the transaction's validity interval:
 
 Add a new \`ValidationError\` variant: \`Expired (currentSlot ttl : Nat)\`
 
-**File:** \`Cleanode/Ledger/Validation.lean\`" \
+**File:** \`Dion/Ledger/Validation.lean\`" \
     "task,phase-2,ledger" > /dev/null
 
 create_issue "[Task 2.3.7.5] Implement required signers validation (Alonzo+)" \
@@ -435,7 +435,7 @@ in addition to the signers required by inputs.
 2. After signature verification, check all required signers are satisfied
 3. Return \`MissingSignature\` for any unsatisfied required signer
 
-**File:** \`Cleanode/Ledger/Validation.lean\`" \
+**File:** \`Dion/Ledger/Validation.lean\`" \
     "task,phase-2,ledger" > /dev/null
 
 create_issue "[Task 2.3.7.6] Implement reference input validation (Babbage+)" \
@@ -448,7 +448,7 @@ but are not consumed:
 3. Reference inputs must NOT overlap with regular inputs
 4. Make reference input UTxOs available for script context
 
-**File:** \`Cleanode/Ledger/Validation.lean\`" \
+**File:** \`Dion/Ledger/Validation.lean\`" \
     "task,phase-2,ledger" > /dev/null
 
 create_issue "[Task 2.3.7.7] Implement mint/burn policy validation" \
@@ -461,7 +461,7 @@ Validate minting/burning of native assets:
 4. ADA (empty policy ID) can never be minted/burned
 5. Minted values must be reflected in the multi-asset balance
 
-**File:** \`Cleanode/Ledger/Validation.lean\`" \
+**File:** \`Dion/Ledger/Validation.lean\`" \
     "task,phase-2,ledger" > /dev/null
 
 create_issue "[Task 2.3.7.8] Implement certificate validation in state application" \
@@ -475,7 +475,7 @@ create_issue "[Task 2.3.7.8] Implement certificate validation in state applicati
 5. Pool retirement: check pool exists, retirement epoch is valid
 6. Conway governance certs: DRep registration, voting
 
-**File:** \`Cleanode/Ledger/State.lean\`" \
+**File:** \`Dion/Ledger/State.lean\`" \
     "task,phase-2,ledger" > /dev/null
 
 # ============================================================================
@@ -510,9 +510,9 @@ are complete, these need to be replaced with meaningful proofs.
 - [ ] State transition correctness has at least partial proofs
 
 ## References
-- \`Cleanode/Ledger/Validation.lean\` lines 189–198 (trivial proofs)
-- \`Cleanode/Ledger/UTxO.lean\` lines 206–210 (trivial proof)
-- \`Cleanode/Ledger/State.lean\` lines 289–298 (trivial proofs)" \
+- \`Dion/Ledger/Validation.lean\` lines 189–198 (trivial proofs)
+- \`Dion/Ledger/UTxO.lean\` lines 206–210 (trivial proof)
+- \`Dion/Ledger/State.lean\` lines 289–298 (trivial proofs)" \
     "story,phase-2,ledger,formal-verification")
 
 echo "  Created Story 2.3.8: #$S2_3_8"
@@ -526,7 +526,7 @@ Replace the trivial \`balance_validation_correct\` theorem with a real proof:
 - If \`validateBalance utxo body = .ok ()\`, then
   \`totalInputValue utxo body.inputs >= totalOutputValue body.outputs + body.fee\`
 
-**File:** \`Cleanode/Ledger/Validation.lean\` lines 195–198" \
+**File:** \`Dion/Ledger/Validation.lean\` lines 195–198" \
     "task,phase-2,ledger,formal-verification" > /dev/null
 
 create_issue "[Task 2.3.8.2] Prove UTxO set consistency after transaction application" \
@@ -538,7 +538,7 @@ Replace \`utxo_balance_preservation\` with a real proof:
 - No other entries are affected
 - Size of UTxO set changes correctly
 
-**File:** \`Cleanode/Ledger/UTxO.lean\` lines 206–210" \
+**File:** \`Dion/Ledger/UTxO.lean\` lines 206–210" \
     "task,phase-2,ledger,formal-verification" > /dev/null
 
 create_issue "[Task 2.3.8.3] Prove state transition correctness" \
@@ -549,7 +549,7 @@ Replace \`state_transition_correct\` with a real proof:
 - Stake pool state is correctly updated by certificates
 - Delegation state is correctly updated
 
-**File:** \`Cleanode/Ledger/State.lean\` lines 289–292" \
+**File:** \`Dion/Ledger/State.lean\` lines 289–292" \
     "task,phase-2,ledger,formal-verification" > /dev/null
 
 create_issue "[Task 2.3.8.4] Prove state invariants are preserved" \
@@ -560,7 +560,7 @@ Replace \`state_invariants_preserved\` with a real proof:
 - No double-spending across transactions in a block
 - Pool registration state is consistent
 
-**File:** \`Cleanode/Ledger/State.lean\` lines 295–298" \
+**File:** \`Dion/Ledger/State.lean\` lines 295–298" \
     "task,phase-2,ledger,formal-verification" > /dev/null
 
 create_issue "[Task 2.3.8.5] Prove fee monotonicity and bounds" \
@@ -571,7 +571,7 @@ The Fee module has some real proofs already. Extend:
 - Prove fee calculation is deterministic given same inputs
 - Prove min-ADA-per-output formula is monotone in output size
 
-**File:** \`Cleanode/Ledger/Fee.lean\`" \
+**File:** \`Dion/Ledger/Fee.lean\`" \
     "task,phase-2,ledger,formal-verification" > /dev/null
 
 # ============================================================================
@@ -607,7 +607,7 @@ The mempool has several issues:
 - [ ] Mempool can detect when one unconfirmed tx depends on another
 
 ## References
-- \`Cleanode/Network/Mempool.lean\` line 135 (TODO), lines 191–208 (dummy tx)" \
+- \`Dion/Network/Mempool.lean\` line 135 (TODO), lines 191–208 (dummy tx)" \
     "story,phase-3,ledger,network")
 
 echo "  Created Story 3.1.3: #$S3_1_3"
@@ -620,7 +620,7 @@ create_issue "[Task 3.1.3.1] Parse transactions from CBOR in addTxRaw" \
 \`Mempool.addTxRaw\` currently creates a dummy \`Transaction\` with empty inputs/outputs.
 Fix it to actually parse the CBOR bytes into a proper transaction, then validate.
 
-**File:** \`Cleanode/Network/Mempool.lean\` lines 191–208" \
+**File:** \`Dion/Network/Mempool.lean\` lines 191–208" \
     "task,phase-3,ledger,network" > /dev/null
 
 create_issue "[Task 3.1.3.2] Implement proper timestamp tracking in mempool" \
@@ -630,7 +630,7 @@ Replace \`addedAt := 0  -- TODO: use actual timestamp\` with real timestamps.
 Use \`IO.monoMsNow\` or equivalent to get current time in milliseconds.
 This fixes expiry pruning which currently can't work.
 
-**File:** \`Cleanode/Network/Mempool.lean\` line 135" \
+**File:** \`Dion/Network/Mempool.lean\` line 135" \
     "task,phase-3,network" > /dev/null
 
 create_issue "[Task 3.1.3.3] Track mempool-internal UTxO dependencies" \
@@ -642,7 +642,7 @@ When transaction B spends an output of transaction A, and both are in the mempoo
 3. When building blocks, order transactions respecting dependencies
 4. Validate B against a virtual UTxO set that includes A's outputs
 
-**File:** \`Cleanode/Network/Mempool.lean\`" \
+**File:** \`Dion/Network/Mempool.lean\`" \
     "task,phase-3,ledger,network" > /dev/null
 
 create_issue "[Task 3.1.3.4] Add proper mempool capacity error types" \
@@ -655,7 +655,7 @@ is misleading. Add proper error handling:
 
 Either extend \`ValidationError\` or use a separate \`MempoolError\` type.
 
-**File:** \`Cleanode/Network/Mempool.lean\` lines 128–130" \
+**File:** \`Dion/Network/Mempool.lean\` lines 128–130" \
     "task,phase-3,network" > /dev/null
 
 # ============================================================================

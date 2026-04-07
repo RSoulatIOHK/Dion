@@ -250,9 +250,11 @@ partial def receiveChainSyncFrame (sock : Socket)
       return ← receiveChainSyncFrame sock discoveryRef mempoolRef txSubmPeerRef txSubmResponderQueue selfAddr
     | .ok (some bytes) => pure (Except.ok bytes)
   else
-    match ← socket_receive_exact sock 8 with
+    -- 60s timeout: if a peer goes silent (TCP dead), detect it and reconnect
+    match ← socket_receive_exact_timeout sock 8 60000 with
     | .error e => pure (Except.error s!"Failed to receive MUX header: {e}")
-    | .ok bytes => pure (Except.ok bytes)
+    | .ok none => pure (Except.error "Peer timeout (60s no data) — reconnecting")
+    | .ok (some bytes) => pure (Except.ok bytes)
   match headerResult with
   | .error e => return .error e
   | .ok headerBytes => do

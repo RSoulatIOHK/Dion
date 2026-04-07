@@ -1,9 +1,9 @@
 #!/bin/bash
-# Script to create GitHub issues for Cleanode project hierarchy
+# Script to create GitHub issues for Dion project hierarchy
 
 set -e
 
-echo "Creating GitHub issues for Cleanode project..."
+echo "Creating GitHub issues for Dion project..."
 echo "This will create PI Objectives, Epics, Stories, and Tasks"
 echo ""
 
@@ -473,4 +473,4 @@ echo "  - Multiple Stories under each Epic"
 echo "  - Detailed Tasks under Phase 1 stories"
 echo ""
 echo "See PROJECT_BREAKDOWN.md for complete breakdown"
-echo "View issues: https://github.com/RSoulatIOHK/Cleanode/issues"
+echo "View issues: https://github.com/RSoulatIOHK/Dion/issues"

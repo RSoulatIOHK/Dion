@@ -60,6 +60,14 @@ opaque dbOpen (path : @& String) : IO Database
 @[extern "dion_db_close"]
 opaque dbClose (db : @& Database) : IO Unit
 
+/-- Begin a transaction (batches subsequent writes into one fsync) -/
+@[extern "dion_db_begin"]
+opaque dbBegin (db : @& Database) : IO Unit
+
+/-- Commit a transaction -/
+@[extern "dion_db_commit"]
+opaque dbCommit (db : @& Database) : IO Unit
+
 /-- Store a block -/
 @[extern "dion_db_put_block"]
 opaque dbPutBlock (db : @& Database) (blockNo : @& Nat) (slot : @& Nat) (era : @& Nat)
@@ -129,6 +137,12 @@ def «open» (path : String := "data/chain.db") : IO Database := do
 /-- Close the database -/
 def «close» (db : Database) : IO Unit :=
   dbClose db
+
+/-- Begin a write transaction -/
+def begin (db : Database) : IO Unit := dbBegin db
+
+/-- Commit a write transaction -/
+def commit (db : Database) : IO Unit := dbCommit db
 
 /-- Store a block -/
 def putBlock (db : Database) (row : BlockRow) : IO Unit :=

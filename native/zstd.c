@@ -1,5 +1,5 @@
 /*
- * Zstandard Decompression FFI for Cleanode
+ * Zstandard Decompression FFI for Dion
  *
  * Provides streaming decompression of zstd-compressed files.
  * Used by Mithril integration for snapshot decompression.

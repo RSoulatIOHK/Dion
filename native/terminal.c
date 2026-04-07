@@ -1,5 +1,5 @@
 /*
- * Terminal Raw Mode FFI for Cleanode TUI
+ * Terminal Raw Mode FFI for Dion TUI
  *
  * Provides raw terminal input (no line buffering, no echo)
  * so we can read individual keypresses for interactive TUI.

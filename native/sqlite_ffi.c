@@ -1,5 +1,5 @@
 /*
- * SQLite3 FFI for Cleanode
+ * SQLite3 FFI for Dion
  *
  * Provides persistent block storage via SQLite3.
  * The database stores blocks, sync state, and supports indexed lookups
@@ -124,6 +124,8 @@ lean_obj_res dion_db_open(b_lean_obj_arg path, lean_obj_arg world) {
 
     /* Enable WAL mode for better concurrent read performance */
     sqlite3_exec(db, "PRAGMA journal_mode=WAL;", NULL, NULL, NULL);
+    /* Reduce fsync overhead — safe for catch-up (OS crash loses at most 1 block) */
+    sqlite3_exec(db, "PRAGMA synchronous=NORMAL;", NULL, NULL, NULL);
     /* Enable foreign keys */
     sqlite3_exec(db, "PRAGMA foreign_keys=ON;", NULL, NULL, NULL);
     /* Reasonable busy timeout (5 seconds) */
@@ -156,6 +158,28 @@ lean_obj_res dion_db_close(b_lean_obj_arg db_obj, lean_obj_arg world) {
         /* Note: finalizer will also try to close, but double-close is safe
            since we set the external data to the same pointer */
     }
+    return mk_io_ok(lean_box(0));
+}
+
+/**
+ * Begin a transaction.
+ * dion_db_begin : Database -> IO Unit
+ */
+lean_obj_res dion_db_begin(b_lean_obj_arg db_obj, lean_obj_arg world) {
+    (void)world;
+    sqlite3* db = get_db_ptr(db_obj);
+    sqlite3_exec(db, "BEGIN;", NULL, NULL, NULL);
+    return mk_io_ok(lean_box(0));
+}
+
+/**
+ * Commit a transaction.
+ * dion_db_commit : Database -> IO Unit
+ */
+lean_obj_res dion_db_commit(b_lean_obj_arg db_obj, lean_obj_arg world) {
+    (void)world;
+    sqlite3* db = get_db_ptr(db_obj);
+    sqlite3_exec(db, "COMMIT;", NULL, NULL, NULL);
     return mk_io_ok(lean_box(0));
 }
 

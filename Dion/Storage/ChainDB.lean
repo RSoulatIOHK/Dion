@@ -75,6 +75,12 @@ def ChainDB.close (cdb : ChainDB) : IO Unit :=
 -- = Block Operations =
 -- ====================
 
+/-- Begin a write transaction (call before a batch of addBlock/addBlockBody) -/
+def ChainDB.beginBatch (cdb : ChainDB) : IO Unit := cdb.db.begin
+
+/-- Commit a write transaction (call after a batch of addBlock/addBlockBody) -/
+def ChainDB.commitBatch (cdb : ChainDB) : IO Unit := cdb.db.commit
+
 /-- Add a new block (as volatile) -/
 def ChainDB.addBlock (cdb : ChainDB) (blockNo slot era : Nat)
     (hash prevHash header : ByteArray) : IO Unit := do

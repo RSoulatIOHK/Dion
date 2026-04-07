@@ -1,5 +1,5 @@
 #!/bin/bash
-# Create GitHub labels for Cleanode project
+# Create GitHub labels for Dion project
 
 echo "Creating GitHub labels..."
 

@@ -194,7 +194,6 @@ inductive ForgeStepResult where
 def forgeStep (stateRef : IO.Ref ForgeState)
     (mempoolRef : IO.Ref Dion.Network.Mempool.Mempool)
     (consensusRef : IO.Ref ConsensusState)
-    (ledgerStateRef : Std.Mutex Dion.Ledger.State.LedgerState)
     (prevHash : ByteArray) (blockNumber : Nat)
     : IO ForgeStepResult := do
   let state ← stateRef.get
@@ -236,11 +235,7 @@ def forgeStep (stateRef : IO.Ref ForgeState)
   let nowMs ← getUnixTimeMs
   mempoolRef.modify (·.prune nowMs.toNat)
   let mempool ← mempoolRef.get
-  -- Use protocol param from consensus state (updated by block apply, no mutex needed)
-  -- Falls back to 90112 (Conway standard) if not yet set
-  let maxBlockBodySize :=
-    let p := cs.protocolMaxBlockSize
-    if p > 0 then p else 90112
+  let maxBlockBodySize := 90112  -- Conway standard max block body size
   let blockBody := Dion.Consensus.Praos.TxSelection.selectTransactions mempool maxBlockBodySize currentSlot
 
   stateRef.modify fun s => { s with leaderChecks := s.leaderChecks + 1 }
@@ -330,20 +325,13 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
   IO.println "[forge] Waiting for chain sync to provide stake snapshot..."
 
   let mut snapshotReady := false
-  let mut loopCount := 0
   while true do
-    loopCount := loopCount + 1
-    IO.println s!"[forge] DBG loop iter {loopCount}"
     -- Sleep until next slot
     let state ← stateRef.get
     let msToWait ← state.clock.msUntilNextSlot
-    IO.println s!"[forge] DBG msToWait={msToWait}"
     if msToWait > 0 then
       IO.sleep (UInt32.ofNat msToWait)
-    IO.println s!"[forge] DBG after sleep"
-    IO.println "[forge] DBG before consensusRef.get"
     let cs ← consensusRef.get
-    IO.println "[forge] DBG after consensusRef.get, before snapshotReady check"
     if cs.stakeSnapshot.totalStake == 0 then
       -- Print status every 60s so the operator knows we're waiting
       let nowMs ← getUnixTimeMs
@@ -366,14 +354,14 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
     let prevHash ← prevHashRef.get
     let blockNo ← blockNoRef.get
 
-    let result ← forgeStep stateRef mempoolRef consensusRef ledgerStateRef prevHash blockNo
+    let result ← forgeStep stateRef mempoolRef consensusRef prevHash blockNo
     match result with
     | .notYet _ => pure ()
     | .notLeader slot =>
-      -- Log every ~10 slots so we can see activity
-      if slot % 10 == 0 then
+      -- Log every 10 minutes so the operator knows the loop is alive
+      if slot % 600 == 0 then
         let cs ← consensusRef.get
-        IO.println s!"[forge] slot={slot} epoch={cs.currentEpoch} checking leadership (not elected)"
+        IO.println s!"[forge] slot={slot} epoch={cs.currentEpoch} — not elected, waiting for leadership"
       pure ()
     | .forged block => do
       -- Notify TUI: block forged

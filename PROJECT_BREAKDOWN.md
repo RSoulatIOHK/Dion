@@ -1,4 +1,4 @@
-# Cleanode: Formally Verified Cardano Node in Lean 4
+# Dion: Formally Verified Cardano Node in Lean 4
 ## Project Breakdown: PI Objectives → Epics → Stories → Tasks
 
 ---

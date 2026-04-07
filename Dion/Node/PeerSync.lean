@@ -360,8 +360,11 @@ def peerFindTipAndSync (sock : Socket) (addrStr : String) (chainDb : ChainDB)
             | some (.MsgIntersectFound point _) => do
                 tuiLog tuiRef s!"Peer {addrStr}: intersected at saved point slot {point.slot}"
                 return ← syncLoop sock 0 (some chainDb) discoveryRef seenBlocks tuiRef addrStr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef ledgerStateRef prevHashRef blockNoRef checkpointRef selfAddr
-            | _ =>
+            | some (.MsgIntersectNotFound _) =>
+                -- Saved point not in peer's chain — fall through to tip intersection below
                 tuiLog tuiRef s!"Peer {addrStr}: saved point not found, falling back to tip"
+            | _ =>
+                return .protocolError "Unexpected response to MsgFindIntersect"
 
   -- Default: find tip, intersect there, sync forward
   match ← sendChainSync sock findIntersectTip with

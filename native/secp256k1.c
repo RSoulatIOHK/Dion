@@ -1,5 +1,5 @@
 /*
- * Secp256k1 ECDSA and Schnorr (BIP-340) Signature Verification FFI for Cleanode
+ * Secp256k1 ECDSA and Schnorr (BIP-340) Signature Verification FFI for Dion
  *
  * This implements Plutus builtins #50 (verifyEcdsaSecp256k1Signature) and
  * #51 (verifySchnorrSecp256k1Signature) using a reference implementation of

@@ -1,6 +1,6 @@
-# Cleanode Scripts
+# Dion Scripts
 
-This directory contains utility scripts for managing the Cleanode project's GitHub issues and project board.
+This directory contains utility scripts for managing the Dion project's GitHub issues and project board.
 
 ## Issue Management Scripts
 

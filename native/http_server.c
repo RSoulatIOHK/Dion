@@ -1,5 +1,5 @@
 /*
- * Minimal HTTP Server FFI for Cleanode Prometheus Metrics
+ * Minimal HTTP Server FFI for Dion Prometheus Metrics
  *
  * Single-threaded POSIX socket server that serves GET /metrics only.
  * Designed to run in a background thread; the Lean side spawns it via Task.
@@ -107,7 +107,7 @@ static void handle_client(int client_fd) {
                 "text/plain", err, strlen(err));
         }
     } else if (strncmp(buf, "GET / ", 6) == 0 || strncmp(buf, "GET / HTTP", 10) == 0) {
-        const char *body = "Cleanode Metrics Server\nGET /metrics for Prometheus\n";
+        const char *body = "Dion Metrics Server\nGET /metrics for Prometheus\n";
         send_response(client_fd, 200, "OK", "text/plain", body, strlen(body));
     } else {
         send_response(client_fd, 404, "Not Found", "text/plain", "Not Found\n", 10);

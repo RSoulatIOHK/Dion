@@ -1,5 +1,5 @@
 /*
- * HTTP Client FFI for Cleanode
+ * HTTP Client FFI for Dion
  *
  * Wraps libcurl to provide HTTPS GET and file download capabilities.
  * Used by the Mithril integration for snapshot discovery and download.

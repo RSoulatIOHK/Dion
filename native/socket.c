@@ -1,5 +1,5 @@
 /*
- * TCP Socket FFI for Cleanode
+ * TCP Socket FFI for Dion
  *
  * Provides socket functionality to Lean 4 via FFI
  * Supports both POSIX (Linux/macOS) and WinSock2 (Windows)

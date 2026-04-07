@@ -617,12 +617,16 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
               Dion.Ledger.State.processEpochBoundary s newEpoch
             else s
             lsRef.set { s with lastSlot := slot, lastBlockNo := blockNo, lastBlockHash := blockHash }
-        -- Store block in SQLite if ChainDB is available
+        -- Store block in SQLite if ChainDB is available (batched every 100 blocks for speed)
         if let some cdb := chainDb then
           let slot := blockPoint.slot.toNat
+          if blockNo % 100 == 0 then
+            IO.println s!"[sync] Block #{blockNo} slot={slot} (batch commit at #{blockNo - 1})"
+            cdb.beginBatch
           cdb.addBlock blockNo slot header.era blockHash blockPoint.hash header.headerBytes
           cdb.addBlockBody blockNo blockBytes
           cdb.saveSyncState slot blockNo blockHash
+          if blockNo % 100 == 99 then cdb.commitBatch
         -- Update shared chain tip for forge loop
         if let some phRef := prevHashRef then
           phRef.set blockHash

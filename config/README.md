@@ -1,6 +1,6 @@
 # Cardano Network Configuration Files
 
-This directory contains configuration files for Cleanode to connect to different Cardano networks. These files are vendored from the official [cardano-configurations](https://github.com/input-output-hk/cardano-configurations) repository.
+This directory contains configuration files for Dion to connect to different Cardano networks. These files are vendored from the official [cardano-configurations](https://github.com/input-output-hk/cardano-configurations) repository.
 
 ## Directory Structure
 
@@ -43,12 +43,12 @@ Each network directory contains:
 - **Consensus**: Praos
 - **Note**: Best choice for development due to faster sync
 
-## Usage with Cleanode
+## Usage with Dion
 
-These config files can be loaded using the `loadNetworkConfig` function in `Cleanode.Config`:
+These config files can be loaded using the `loadNetworkConfig` function in `Dion.Config`:
 
 ```lean
-import Cleanode.Config
+import Dion.Config
 
 def main : IO Unit := do
   match ← loadNetworkConfig "config/preview/config.json" with

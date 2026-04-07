@@ -1,5 +1,5 @@
 /*
- * Sum-KES (Key Evolving Signatures) FFI for Cleanode
+ * Sum-KES (Key Evolving Signatures) FFI for Dion
  *
  * Implements Sum-KES depth 6 (64 periods) built over Ed25519.
  * The key structure is a binary tree where:

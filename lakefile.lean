@@ -1,17 +1,17 @@
 import Lake
 open Lake DSL
 
-package cleanode where
+package dion where
   version := v!"0.1.0"
-  moreLinkArgs := #["-L./native", "-lcleanode_native", "-lplutuz_ffi", "-lplutuz_blst", "-llean_shim", "-L/opt/homebrew/opt/curl/lib", "-lcurl", "-L/opt/homebrew/opt/zstd/lib", "-lzstd", "-L/usr/local/lib", "-lblst", "/opt/homebrew/lib/libgmp.a"]
+  moreLinkArgs := #["-L./native", "-ldion_native", "-lplutuz_ffi", "-lplutuz_blst", "-llean_shim", "-L/opt/homebrew/opt/curl/lib", "-lcurl", "-L/opt/homebrew/opt/zstd/lib", "-lzstd", "-L/usr/local/lib", "-lblst", "/opt/homebrew/lib/libgmp.a"]
 
 require Pigment from "../Pigment"
 
 @[default_target]
-lean_lib Cleanode
+lean_lib Dion
 
 @[default_target]
-lean_exe cleanode where
+lean_exe dion where
   root := `Main
   supportInterpreter := true
 

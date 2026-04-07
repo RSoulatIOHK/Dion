@@ -1,16 +1,16 @@
-# Cleanode
+# Dion
 
 A formally verified Cardano node implementation in Lean 4, with proofs of correctness from the [Cardano Blueprint](https://cardano-scaling.github.io/cardano-blueprint/) specifications.
 
 ## Overview
 
-Cleanode aims to be a fully functional Cardano node with formal verification of critical components, proving adherence to the Cardano protocol specifications. The implementation is structured in phases, starting from basic chain observation to full block production capabilities.
+Dion aims to be a fully functional Cardano node with formal verification of critical components, proving adherence to the Cardano protocol specifications. The implementation is structured in phases, starting from basic chain observation to full block production capabilities.
 
 ## Project Structure
 
 ```
-Cleanode/
-├── Cleanode/          # Main Lean 4 source code
+Dion/
+├── Dion/          # Main Lean 4 source code
 │   ├── Network/       # Network layer (Ouroboros protocols)
 │   ├── Ledger/        # Ledger rules and state
 │   ├── Crypto/        # Cryptographic primitives
@@ -58,14 +58,14 @@ Cleanode/
 
 ## Building
 
-Cleanode uses the Lake build system for Lean 4.
+Dion uses the Lake build system for Lean 4.
 
 ```bash
 # Build the project
 lake build
 
 # Run the executable
-lake exe cleanode
+lake exe dion
 ```
 
 ## Project Management
@@ -73,7 +73,7 @@ lake exe cleanode
 All project planning, issue tracking, and sprint organization is managed through GitHub:
 
 - **Issues**: 242 issues across 5 PI Objectives, 15 Epics, 38 Stories, and 184 Tasks
-- **Project Board**: [Cleanode Project](https://github.com/users/RSoulatIOHK/projects/14)
+- **Project Board**: [Dion Project](https://github.com/users/RSoulatIOHK/projects/14)
 - **Sprints**: 17 two-week sprints (~8 months)
 
 See [PROJECT_BREAKDOWN.md](PROJECT_BREAKDOWN.md) for the complete project plan.

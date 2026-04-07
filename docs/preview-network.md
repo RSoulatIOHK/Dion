@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Preview network is Cardano's smallest testnet, designed for rapid testing and development. It's ideal for Cleanode development because:
+The Preview network is Cardano's smallest testnet, designed for rapid testing and development. It's ideal for Dion development because:
 
 - **Smaller chain size**: ~3.9M blocks vs 12.8M+ on mainnet
 - **Faster sync times**: Significantly quicker initial sync
@@ -22,7 +22,7 @@ The Preview network is Cardano's smallest testnet, designed for rapid testing an
 
 ## Switching to Preview Network
 
-To switch from mainnet to Preview network in Cleanode:
+To switch from mainnet to Preview network in Dion:
 
 1. Open [Main.lean](../Main.lean)
 2. Comment out the mainnet configuration:
@@ -44,14 +44,14 @@ To switch from mainnet to Preview network in Cleanode:
 4. Build and run:
    ```bash
    lake build
-   ./build/bin/cleanode
+   ./build/bin/dion
    ```
 
 ## Sync Process
 
 ### Connection Flow
 
-1. **TCP Connection**: Cleanode connects to a Preview bootstrap peer
+1. **TCP Connection**: Dion connects to a Preview bootstrap peer
 2. **Handshake Protocol**:
    - Client sends `ProposeVersions` with network magic `2`
    - Server responds with `AcceptVersion` (typically v15)
@@ -69,7 +69,7 @@ Blocks are persisted to the `data/` directory:
 
 ### Resume Capability
 
-Cleanode automatically resumes from the last synced block:
+Dion automatically resumes from the last synced block:
 - On first run: Syncs from genesis
 - On subsequent runs: Resumes from last saved slot
 
@@ -93,7 +93,7 @@ Preview network spans multiple Cardano eras:
 | 5 | Babbage | Plutus V2 | Planned |
 | 6 | Conway | Governance | Planned |
 
-Currently, Cleanode fully decodes Byron era block headers. Support for later eras is in development.
+Currently, Dion fully decodes Byron era block headers. Support for later eras is in development.
 
 ## Testing Results
 
@@ -142,7 +142,7 @@ rm -rf data/
 
 # Build and run
 lake build
-./build/bin/cleanode
+./build/bin/dion
 
 # Verify blocks are being saved
 ls -lh data/blocks/

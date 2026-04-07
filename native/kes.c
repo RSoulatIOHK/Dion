@@ -34,8 +34,8 @@
 #include <lean/lean.h>
 
 /* We reuse the Ed25519 primitives from our existing ed25519.c */
-extern void cleanode_ed25519_seed_to_keypair(unsigned char *pk, unsigned char *sk, const unsigned char *seed);
-extern int cleanode_ed25519_sign_raw(unsigned char *sm, uint64_t *smlen_p,
+extern void dion_ed25519_seed_to_keypair(unsigned char *pk, unsigned char *sk, const unsigned char *seed);
+extern int dion_ed25519_sign_raw(unsigned char *sm, uint64_t *smlen_p,
                                       const unsigned char *m, uint64_t mlen,
                                       const unsigned char *sk);
 
@@ -104,7 +104,7 @@ static void hash_vk_pair(const unsigned char *left_vk, const unsigned char *righ
  * tree state. For our simplified implementation, we extract the active
  * leaf key and sibling VKs to produce a valid signature.
  */
-LEAN_EXPORT lean_obj_res cleanode_kes_sign(
+LEAN_EXPORT lean_obj_res dion_kes_sign(
     b_lean_obj_arg kes_sk_obj,
     uint32_t period,
     b_lean_obj_arg msg_obj,
@@ -155,7 +155,7 @@ LEAN_EXPORT lean_obj_res cleanode_kes_sign(
         /* Compact: 32-byte seed + 192-byte siblings */
         unsigned char seed[32];
         memcpy(seed, sk_data, 32);
-        cleanode_ed25519_seed_to_keypair(leaf_pk, leaf_sk, seed);
+        dion_ed25519_seed_to_keypair(leaf_pk, leaf_sk, seed);
         for (int i = 0; i < KES_DEPTH; i++) {
             memcpy(siblings[i], sk_data + 32 + i * 32, 32);
         }
@@ -171,7 +171,7 @@ LEAN_EXPORT lean_obj_res cleanode_kes_sign(
         return lean_io_result_mk_ok(mk_except_error_kes(lean_mk_string("Allocation failed")));
     }
     uint64_t smlen;
-    cleanode_ed25519_sign_raw(sm, &smlen, msg_data, msg_size, leaf_sk);
+    dion_ed25519_sign_raw(sm, &smlen, msg_data, msg_size, leaf_sk);
 
     /* Build the KES signature: leaf signature + sibling VKs */
     unsigned char kes_sig[KES_SIG_SIZE];
@@ -216,7 +216,7 @@ LEAN_EXPORT lean_obj_res cleanode_kes_sign(
  *
  * Returns: IO (Except String ByteArray) — evolved key bytes
  */
-LEAN_EXPORT lean_obj_res cleanode_kes_evolve(
+LEAN_EXPORT lean_obj_res dion_kes_evolve(
     b_lean_obj_arg kes_sk_obj,
     uint32_t current_period,
     lean_obj_arg world)
@@ -247,7 +247,7 @@ LEAN_EXPORT lean_obj_res cleanode_kes_evolve(
  *
  * Returns: IO (Except String ByteArray) — 32-byte root VK
  */
-LEAN_EXPORT lean_obj_res cleanode_kes_derive_vk(
+LEAN_EXPORT lean_obj_res dion_kes_derive_vk(
     b_lean_obj_arg kes_sk_obj,
     lean_obj_arg world)
 {
@@ -264,7 +264,7 @@ LEAN_EXPORT lean_obj_res cleanode_kes_derive_vk(
     if (sk_size >= 256) {
         memcpy(leaf_pk, sk_data + 32, 32);
     } else {
-        cleanode_ed25519_seed_to_keypair(leaf_pk, NULL, sk_data);
+        dion_ed25519_seed_to_keypair(leaf_pk, NULL, sk_data);
     }
 
     /* Build root VK by hashing up the tree */
@@ -287,7 +287,7 @@ LEAN_EXPORT lean_obj_res cleanode_kes_derive_vk(
 }
 
 /*
- * cleanode_kes_keygen : IO (Except String (ByteArray × ByteArray))
+ * dion_kes_keygen : IO (Except String (ByteArray × ByteArray))
  *
  * Generate a fresh Sum-KES-6 key pair at period 0.
  *
@@ -304,7 +304,7 @@ LEAN_EXPORT lean_obj_res cleanode_kes_derive_vk(
  *
  * Returns: IO (Except String (sk: ByteArray, vk: ByteArray))
  */
-LEAN_EXPORT lean_obj_res cleanode_kes_keygen(lean_obj_arg world)
+LEAN_EXPORT lean_obj_res dion_kes_keygen(lean_obj_arg world)
 {
     /* We have 2^6 = 64 leaves. Generate a seed for each. */
     unsigned char seeds[KES_MAX_PERIODS][32];
@@ -325,7 +325,7 @@ LEAN_EXPORT lean_obj_res cleanode_kes_keygen(lean_obj_arg world)
     unsigned char leaf_sk0[ED25519_SK_SIZE];  /* Full NaCl SK for leaf 0 */
     for (int i = 0; i < KES_MAX_PERIODS; i++) {
         unsigned char pk[32], sk[64];
-        cleanode_ed25519_seed_to_keypair(pk, sk, seeds[i]);
+        dion_ed25519_seed_to_keypair(pk, sk, seeds[i]);
         memcpy(leaf_vks[i], pk, 32);
         if (i == 0) memcpy(leaf_sk0, sk, 64);
     }

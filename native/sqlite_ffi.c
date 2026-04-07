@@ -106,9 +106,9 @@ static const char* SCHEMA_SQL =
  * Open (or create) a SQLite database at the given path.
  * Creates the schema if the database is new.
  *
- * cleanode_db_open : String -> IO Database
+ * dion_db_open : String -> IO Database
  */
-lean_obj_res cleanode_db_open(b_lean_obj_arg path, lean_obj_arg world) {
+lean_obj_res dion_db_open(b_lean_obj_arg path, lean_obj_arg world) {
     (void)world;
     const char* db_path = lean_string_cstr(path);
     sqlite3* db = NULL;
@@ -146,9 +146,9 @@ lean_obj_res cleanode_db_open(b_lean_obj_arg path, lean_obj_arg world) {
 /**
  * Close the database.
  *
- * cleanode_db_close : Database -> IO Unit
+ * dion_db_close : Database -> IO Unit
  */
-lean_obj_res cleanode_db_close(b_lean_obj_arg db_obj, lean_obj_arg world) {
+lean_obj_res dion_db_close(b_lean_obj_arg db_obj, lean_obj_arg world) {
     (void)world;
     sqlite3* db = get_db_ptr(db_obj);
     if (db) {
@@ -162,10 +162,10 @@ lean_obj_res cleanode_db_close(b_lean_obj_arg db_obj, lean_obj_arg world) {
 /**
  * Store a block in the database.
  *
- * cleanode_db_put_block : Database -> Nat -> Nat -> Nat -> ByteArray -> ByteArray
+ * dion_db_put_block : Database -> Nat -> Nat -> Nat -> ByteArray -> ByteArray
  *                       -> ByteArray -> Bool -> IO Unit
  */
-lean_obj_res cleanode_db_put_block(
+lean_obj_res dion_db_put_block(
     b_lean_obj_arg db_obj,
     b_lean_obj_arg block_no_obj,
     b_lean_obj_arg slot_obj,
@@ -223,9 +223,9 @@ lean_obj_res cleanode_db_put_block(
 /**
  * Store block body data separately (for large payloads fetched via BlockFetch).
  *
- * cleanode_db_put_block_body : Database -> Nat -> ByteArray -> IO Unit
+ * dion_db_put_block_body : Database -> Nat -> ByteArray -> IO Unit
  */
-lean_obj_res cleanode_db_put_block_body(
+lean_obj_res dion_db_put_block_body(
     b_lean_obj_arg db_obj,
     b_lean_obj_arg block_no_obj,
     b_lean_obj_arg body_obj,
@@ -262,12 +262,12 @@ lean_obj_res cleanode_db_put_block_body(
  * Retrieve a block by block number.
  * Returns: Option (blockNo, slot, era, hash, prevHash, header, body?, immutable)
  *
- * cleanode_db_get_block : Database -> Nat -> IO (Option BlockRow)
+ * dion_db_get_block : Database -> Nat -> IO (Option BlockRow)
  *
  * BlockRow is a tuple: (Nat × Nat × Nat × ByteArray × ByteArray × ByteArray × Option ByteArray × Bool)
  * Encoded as nested Prod constructors.
  */
-lean_obj_res cleanode_db_get_block(
+lean_obj_res dion_db_get_block(
     b_lean_obj_arg db_obj,
     b_lean_obj_arg block_no_obj,
     lean_obj_arg world
@@ -335,9 +335,9 @@ lean_obj_res cleanode_db_get_block(
 /**
  * Retrieve a block by hash.
  *
- * cleanode_db_get_block_by_hash : Database -> ByteArray -> IO (Option BlockRow)
+ * dion_db_get_block_by_hash : Database -> ByteArray -> IO (Option BlockRow)
  */
-lean_obj_res cleanode_db_get_block_by_hash(
+lean_obj_res dion_db_get_block_by_hash(
     b_lean_obj_arg db_obj,
     b_lean_obj_arg hash_obj,
     lean_obj_arg world
@@ -399,9 +399,9 @@ lean_obj_res cleanode_db_get_block_by_hash(
 /**
  * Get the tip (highest block number) in the database.
  *
- * cleanode_db_get_tip : Database -> IO (Option Nat)
+ * dion_db_get_tip : Database -> IO (Option Nat)
  */
-lean_obj_res cleanode_db_get_tip(b_lean_obj_arg db_obj, lean_obj_arg world) {
+lean_obj_res dion_db_get_tip(b_lean_obj_arg db_obj, lean_obj_arg world) {
     (void)world;
     sqlite3* db = get_db_ptr(db_obj);
 
@@ -426,9 +426,9 @@ lean_obj_res cleanode_db_get_tip(b_lean_obj_arg db_obj, lean_obj_arg world) {
 /**
  * Mark blocks up to a given block number as immutable.
  *
- * cleanode_db_mark_immutable : Database -> Nat -> IO Unit
+ * dion_db_mark_immutable : Database -> Nat -> IO Unit
  */
-lean_obj_res cleanode_db_mark_immutable(
+lean_obj_res dion_db_mark_immutable(
     b_lean_obj_arg db_obj,
     b_lean_obj_arg up_to_obj,
     lean_obj_arg world
@@ -458,10 +458,10 @@ lean_obj_res cleanode_db_mark_immutable(
 /**
  * Rollback: delete all volatile blocks above a given block number.
  *
- * cleanode_db_rollback : Database -> Nat -> IO Nat
+ * dion_db_rollback : Database -> Nat -> IO Nat
  * Returns the number of blocks deleted.
  */
-lean_obj_res cleanode_db_rollback(
+lean_obj_res dion_db_rollback(
     b_lean_obj_arg db_obj,
     b_lean_obj_arg keep_up_to_obj,
     lean_obj_arg world
@@ -492,9 +492,9 @@ lean_obj_res cleanode_db_rollback(
 /**
  * Count total blocks in the database.
  *
- * cleanode_db_count_blocks : Database -> IO Nat
+ * dion_db_count_blocks : Database -> IO Nat
  */
-lean_obj_res cleanode_db_count_blocks(b_lean_obj_arg db_obj, lean_obj_arg world) {
+lean_obj_res dion_db_count_blocks(b_lean_obj_arg db_obj, lean_obj_arg world) {
     (void)world;
     sqlite3* db = get_db_ptr(db_obj);
 
@@ -515,9 +515,9 @@ lean_obj_res cleanode_db_count_blocks(b_lean_obj_arg db_obj, lean_obj_arg world)
 /**
  * Save sync state (upsert).
  *
- * cleanode_db_save_sync_state : Database -> Nat -> Nat -> ByteArray -> IO Unit
+ * dion_db_save_sync_state : Database -> Nat -> Nat -> ByteArray -> IO Unit
  */
-lean_obj_res cleanode_db_save_sync_state(
+lean_obj_res dion_db_save_sync_state(
     b_lean_obj_arg db_obj,
     b_lean_obj_arg last_slot_obj,
     b_lean_obj_arg last_block_obj,
@@ -559,9 +559,9 @@ lean_obj_res cleanode_db_save_sync_state(
 /**
  * Load sync state.
  *
- * cleanode_db_load_sync_state : Database -> IO (Option (Nat × Nat × ByteArray))
+ * dion_db_load_sync_state : Database -> IO (Option (Nat × Nat × ByteArray))
  */
-lean_obj_res cleanode_db_load_sync_state(b_lean_obj_arg db_obj, lean_obj_arg world) {
+lean_obj_res dion_db_load_sync_state(b_lean_obj_arg db_obj, lean_obj_arg world) {
     (void)world;
     sqlite3* db = get_db_ptr(db_obj);
 
@@ -599,10 +599,10 @@ lean_obj_res cleanode_db_load_sync_state(b_lean_obj_arg db_obj, lean_obj_arg wor
 /**
  * Get blocks in a slot range (for chain selection).
  *
- * cleanode_db_get_blocks_in_range : Database -> Nat -> Nat -> IO (Array Nat)
+ * dion_db_get_blocks_in_range : Database -> Nat -> Nat -> IO (Array Nat)
  * Returns array of block numbers in the range [from_slot, to_slot].
  */
-lean_obj_res cleanode_db_get_blocks_in_range(
+lean_obj_res dion_db_get_blocks_in_range(
     b_lean_obj_arg db_obj,
     b_lean_obj_arg from_slot_obj,
     b_lean_obj_arg to_slot_obj,

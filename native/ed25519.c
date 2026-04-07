@@ -418,14 +418,14 @@ static int ed25519_verify_impl(const uint8_t *pk, const uint8_t *sm, uint64_t sm
  * ============================================================ */
 
 /*
- * cleanode_ed25519_verify : ByteArray -> ByteArray -> ByteArray -> IO Bool
+ * dion_ed25519_verify : ByteArray -> ByteArray -> ByteArray -> IO Bool
  *
  * Verifies an Ed25519 signature.
  * pk: 32-byte public key
  * msg: message bytes
  * sig: 64-byte signature
  */
-LEAN_EXPORT lean_obj_res cleanode_ed25519_verify(
+LEAN_EXPORT lean_obj_res dion_ed25519_verify(
     b_lean_obj_arg pk_obj,
     b_lean_obj_arg msg_obj,
     b_lean_obj_arg sig_obj,
@@ -459,7 +459,7 @@ LEAN_EXPORT lean_obj_res cleanode_ed25519_verify(
 }
 
 /*
- * cleanode_ed25519_sign : ByteArray -> ByteArray -> IO ByteArray
+ * dion_ed25519_sign : ByteArray -> ByteArray -> IO ByteArray
  *
  * Signs a message with Ed25519.
  * sk: 64-byte secret key (seed ++ public key, NaCl format)
@@ -515,7 +515,7 @@ static int ed25519_sign_impl(uint8_t *sm, uint64_t *smlen_p,
     return 0;
 }
 
-LEAN_EXPORT lean_obj_res cleanode_ed25519_sign(
+LEAN_EXPORT lean_obj_res dion_ed25519_sign(
     b_lean_obj_arg sk_obj,
     b_lean_obj_arg msg_obj,
     lean_obj_arg w
@@ -551,7 +551,7 @@ LEAN_EXPORT lean_obj_res cleanode_ed25519_sign(
 }
 
 /*
- * cleanode_ed25519_keypair : IO (ByteArray x ByteArray)
+ * dion_ed25519_keypair : IO (ByteArray x ByteArray)
  *
  * Generates an Ed25519 key pair using /dev/urandom.
  * Returns: (publicKey: 32 bytes, secretKey: 64 bytes)
@@ -586,7 +586,7 @@ static void ed25519_keypair_impl(uint8_t *pk, uint8_t *sk) {
     memcpy(sk + 32, pk, 32);
 }
 
-LEAN_EXPORT lean_obj_res cleanode_ed25519_keypair(lean_obj_arg w) {
+LEAN_EXPORT lean_obj_res dion_ed25519_keypair(lean_obj_arg w) {
     uint8_t pk_buf[32], sk_buf[64];
     ed25519_keypair_impl(pk_buf, sk_buf);
 
@@ -606,11 +606,11 @@ LEAN_EXPORT lean_obj_res cleanode_ed25519_keypair(lean_obj_arg w) {
  * ============================================================ */
 
 /*
- * cleanode_sha512 : ByteArray -> IO ByteArray
+ * dion_sha512 : ByteArray -> IO ByteArray
  *
  * Compute SHA-512 hash (64 bytes output).
  */
-LEAN_EXPORT lean_obj_res cleanode_sha512(
+LEAN_EXPORT lean_obj_res dion_sha512(
     b_lean_obj_arg data_obj,
     lean_obj_arg w
 ) {
@@ -760,7 +760,7 @@ static void vrf_challenge_generation(uint8_t c[16],
 }
 
 /*
- * cleanode_vrf_verify : ByteArray -> ByteArray -> ByteArray -> IO Bool
+ * dion_vrf_verify : ByteArray -> ByteArray -> ByteArray -> IO Bool
  *
  * Verify an ECVRF-ED25519-SHA512-Elligator2 proof.
  * vk: 32-byte VRF verification key (Ed25519 public key)
@@ -773,7 +773,7 @@ static void vrf_challenge_generation(uint8_t c[16],
  *   c' = challenge_generation(Y, H, Gamma, U, V)
  *   return c == c'
  */
-LEAN_EXPORT lean_obj_res cleanode_vrf_verify(
+LEAN_EXPORT lean_obj_res dion_vrf_verify(
     b_lean_obj_arg vk_obj,
     b_lean_obj_arg alpha_obj,
     b_lean_obj_arg proof_obj,
@@ -879,13 +879,13 @@ LEAN_EXPORT lean_obj_res cleanode_vrf_verify(
 }
 
 /*
- * cleanode_vrf_proof_to_hash : ByteArray -> IO ByteArray
+ * dion_vrf_proof_to_hash : ByteArray -> IO ByteArray
  *
  * Convert VRF proof to output hash.
  * proof: 80-byte proof (Gamma(32) || c(16) || s(32))
  * Returns: 64-byte VRF output = SHA-512(suite_byte || 0x03 || compress(Gamma))
  */
-LEAN_EXPORT lean_obj_res cleanode_vrf_proof_to_hash(
+LEAN_EXPORT lean_obj_res dion_vrf_proof_to_hash(
     b_lean_obj_arg proof_obj,
     lean_obj_arg w
 ) {
@@ -917,7 +917,7 @@ LEAN_EXPORT lean_obj_res cleanode_vrf_proof_to_hash(
  * ======================== */
 
 /* Derive Ed25519 key pair from a 32-byte seed */
-void cleanode_ed25519_seed_to_keypair(uint8_t *pk, uint8_t *sk, const uint8_t *seed) {
+void dion_ed25519_seed_to_keypair(uint8_t *pk, uint8_t *sk, const uint8_t *seed) {
     memcpy(sk, seed, 32);
     uint8_t d[64];
     sha512(d, seed, 32);
@@ -935,7 +935,7 @@ void cleanode_ed25519_seed_to_keypair(uint8_t *pk, uint8_t *sk, const uint8_t *s
 }
 
 /* Ed25519 sign: sm must have room for mlen + 64 bytes */
-int cleanode_ed25519_sign_raw(uint8_t *sm, uint64_t *smlen_p,
+int dion_ed25519_sign_raw(uint8_t *sm, uint64_t *smlen_p,
                                const uint8_t *m, uint64_t mlen,
                                const uint8_t *sk) {
     return ed25519_sign_impl(sm, smlen_p, m, mlen, sk);

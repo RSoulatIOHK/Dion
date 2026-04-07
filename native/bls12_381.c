@@ -42,7 +42,7 @@ static lean_obj_res mk_empty_ba(void) {
  * G1 Operations
  * ============================================================ */
 
-lean_obj_res cleanode_bls12_381_g1_add(lean_obj_arg a_obj, lean_obj_arg b_obj,
+lean_obj_res dion_bls12_381_g1_add(lean_obj_arg a_obj, lean_obj_arg b_obj,
                                         lean_obj_arg world) {
     if (ba_size(a_obj) != 48 || ba_size(b_obj) != 48)
         return lean_io_result_mk_ok(mk_empty_ba());
@@ -62,7 +62,7 @@ lean_obj_res cleanode_bls12_381_g1_add(lean_obj_arg a_obj, lean_obj_arg b_obj,
     return lean_io_result_mk_ok(mk_ba(out, 48));
 }
 
-lean_obj_res cleanode_bls12_381_g1_neg(lean_obj_arg a_obj, lean_obj_arg world) {
+lean_obj_res dion_bls12_381_g1_neg(lean_obj_arg a_obj, lean_obj_arg world) {
     if (ba_size(a_obj) != 48)
         return lean_io_result_mk_ok(mk_empty_ba());
 
@@ -79,7 +79,7 @@ lean_obj_res cleanode_bls12_381_g1_neg(lean_obj_arg a_obj, lean_obj_arg world) {
     return lean_io_result_mk_ok(mk_ba(out, 48));
 }
 
-lean_obj_res cleanode_bls12_381_g1_scalar_mul(lean_obj_arg scalar_obj,
+lean_obj_res dion_bls12_381_g1_scalar_mul(lean_obj_arg scalar_obj,
                                                lean_obj_arg point_obj,
                                                lean_obj_arg world) {
     if (ba_size(point_obj) != 48)
@@ -100,7 +100,7 @@ lean_obj_res cleanode_bls12_381_g1_scalar_mul(lean_obj_arg scalar_obj,
     return lean_io_result_mk_ok(mk_ba(out, 48));
 }
 
-lean_obj_res cleanode_bls12_381_g1_equal(lean_obj_arg a_obj, lean_obj_arg b_obj,
+lean_obj_res dion_bls12_381_g1_equal(lean_obj_arg a_obj, lean_obj_arg b_obj,
                                           lean_obj_arg world) {
     if (ba_size(a_obj) != 48 || ba_size(b_obj) != 48)
         return lean_io_result_mk_ok(lean_box(0));
@@ -117,7 +117,7 @@ lean_obj_res cleanode_bls12_381_g1_equal(lean_obj_arg a_obj, lean_obj_arg b_obj,
     return lean_io_result_mk_ok(lean_box(blst_p1_is_equal(&a_proj, &b_proj) ? 1 : 0));
 }
 
-lean_obj_res cleanode_bls12_381_g1_hash_to_group(lean_obj_arg msg_obj,
+lean_obj_res dion_bls12_381_g1_hash_to_group(lean_obj_arg msg_obj,
                                                    lean_obj_arg dst_obj,
                                                    lean_obj_arg world) {
     blst_p1 result;
@@ -129,7 +129,7 @@ lean_obj_res cleanode_bls12_381_g1_hash_to_group(lean_obj_arg msg_obj,
     return lean_io_result_mk_ok(mk_ba(out, 48));
 }
 
-lean_obj_res cleanode_bls12_381_g1_compress(lean_obj_arg a_obj, lean_obj_arg world) {
+lean_obj_res dion_bls12_381_g1_compress(lean_obj_arg a_obj, lean_obj_arg world) {
     if (ba_size(a_obj) == 48) {
         blst_p1_affine aff;
         if (blst_p1_uncompress(&aff, ba_data(a_obj)) != BLST_SUCCESS)
@@ -150,7 +150,7 @@ lean_obj_res cleanode_bls12_381_g1_compress(lean_obj_arg a_obj, lean_obj_arg wor
     return lean_io_result_mk_ok(mk_ba(out, 48));
 }
 
-lean_obj_res cleanode_bls12_381_g1_uncompress(lean_obj_arg a_obj, lean_obj_arg world) {
+lean_obj_res dion_bls12_381_g1_uncompress(lean_obj_arg a_obj, lean_obj_arg world) {
     if (ba_size(a_obj) != 48)
         return lean_io_result_mk_ok(mk_empty_ba());
 
@@ -167,7 +167,7 @@ lean_obj_res cleanode_bls12_381_g1_uncompress(lean_obj_arg a_obj, lean_obj_arg w
  * G2 Operations
  * ============================================================ */
 
-lean_obj_res cleanode_bls12_381_g2_add(lean_obj_arg a_obj, lean_obj_arg b_obj,
+lean_obj_res dion_bls12_381_g2_add(lean_obj_arg a_obj, lean_obj_arg b_obj,
                                         lean_obj_arg world) {
     if (ba_size(a_obj) != 96 || ba_size(b_obj) != 96)
         return lean_io_result_mk_ok(mk_empty_ba());
@@ -187,7 +187,7 @@ lean_obj_res cleanode_bls12_381_g2_add(lean_obj_arg a_obj, lean_obj_arg b_obj,
     return lean_io_result_mk_ok(mk_ba(out, 96));
 }
 
-lean_obj_res cleanode_bls12_381_g2_neg(lean_obj_arg a_obj, lean_obj_arg world) {
+lean_obj_res dion_bls12_381_g2_neg(lean_obj_arg a_obj, lean_obj_arg world) {
     if (ba_size(a_obj) != 96)
         return lean_io_result_mk_ok(mk_empty_ba());
 
@@ -204,7 +204,7 @@ lean_obj_res cleanode_bls12_381_g2_neg(lean_obj_arg a_obj, lean_obj_arg world) {
     return lean_io_result_mk_ok(mk_ba(out, 96));
 }
 
-lean_obj_res cleanode_bls12_381_g2_scalar_mul(lean_obj_arg scalar_obj,
+lean_obj_res dion_bls12_381_g2_scalar_mul(lean_obj_arg scalar_obj,
                                                lean_obj_arg point_obj,
                                                lean_obj_arg world) {
     if (ba_size(point_obj) != 96)
@@ -225,7 +225,7 @@ lean_obj_res cleanode_bls12_381_g2_scalar_mul(lean_obj_arg scalar_obj,
     return lean_io_result_mk_ok(mk_ba(out, 96));
 }
 
-lean_obj_res cleanode_bls12_381_g2_equal(lean_obj_arg a_obj, lean_obj_arg b_obj,
+lean_obj_res dion_bls12_381_g2_equal(lean_obj_arg a_obj, lean_obj_arg b_obj,
                                           lean_obj_arg world) {
     if (ba_size(a_obj) != 96 || ba_size(b_obj) != 96)
         return lean_io_result_mk_ok(lean_box(0));
@@ -242,7 +242,7 @@ lean_obj_res cleanode_bls12_381_g2_equal(lean_obj_arg a_obj, lean_obj_arg b_obj,
     return lean_io_result_mk_ok(lean_box(blst_p2_is_equal(&a_proj, &b_proj) ? 1 : 0));
 }
 
-lean_obj_res cleanode_bls12_381_g2_hash_to_group(lean_obj_arg msg_obj,
+lean_obj_res dion_bls12_381_g2_hash_to_group(lean_obj_arg msg_obj,
                                                    lean_obj_arg dst_obj,
                                                    lean_obj_arg world) {
     blst_p2 result;
@@ -254,7 +254,7 @@ lean_obj_res cleanode_bls12_381_g2_hash_to_group(lean_obj_arg msg_obj,
     return lean_io_result_mk_ok(mk_ba(out, 96));
 }
 
-lean_obj_res cleanode_bls12_381_g2_compress(lean_obj_arg a_obj, lean_obj_arg world) {
+lean_obj_res dion_bls12_381_g2_compress(lean_obj_arg a_obj, lean_obj_arg world) {
     if (ba_size(a_obj) == 96) {
         blst_p2_affine aff;
         if (blst_p2_uncompress(&aff, ba_data(a_obj)) != BLST_SUCCESS)
@@ -275,7 +275,7 @@ lean_obj_res cleanode_bls12_381_g2_compress(lean_obj_arg a_obj, lean_obj_arg wor
     return lean_io_result_mk_ok(mk_ba(out, 96));
 }
 
-lean_obj_res cleanode_bls12_381_g2_uncompress(lean_obj_arg a_obj, lean_obj_arg world) {
+lean_obj_res dion_bls12_381_g2_uncompress(lean_obj_arg a_obj, lean_obj_arg world) {
     if (ba_size(a_obj) != 96)
         return lean_io_result_mk_ok(mk_empty_ba());
 
@@ -292,7 +292,7 @@ lean_obj_res cleanode_bls12_381_g2_uncompress(lean_obj_arg a_obj, lean_obj_arg w
  * Pairing Operations
  * ============================================================ */
 
-lean_obj_res cleanode_bls12_381_miller_loop(lean_obj_arg g1_obj, lean_obj_arg g2_obj,
+lean_obj_res dion_bls12_381_miller_loop(lean_obj_arg g1_obj, lean_obj_arg g2_obj,
                                              lean_obj_arg world) {
     if (ba_size(g1_obj) != 48 || ba_size(g2_obj) != 96)
         return lean_io_result_mk_ok(mk_empty_ba());
@@ -309,7 +309,7 @@ lean_obj_res cleanode_bls12_381_miller_loop(lean_obj_arg g1_obj, lean_obj_arg g2
     return lean_io_result_mk_ok(mk_ba((const uint8_t*)&result, FP12_BYTES));
 }
 
-lean_obj_res cleanode_bls12_381_mul_ml_result(lean_obj_arg a_obj, lean_obj_arg b_obj,
+lean_obj_res dion_bls12_381_mul_ml_result(lean_obj_arg a_obj, lean_obj_arg b_obj,
                                                lean_obj_arg world) {
     if (ba_size(a_obj) != FP12_BYTES || ba_size(b_obj) != FP12_BYTES)
         return lean_io_result_mk_ok(mk_empty_ba());
@@ -322,7 +322,7 @@ lean_obj_res cleanode_bls12_381_mul_ml_result(lean_obj_arg a_obj, lean_obj_arg b
     return lean_io_result_mk_ok(mk_ba((const uint8_t*)&result, FP12_BYTES));
 }
 
-lean_obj_res cleanode_bls12_381_final_verify(lean_obj_arg a_obj, lean_obj_arg b_obj,
+lean_obj_res dion_bls12_381_final_verify(lean_obj_arg a_obj, lean_obj_arg b_obj,
                                               lean_obj_arg world) {
     if (ba_size(a_obj) != FP12_BYTES || ba_size(b_obj) != FP12_BYTES)
         return lean_io_result_mk_ok(lean_box(0));

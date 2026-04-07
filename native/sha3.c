@@ -128,9 +128,9 @@ static void sha3_256(const uint8_t *in, size_t inlen, uint8_t out[32]) {
 
 /*
  * Compute SHA3-256 hash
- * cleanode_sha3_256 : ByteArray -> IO ByteArray
+ * dion_sha3_256 : ByteArray -> IO ByteArray
  */
-lean_obj_res cleanode_sha3_256(b_lean_obj_arg data_obj, lean_obj_arg world) {
+lean_obj_res dion_sha3_256(b_lean_obj_arg data_obj, lean_obj_arg world) {
     (void)world;
     uint8_t *data = lean_sarray_cptr(data_obj);
     size_t len = lean_sarray_size(data_obj);

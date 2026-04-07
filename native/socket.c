@@ -115,9 +115,9 @@ static inline uint32_t socket_get_fd(lean_obj_arg sock) {
 
 /*
  * Connect to remote host
- * cleanode_socket_connect : String -> UInt16 -> IO (Except SocketError Socket)
+ * dion_socket_connect : String -> UInt16 -> IO (Except SocketError Socket)
  */
-lean_obj_res cleanode_socket_connect(lean_obj_arg host_obj, uint16_t port, lean_obj_arg world) {
+lean_obj_res dion_socket_connect(lean_obj_arg host_obj, uint16_t port, lean_obj_arg world) {
     ensure_wsa_init();
     const char* host = lean_string_cstr(host_obj);
 
@@ -179,9 +179,9 @@ lean_obj_res cleanode_socket_connect(lean_obj_arg host_obj, uint16_t port, lean_
 
 /*
  * Send data over socket
- * cleanode_socket_send : Socket -> ByteArray -> IO (Except SocketError Unit)
+ * dion_socket_send : Socket -> ByteArray -> IO (Except SocketError Unit)
  */
-lean_obj_res cleanode_socket_send(lean_obj_arg sock_obj, lean_obj_arg data_obj, lean_obj_arg world) {
+lean_obj_res dion_socket_send(lean_obj_arg sock_obj, lean_obj_arg data_obj, lean_obj_arg world) {
 #ifndef _WIN32
     ensure_sigpipe_ignored();
 #endif
@@ -207,9 +207,9 @@ lean_obj_res cleanode_socket_send(lean_obj_arg sock_obj, lean_obj_arg data_obj, 
 
 /*
  * Receive UP TO max_bytes from socket (single recv call)
- * cleanode_socket_receive : Socket -> UInt32 -> IO (Except SocketError ByteArray)
+ * dion_socket_receive : Socket -> UInt32 -> IO (Except SocketError ByteArray)
  */
-lean_obj_res cleanode_socket_receive(lean_obj_arg sock_obj, uint32_t max_bytes, lean_obj_arg world) {
+lean_obj_res dion_socket_receive(lean_obj_arg sock_obj, uint32_t max_bytes, lean_obj_arg world) {
     int sockfd = (int)socket_get_fd(sock_obj);
 
     uint8_t* buffer = malloc(max_bytes);
@@ -242,9 +242,9 @@ lean_obj_res cleanode_socket_receive(lean_obj_arg sock_obj, uint32_t max_bytes, 
 
 /*
  * Receive EXACTLY num_bytes from socket (loops until all received)
- * cleanode_socket_receive_exact : Socket -> UInt32 -> IO (Except SocketError ByteArray)
+ * dion_socket_receive_exact : Socket -> UInt32 -> IO (Except SocketError ByteArray)
  */
-lean_obj_res cleanode_socket_receive_exact(lean_obj_arg sock_obj, uint32_t num_bytes, lean_obj_arg world) {
+lean_obj_res dion_socket_receive_exact(lean_obj_arg sock_obj, uint32_t num_bytes, lean_obj_arg world) {
     int sockfd = (int)socket_get_fd(sock_obj);
 
     uint8_t* buffer = malloc(num_bytes);
@@ -287,9 +287,9 @@ lean_obj_res cleanode_socket_receive_exact(lean_obj_arg sock_obj, uint32_t num_b
  *   Ok none         — timed out (no data within timeout_ms)
  *   Error e         — socket error or connection closed
  *
- * cleanode_socket_receive_exact_timeout : Socket -> UInt32 -> UInt32 -> IO (Except SocketError (Option ByteArray))
+ * dion_socket_receive_exact_timeout : Socket -> UInt32 -> UInt32 -> IO (Except SocketError (Option ByteArray))
  */
-lean_obj_res cleanode_socket_receive_exact_timeout(lean_obj_arg sock_obj, uint32_t num_bytes, uint32_t timeout_ms, lean_obj_arg world) {
+lean_obj_res dion_socket_receive_exact_timeout(lean_obj_arg sock_obj, uint32_t num_bytes, uint32_t timeout_ms, lean_obj_arg world) {
     int sockfd = (int)socket_get_fd(sock_obj);
 
     uint8_t* buffer = malloc(num_bytes);
@@ -359,9 +359,9 @@ lean_obj_res cleanode_socket_receive_exact_timeout(lean_obj_arg sock_obj, uint32
 
 /*
  * Resolve hostname to all IP addresses (DNS discovery)
- * cleanode_dns_resolve : String -> IO (Array String)
+ * dion_dns_resolve : String -> IO (Array String)
  */
-lean_obj_res cleanode_dns_resolve(lean_obj_arg host_obj, lean_obj_arg world) {
+lean_obj_res dion_dns_resolve(lean_obj_arg host_obj, lean_obj_arg world) {
     ensure_wsa_init();
     const char* host = lean_string_cstr(host_obj);
 
@@ -406,9 +406,9 @@ lean_obj_res cleanode_dns_resolve(lean_obj_arg host_obj, lean_obj_arg world) {
 
 /*
  * Create a listening socket on the given port (dual-stack IPv4+IPv6)
- * cleanode_socket_listen : UInt16 -> IO (Except SocketError Socket)
+ * dion_socket_listen : UInt16 -> IO (Except SocketError Socket)
  */
-lean_obj_res cleanode_socket_listen(uint16_t port, lean_obj_arg world) {
+lean_obj_res dion_socket_listen(uint16_t port, lean_obj_arg world) {
     ensure_wsa_init();
 
     int sockfd = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
@@ -455,9 +455,9 @@ lean_obj_res cleanode_socket_listen(uint16_t port, lean_obj_arg world) {
 
 /*
  * Accept one connection from a listening socket
- * cleanode_socket_accept : Socket -> IO (Except SocketError Socket)
+ * dion_socket_accept : Socket -> IO (Except SocketError Socket)
  */
-lean_obj_res cleanode_socket_accept(lean_obj_arg sock_obj, lean_obj_arg world) {
+lean_obj_res dion_socket_accept(lean_obj_arg sock_obj, lean_obj_arg world) {
     int listenfd = (int)socket_get_fd(sock_obj);
 
     struct sockaddr_in6 client_addr;
@@ -476,9 +476,9 @@ lean_obj_res cleanode_socket_accept(lean_obj_arg sock_obj, lean_obj_arg world) {
 
 /*
  * Close socket
- * cleanode_socket_close : Socket -> IO Unit
+ * dion_socket_close : Socket -> IO Unit
  */
-lean_obj_res cleanode_socket_close(lean_obj_arg sock_obj, lean_obj_arg world) {
+lean_obj_res dion_socket_close(lean_obj_arg sock_obj, lean_obj_arg world) {
     int sockfd = (int)socket_get_fd(sock_obj);
     CLOSESOCKET(sockfd);
     return lean_io_result_mk_ok(lean_box(0));
@@ -488,9 +488,9 @@ lean_obj_res cleanode_socket_close(lean_obj_arg sock_obj, lean_obj_arg world) {
 /*
  * Create a listening Unix domain socket at the given path.
  * Unlinks any stale socket file before binding.
- * cleanode_unix_listen : String -> IO (Except SocketError Socket)
+ * dion_unix_listen : String -> IO (Except SocketError Socket)
  */
-lean_obj_res cleanode_unix_listen(lean_obj_arg path_obj, lean_obj_arg world) {
+lean_obj_res dion_unix_listen(lean_obj_arg path_obj, lean_obj_arg world) {
     const char* path = lean_string_cstr(path_obj);
 
     int sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -538,9 +538,9 @@ lean_obj_res cleanode_unix_listen(lean_obj_arg path_obj, lean_obj_arg world) {
 
 /*
  * Accept one connection from a Unix domain listening socket.
- * cleanode_unix_accept : Socket -> IO (Except SocketError Socket)
+ * dion_unix_accept : Socket -> IO (Except SocketError Socket)
  */
-lean_obj_res cleanode_unix_accept(lean_obj_arg sock_obj, lean_obj_arg world) {
+lean_obj_res dion_unix_accept(lean_obj_arg sock_obj, lean_obj_arg world) {
     int listenfd = (int)socket_get_fd(sock_obj);
 
     struct sockaddr_un client_addr;
@@ -559,9 +559,9 @@ lean_obj_res cleanode_unix_accept(lean_obj_arg sock_obj, lean_obj_arg world) {
 
 /*
  * Close a Unix socket and unlink the socket file.
- * cleanode_unix_close_and_unlink : Socket -> String -> IO Unit
+ * dion_unix_close_and_unlink : Socket -> String -> IO Unit
  */
-lean_obj_res cleanode_unix_close_and_unlink(lean_obj_arg sock_obj, lean_obj_arg path_obj, lean_obj_arg world) {
+lean_obj_res dion_unix_close_and_unlink(lean_obj_arg sock_obj, lean_obj_arg path_obj, lean_obj_arg world) {
     int sockfd = (int)socket_get_fd(sock_obj);
     const char* path = lean_string_cstr(path_obj);
     CLOSESOCKET(sockfd);

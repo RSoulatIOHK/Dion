@@ -78,7 +78,7 @@ static lean_obj_res mk_except_error(lean_obj_arg val) {
  * HTTP GET (returns ByteArray)
  * ======================== */
 
-LEAN_EXPORT lean_obj_res cleanode_http_get(b_lean_obj_arg url_obj, lean_obj_arg world) {
+LEAN_EXPORT lean_obj_res dion_http_get(b_lean_obj_arg url_obj, lean_obj_arg world) {
     const char *url = lean_string_cstr(url_obj);
     CURL *curl = curl_easy_init();
     if (!curl) {
@@ -92,7 +92,7 @@ LEAN_EXPORT lean_obj_res cleanode_http_get(b_lean_obj_arg url_obj, lean_obj_arg 
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, buf);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "cleanode/0.1");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "dion/0.1");
 
     CURLcode res = curl_easy_perform(curl);
 
@@ -129,7 +129,7 @@ LEAN_EXPORT lean_obj_res cleanode_http_get(b_lean_obj_arg url_obj, lean_obj_arg 
  * HTTP GET JSON (returns String)
  * ======================== */
 
-LEAN_EXPORT lean_obj_res cleanode_http_get_json(b_lean_obj_arg url_obj, lean_obj_arg world) {
+LEAN_EXPORT lean_obj_res dion_http_get_json(b_lean_obj_arg url_obj, lean_obj_arg world) {
     const char *url = lean_string_cstr(url_obj);
     CURL *curl = curl_easy_init();
     if (!curl) {
@@ -147,7 +147,7 @@ LEAN_EXPORT lean_obj_res cleanode_http_get_json(b_lean_obj_arg url_obj, lean_obj
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, buf);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "cleanode/0.1");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "dion/0.1");
 
     CURLcode res = curl_easy_perform(curl);
     curl_slist_free_all(headers);
@@ -224,7 +224,7 @@ static int progress_callback(void *userdata, curl_off_t total, curl_off_t now,
     return 0;
 }
 
-LEAN_EXPORT lean_obj_res cleanode_http_download(b_lean_obj_arg url_obj, b_lean_obj_arg path_obj, lean_obj_arg world) {
+LEAN_EXPORT lean_obj_res dion_http_download(b_lean_obj_arg url_obj, b_lean_obj_arg path_obj, lean_obj_arg world) {
     const char *url = lean_string_cstr(url_obj);
     const char *path = lean_string_cstr(path_obj);
 
@@ -248,7 +248,7 @@ LEAN_EXPORT lean_obj_res cleanode_http_download(b_lean_obj_arg url_obj, b_lean_o
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3600L);  /* 1 hour for large snapshots */
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "cleanode/0.1");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "dion/0.1");
     curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
     curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
     curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progress);

@@ -149,9 +149,9 @@ static void blake2b_final(blake2b_state *S, uint8_t *out) {
 
 /*
  * Compute Blake2b-256 hash
- * cleanode_blake2b_256 : ByteArray -> ByteArray
+ * dion_blake2b_256 : ByteArray -> ByteArray
  */
-lean_obj_res cleanode_blake2b_256(lean_obj_arg data_obj, lean_obj_arg world) {
+lean_obj_res dion_blake2b_256(lean_obj_arg data_obj, lean_obj_arg world) {
     size_t len = lean_sarray_size(data_obj);
     const uint8_t* data = lean_sarray_cptr(data_obj);
 
@@ -171,9 +171,9 @@ lean_obj_res cleanode_blake2b_256(lean_obj_arg data_obj, lean_obj_arg world) {
 
 /*
  * Compute Blake2b-224 hash (28 bytes) — used for Cardano key hashes
- * cleanode_blake2b_224 : ByteArray -> IO ByteArray
+ * dion_blake2b_224 : ByteArray -> IO ByteArray
  */
-lean_obj_res cleanode_blake2b_224(lean_obj_arg data_obj, lean_obj_arg world) {
+lean_obj_res dion_blake2b_224(lean_obj_arg data_obj, lean_obj_arg world) {
     size_t len = lean_sarray_size(data_obj);
     const uint8_t* data = lean_sarray_cptr(data_obj);
 

@@ -920,7 +920,7 @@ static int secp256k1_schnorr_verify_impl(const uint8_t *pk32, const uint8_t *msg
  * Lean FFI Entry Points
  * ============================================================ */
 
-lean_obj_res cleanode_secp256k1_ecdsa_verify(b_lean_obj_arg vk_obj, b_lean_obj_arg msg_obj,
+lean_obj_res dion_secp256k1_ecdsa_verify(b_lean_obj_arg vk_obj, b_lean_obj_arg msg_obj,
                                               b_lean_obj_arg sig_obj) {
     uint8_t *vk = lean_sarray_cptr(vk_obj);
     size_t vk_len = lean_sarray_size(vk_obj);
@@ -938,7 +938,7 @@ lean_obj_res cleanode_secp256k1_ecdsa_verify(b_lean_obj_arg vk_obj, b_lean_obj_a
     return lean_io_result_mk_ok(lean_box(result ? 1 : 0));
 }
 
-lean_obj_res cleanode_secp256k1_schnorr_verify(b_lean_obj_arg vk_obj, b_lean_obj_arg msg_obj,
+lean_obj_res dion_secp256k1_schnorr_verify(b_lean_obj_arg vk_obj, b_lean_obj_arg msg_obj,
                                                 b_lean_obj_arg sig_obj) {
     uint8_t *vk = lean_sarray_cptr(vk_obj);
     size_t vk_len = lean_sarray_size(vk_obj);

@@ -44,7 +44,7 @@ static void signal_handler(int sig) {
  * Enable raw mode: disable canonical mode + echo, keep ISIG for Ctrl+C.
  * Returns 0 on failure, 1 on success.
  */
-lean_obj_res cleanode_terminal_enable_raw(lean_obj_arg world) {
+lean_obj_res dion_terminal_enable_raw(lean_obj_arg world) {
     if (raw_mode_active) {
         return lean_io_result_mk_ok(lean_box(1));
     }
@@ -76,7 +76,7 @@ lean_obj_res cleanode_terminal_enable_raw(lean_obj_arg world) {
 /*
  * Restore terminal to original mode.
  */
-lean_obj_res cleanode_terminal_disable_raw(lean_obj_arg world) {
+lean_obj_res dion_terminal_disable_raw(lean_obj_arg world) {
     if (raw_mode_active) {
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
         raw_mode_active = 0;
@@ -99,7 +99,7 @@ lean_obj_res cleanode_terminal_disable_raw(lean_obj_arg world) {
  *   'q'         = 113
  *   Space       = 32
  */
-lean_obj_res cleanode_terminal_read_key(lean_obj_arg world) {
+lean_obj_res dion_terminal_read_key(lean_obj_arg world) {
     unsigned char buf[6];
     ssize_t n = read(STDIN_FILENO, buf, 1);
     if (n <= 0) {

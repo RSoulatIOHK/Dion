@@ -90,9 +90,9 @@ static void keccak_256_hash(const uint8_t *input, size_t inlen, uint8_t output[3
 }
 
 /*
- * cleanode_keccak_256 : ByteArray -> IO ByteArray
+ * dion_keccak_256 : ByteArray -> IO ByteArray
  */
-lean_obj_res cleanode_keccak_256(b_lean_obj_arg data_obj, lean_obj_arg world) {
+lean_obj_res dion_keccak_256(b_lean_obj_arg data_obj, lean_obj_arg world) {
     (void)world;
     const uint8_t *data = lean_sarray_cptr(data_obj);
     size_t len = lean_sarray_size(data_obj);

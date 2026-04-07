@@ -39,7 +39,7 @@ static lean_obj_res mk_except_error_zstd(lean_obj_arg val) {
  * @param dst_path  Path to write the decompressed output
  * @return IO (Except String Unit)
  */
-LEAN_EXPORT lean_obj_res cleanode_zstd_decompress_file(
+LEAN_EXPORT lean_obj_res dion_zstd_decompress_file(
     b_lean_obj_arg src_obj, b_lean_obj_arg dst_obj, lean_obj_arg world)
 {
     const char *src_path = lean_string_cstr(src_obj);
@@ -132,7 +132,7 @@ LEAN_EXPORT lean_obj_res cleanode_zstd_decompress_file(
  * @param data  The compressed ByteArray
  * @return IO (Except String ByteArray)
  */
-LEAN_EXPORT lean_obj_res cleanode_zstd_decompress(b_lean_obj_arg data_obj, lean_obj_arg world) {
+LEAN_EXPORT lean_obj_res dion_zstd_decompress(b_lean_obj_arg data_obj, lean_obj_arg world) {
     size_t srcSize = lean_sarray_size(data_obj);
     const void *src = lean_sarray_cptr(data_obj);
 

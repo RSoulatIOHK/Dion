@@ -44,7 +44,7 @@ static lean_object *g_metrics_callback = NULL;
  * Set the metrics callback. Called once from Lean before starting the server.
  * The callback has type: Unit → IO String
  */
-LEAN_EXPORT lean_obj_res cleanode_metrics_set_callback(lean_obj_arg callback, lean_obj_arg world) {
+LEAN_EXPORT lean_obj_res dion_metrics_set_callback(lean_obj_arg callback, lean_obj_arg world) {
     if (g_metrics_callback) {
         lean_dec_ref(g_metrics_callback);
     }
@@ -123,7 +123,7 @@ static void handle_client(int client_fd) {
  * @param port  Port number to listen on
  * @return IO (Except String Unit) — only returns on error
  */
-LEAN_EXPORT lean_obj_res cleanode_metrics_server_start(uint16_t port, lean_obj_arg world) {
+LEAN_EXPORT lean_obj_res dion_metrics_server_start(uint16_t port, lean_obj_arg world) {
     int server_fd = socket(AF_INET6, SOCK_STREAM, 0);
     if (server_fd < 0) {
         return lean_io_result_mk_ok(mk_except_error_srv(lean_mk_string("Failed to create socket")));

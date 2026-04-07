@@ -136,9 +136,9 @@ static void ripemd160_hash(const uint8_t *msg, size_t len, uint8_t digest[20]) {
 }
 
 /*
- * cleanode_ripemd_160 : ByteArray -> IO ByteArray
+ * dion_ripemd_160 : ByteArray -> IO ByteArray
  */
-lean_obj_res cleanode_ripemd_160(b_lean_obj_arg data_obj, lean_obj_arg world) {
+lean_obj_res dion_ripemd_160(b_lean_obj_arg data_obj, lean_obj_arg world) {
     (void)world;
     const uint8_t *data = lean_sarray_cptr(data_obj);
     size_t len = lean_sarray_size(data_obj);

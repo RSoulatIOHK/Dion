@@ -1,5 +1,5 @@
-import Cleanode.Ledger.Governance
-import Cleanode.Ledger.State
+import Dion.Ledger.Governance
+import Dion.Ledger.State
 
 /-!
 # Conway Governance Validation
@@ -19,10 +19,10 @@ Validates governance actions per the Conway GOV/GOVCERT rules:
 - Conway Ledger Spec: GOV, GOVCERT, RATIFY rules
 -/
 
-namespace Cleanode.Ledger.GovernanceValidation
+namespace Dion.Ledger.GovernanceValidation
 
-open Cleanode.Ledger.Governance
-open Cleanode.Ledger.State
+open Dion.Ledger.Governance
+open Dion.Ledger.State
 
 -- ====================
 -- = Gov Errors       =
@@ -338,4 +338,4 @@ def requiresGuardrailsScript (gs : GovernanceState)
       | _ => false
     if needsGuardrails then some scriptHash else none
 
-end Cleanode.Ledger.GovernanceValidation
+end Dion.Ledger.GovernanceValidation

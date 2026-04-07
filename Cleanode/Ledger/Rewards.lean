@@ -1,5 +1,5 @@
-import Cleanode.Ledger.State
-import Cleanode.Config.Genesis
+import Dion.Ledger.State
+import Dion.Config.Genesis
 
 /-!
 # Rewards Calculation
@@ -27,10 +27,10 @@ All arithmetic uses scaled integers to avoid floating-point non-determinism.
 - Design Specification for Delegation and Incentives in Cardano
 -/
 
-namespace Cleanode.Ledger.Rewards
+namespace Dion.Ledger.Rewards
 
-open Cleanode.Ledger.State
-open Cleanode.Config.Genesis
+open Dion.Ledger.State
+open Dion.Config.Genesis
 
 -- ====================
 -- = Constants        =
@@ -128,7 +128,7 @@ def splitPoolReward (pool : PoolParams) (totalReward : Nat) : PoolReward :=
 
 /-- Compute rewards for all pools in an epoch -/
 def computeEpochRewards (params : RewardParams) (pools : PoolState)
-    (delegation : DelegationState) (utxo : Cleanode.Ledger.UTxO.UTxOSet)
+    (delegation : DelegationState) (utxo : Dion.Ledger.UTxO.UTxOSet)
     : List PoolReward :=
   pools.registeredPools.map fun pool =>
     let poolStake := delegation.poolStake pool.poolId utxo
@@ -139,4 +139,4 @@ def computeEpochRewards (params : RewardParams) (pools : PoolState)
 def totalDistributed (rewards : List PoolReward) : Nat :=
   rewards.foldl (fun acc r => acc + r.totalReward) 0
 
-end Cleanode.Ledger.Rewards
+end Dion.Ledger.Rewards

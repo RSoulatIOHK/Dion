@@ -1,5 +1,5 @@
-import Cleanode.Crypto.Sign.Ed25519.Signature
-import Cleanode.Crypto.Hash.Sha512
+import Dion.Crypto.Sign.Ed25519.Signature
+import Dion.Crypto.Hash.Sha512
 
 /-!
 # KES (Key Evolving Signatures) - Sum Composition
@@ -24,10 +24,10 @@ To verify a KES signature at period t:
 - https://github.com/IntersectMBO/cardano-base/tree/master/cardano-crypto-class
 -/
 
-namespace Cleanode.Crypto.Sign.KES
+namespace Dion.Crypto.Sign.KES
 
-open Cleanode.Crypto.Sign.Ed25519.Signature
-open Cleanode.Crypto.Hash.Sha512
+open Dion.Crypto.Sign.Ed25519.Signature
+open Dion.Crypto.Hash.Sha512
 
 -- ====================
 -- = KES Types        =
@@ -66,7 +66,7 @@ structure KESVerificationKey where
     used when available. -/
 private def hashVKPair (left right : List UInt8) : List UInt8 :=
   let hashOutput := Internal.hashMessage (left ++ right)
-  let hashBytes := hashOutput.flatMap Cleanode.Crypto.Integer.UInt64.toUInt8BE
+  let hashBytes := hashOutput.flatMap Dion.Crypto.Integer.UInt64.toUInt8BE
   hashBytes.take 32
 
 /-- Verify a KES signature at a given period.
@@ -108,7 +108,7 @@ def verify (verificationKey : KESVerificationKey) (period : Nat)
       -- First, verify the Ed25519 signature at the leaf
       -- The leaf VK is the companion of level 0, or reconstructed
       -- For simplicity, we verify the leaf signature against the message
-      let leafSigValid := Cleanode.Crypto.Sign.Ed25519.Signature.verify
+      let leafSigValid := Dion.Crypto.Sign.Ed25519.Signature.verify
         leafLevel.companionVK message leafLevel.signature
 
       if !leafSigValid then false
@@ -144,4 +144,4 @@ def maxPeriods (depth : Nat := defaultDepth) : Nat :=
 def isValidPeriod (period : Nat) (depth : Nat := defaultDepth) : Bool :=
   period < maxPeriods depth
 
-end Cleanode.Crypto.Sign.KES
+end Dion.Crypto.Sign.KES

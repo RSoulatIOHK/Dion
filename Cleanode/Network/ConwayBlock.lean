@@ -1,5 +1,5 @@
-import Cleanode.Network.Cbor
-import Cleanode.Network.CborCursor
+import Dion.Network.Cbor
+import Dion.Network.CborCursor
 
 /-!
 # Conway Era Block Body Parser
@@ -42,10 +42,10 @@ Each transaction body contains:
 - cardano-ledger Conway specs
 -/
 
-namespace Cleanode.Network.ConwayBlock
+namespace Dion.Network.ConwayBlock
 
-open Cleanode.Network.Cbor
-open Cleanode.Network.CborCursor
+open Dion.Network.Cbor
+open Dion.Network.CborCursor
 
 -- ==============
 -- = Core Types =
@@ -136,7 +136,7 @@ instance : Repr WitnessSet where
 
 /-- Raw certificate parsed from block CBOR.
     Kept lightweight to avoid circular dependencies with Ledger.Certificate.
-    Convert to `Cleanode.Ledger.Certificate.Certificate` at the call site. -/
+    Convert to `Dion.Ledger.Certificate.Certificate` at the call site. -/
 inductive RawCertificate where
   | stakeKeyRegistration (credIsScript : Bool) (credHash : ByteArray)
   | stakeKeyDeregistration (credIsScript : Bool) (credHash : ByteArray)
@@ -1456,7 +1456,7 @@ def scriptHashPrefix (scriptBytes : ByteArray) (versionByte : UInt8) : ByteArray
 
 -- The old ByteArray-based API functions are kept for files that still
 -- import ConwayBlock types but don't call parse functions directly.
--- The old Cbor.lean decode functions remain available via `open Cleanode.Network.Cbor`.
+-- The old Cbor.lean decode functions remain available via `open Dion.Network.Cbor`.
 
 -- ==========================
 -- = Tx CBOR Splitter       =
@@ -1518,4 +1518,4 @@ partial def splitTxCbor (rawTx : ByteArray) : Option TxComponents := do
   some { bodyRawBytes := bodyBytes, witnessRawBytes := witnessBytes,
          auxDataRawBytes := auxData, isValid := valid }
 
-end Cleanode.Network.ConwayBlock
+end Dion.Network.ConwayBlock

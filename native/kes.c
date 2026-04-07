@@ -285,3 +285,96 @@ LEAN_EXPORT lean_obj_res cleanode_kes_derive_vk(
 
     return lean_io_result_mk_ok(mk_except_ok_kes(result));
 }
+
+/*
+ * cleanode_kes_keygen : IO (Except String (ByteArray × ByteArray))
+ *
+ * Generate a fresh Sum-KES-6 key pair at period 0.
+ *
+ * The signing key (compact format, 256 bytes):
+ *   [0..63]   = NaCl Ed25519 secret key for leaf 0 (seed || pk, 64 bytes)
+ *   [64..95]  = sibling VK at level 0 (VK of leaf 1)
+ *   [96..127] = sibling VK at level 1 (VK of subtree {2,3})
+ *   [128..159]= sibling VK at level 2 (VK of subtree {4..7})
+ *   [160..191]= sibling VK at level 3 (VK of subtree {8..15})
+ *   [192..223]= sibling VK at level 4 (VK of subtree {16..31})
+ *   [224..255]= sibling VK at level 5 (VK of subtree {32..63})
+ *
+ * The verification key (32 bytes) = root VK = hash^6 up the tree.
+ *
+ * Returns: IO (Except String (sk: ByteArray, vk: ByteArray))
+ */
+LEAN_EXPORT lean_obj_res cleanode_kes_keygen(lean_obj_arg world)
+{
+    /* We have 2^6 = 64 leaves. Generate a seed for each. */
+    unsigned char seeds[KES_MAX_PERIODS][32];
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (!f) {
+        return lean_io_result_mk_ok(mk_except_error_kes(
+            lean_mk_string("Failed to open /dev/urandom for KES keygen")));
+    }
+    size_t nread = fread(seeds, 32, KES_MAX_PERIODS, f);
+    fclose(f);
+    if (nread != KES_MAX_PERIODS) {
+        return lean_io_result_mk_ok(mk_except_error_kes(
+            lean_mk_string("Failed to read enough random bytes for KES keygen")));
+    }
+
+    /* Derive a public key (VK) for each leaf from its seed */
+    unsigned char leaf_vks[KES_MAX_PERIODS][32];
+    unsigned char leaf_sk0[ED25519_SK_SIZE];  /* Full NaCl SK for leaf 0 */
+    for (int i = 0; i < KES_MAX_PERIODS; i++) {
+        unsigned char pk[32], sk[64];
+        cleanode_ed25519_seed_to_keypair(pk, sk, seeds[i]);
+        memcpy(leaf_vks[i], pk, 32);
+        if (i == 0) memcpy(leaf_sk0, sk, 64);
+    }
+
+    /* Build the VK tree bottom-up. Level 0 = leaves, level 6 = root.
+     * tree_vks[level][node] = VK at that node.
+     * At level 0: 64 nodes (leaf VKs).
+     * At level l: 64 >> l nodes. */
+    unsigned char tree_vks[KES_DEPTH + 1][KES_MAX_PERIODS][32];
+    memcpy(tree_vks[0], leaf_vks, sizeof(leaf_vks));
+    for (int level = 1; level <= KES_DEPTH; level++) {
+        int nodes = KES_MAX_PERIODS >> level;
+        for (int n = 0; n < nodes; n++) {
+            hash_vk_pair(tree_vks[level - 1][2 * n],
+                         tree_vks[level - 1][2 * n + 1],
+                         tree_vks[level][n]);
+        }
+    }
+
+    /* Build the compact signing key for period 0.
+     * At period 0, the active path is always the leftmost leaf at each level.
+     * The sibling at level l (0-indexed from leaf) is the RIGHT child VK
+     * of the parent at that level. */
+    unsigned char kes_sk[256];
+    memcpy(kes_sk, leaf_sk0, 64);  /* NaCl SK for leaf 0 */
+    /* Siblings: at leaf level (0), sibling = tree_vks[0][1] (leaf 1).
+     * At level l (1-indexed from leaves), sibling = tree_vks[l][1]
+     * (the right child of the root-path node at that level). */
+    for (int l = 0; l < KES_DEPTH; l++) {
+        /* The active node at tree level l is index 0 (leftmost).
+         * Its sibling is index 1. */
+        memcpy(kes_sk + 64 + l * 32, tree_vks[l][1], 32);
+    }
+
+    /* Root VK = tree_vks[KES_DEPTH][0] */
+    unsigned char root_vk[32];
+    memcpy(root_vk, tree_vks[KES_DEPTH][0], 32);
+
+    /* Return (sk: ByteArray, vk: ByteArray) as a Lean Prod */
+    lean_object *sk_obj = lean_alloc_sarray(1, 256, 256);
+    memcpy(lean_sarray_cptr(sk_obj), kes_sk, 256);
+
+    lean_object *vk_obj = lean_alloc_sarray(1, 32, 32);
+    memcpy(lean_sarray_cptr(vk_obj), root_vk, 32);
+
+    /* Wrap in Except.ok and a Prod */
+    lean_object *pair = lean_alloc_ctor(0, 2, 0);
+    lean_ctor_set(pair, 0, sk_obj);
+    lean_ctor_set(pair, 1, vk_obj);
+
+    return lean_io_result_mk_ok(mk_except_ok_kes(pair));
+}

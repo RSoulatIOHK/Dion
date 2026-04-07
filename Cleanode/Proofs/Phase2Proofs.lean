@@ -1,7 +1,7 @@
-import Cleanode.Network.BlockFetchState
-import Cleanode.Ledger.UTxO
-import Cleanode.Ledger.Fee
-import Cleanode.Ledger.State
+import Dion.Network.BlockFetchState
+import Dion.Ledger.UTxO
+import Dion.Ledger.Fee
+import Dion.Ledger.State
 
 /-!
 # Phase 2 Proof Scaffolds
@@ -19,12 +19,12 @@ or complex data structure properties. They serve as specifications
 for future formal verification work.
 -/
 
-namespace Cleanode.Proofs.Phase2Proofs
+namespace Dion.Proofs.Phase2Proofs
 
-open Cleanode.Network.BlockFetchState
-open Cleanode.Ledger.UTxO
-open Cleanode.Ledger.Fee
-open Cleanode.Ledger.State
+open Dion.Network.BlockFetchState
+open Dion.Ledger.UTxO
+open Dion.Ledger.Fee
+open Dion.Ledger.State
 
 -- ====================
 -- = BlockFetch Proofs =
@@ -123,4 +123,4 @@ theorem state_transition_preserves_slot :
       (processEpochBoundary state 0).lastSlot = state.lastSlot := by
   intros; sorry  -- computeEpochRewards doesn't touch lastSlot; proof requires HashMap fold lemmas
 
-end Cleanode.Proofs.Phase2Proofs
+end Dion.Proofs.Phase2Proofs

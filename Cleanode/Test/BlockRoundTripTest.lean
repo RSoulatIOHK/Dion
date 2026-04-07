@@ -1,12 +1,12 @@
-import Cleanode.Test.TestHarness
-import Cleanode.Consensus.Praos.BlockForge
-import Cleanode.Consensus.Praos.TxSelection
-import Cleanode.Network.ConwayBlock
-import Cleanode.Network.Cbor
-import Cleanode.Network.CborCursor
-import Cleanode.Network.Crypto
-import Cleanode.Crypto.Sign.Ed25519.Point
-import Cleanode.Crypto.VRF.ECVRF
+import Dion.Test.TestHarness
+import Dion.Consensus.Praos.BlockForge
+import Dion.Consensus.Praos.TxSelection
+import Dion.Network.ConwayBlock
+import Dion.Network.Cbor
+import Dion.Network.CborCursor
+import Dion.Network.Crypto
+import Dion.Crypto.Sign.Ed25519.Point
+import Dion.Crypto.VRF.ECVRF
 
 /-!
 # Block CBOR Round-Trip Tests
@@ -14,18 +14,18 @@ import Cleanode.Crypto.VRF.ECVRF
 Verifies that forged blocks can be parsed back correctly.
 -/
 
-namespace Cleanode.Test.BlockRoundTripTest
+namespace Dion.Test.BlockRoundTripTest
 
-open Cleanode.Test.TestHarness
-open Cleanode.Consensus.Praos.BlockForge
-open Cleanode.Consensus.Praos.TxSelection
-open Cleanode.Consensus.Praos.ConsensusState
-open Cleanode.Network.Cbor
-open Cleanode.Network.CborCursor
-open Cleanode.Network.ConwayBlock
-open Cleanode.Network.Crypto
-open Cleanode.Crypto.Sign.Ed25519.Point
-open Cleanode.Crypto.VRF.ECVRF
+open Dion.Test.TestHarness
+open Dion.Consensus.Praos.BlockForge
+open Dion.Consensus.Praos.TxSelection
+open Dion.Consensus.Praos.ConsensusState
+open Dion.Network.Cbor
+open Dion.Network.CborCursor
+open Dion.Network.ConwayBlock
+open Dion.Network.Crypto
+open Dion.Crypto.Sign.Ed25519.Point
+open Dion.Crypto.VRF.ECVRF
 
 /-- Dummy VRF proof for testing -/
 private def dummyVrfProof : VRFProof :=
@@ -67,29 +67,29 @@ def testEmptyBlockStructure : IO TestResult :=
   runTest "BlockRoundTrip" "empty block has valid 5-element CBOR structure" do
     let bodyComponents := encodeBlockBody ([] : List SelectedTx)
     let fullBlock ← buildFullBlock bodyComponents
-    let c := Cleanode.Network.CborCursor.Cursor.mk' fullBlock
+    let c := Dion.Network.CborCursor.Cursor.mk' fullBlock
     -- Must be a 5-element array
-    let some r := Cleanode.Network.CborCursor.decodeArrayHeader c | return false
+    let some r := Dion.Network.CborCursor.decodeArrayHeader c | return false
     if r.value != 5 then
       IO.eprintln s!"  expected 5-element array, got {r.value}"
       return false
     -- Skip header (element 0)
-    let some afterHeader := Cleanode.Network.CborCursor.skipValue r.cursor | return false
+    let some afterHeader := Dion.Network.CborCursor.skipValue r.cursor | return false
     -- Element 1: tx_bodies array
     if majorTypeAt afterHeader != 4 then
       IO.eprintln "  tx_bodies is not a CBOR array"
       return false
-    let some afterBodies := Cleanode.Network.CborCursor.skipValue afterHeader | return false
+    let some afterBodies := Dion.Network.CborCursor.skipValue afterHeader | return false
     -- Element 2: witness_sets array
     if majorTypeAt afterBodies != 4 then
       IO.eprintln "  witness_sets is not a CBOR array"
       return false
-    let some afterWit := Cleanode.Network.CborCursor.skipValue afterBodies | return false
+    let some afterWit := Dion.Network.CborCursor.skipValue afterBodies | return false
     -- Element 3: aux_data map
     if majorTypeAt afterWit != 5 then
       IO.eprintln "  aux_data is not a CBOR map"
       return false
-    let some afterAux := Cleanode.Network.CborCursor.skipValue afterWit | return false
+    let some afterAux := Dion.Network.CborCursor.skipValue afterWit | return false
     -- Element 4: invalid_txs array
     if majorTypeAt afterAux != 4 then
       IO.eprintln "  invalid_txs is not a CBOR array"
@@ -101,10 +101,10 @@ def testEmptyBlockTxCount : IO TestResult :=
   runTest "BlockRoundTrip" "empty block has 0 tx bodies" do
     let bodyComponents := encodeBlockBody ([] : List SelectedTx)
     let fullBlock ← buildFullBlock bodyComponents
-    let c := Cleanode.Network.CborCursor.Cursor.mk' fullBlock
-    let some r := Cleanode.Network.CborCursor.decodeArrayHeader c | return false
-    let some afterHeader := Cleanode.Network.CborCursor.skipValue r.cursor | return false
-    let some bodiesR := Cleanode.Network.CborCursor.decodeArrayHeader afterHeader | return false
+    let c := Dion.Network.CborCursor.Cursor.mk' fullBlock
+    let some r := Dion.Network.CborCursor.decodeArrayHeader c | return false
+    let some afterHeader := Dion.Network.CborCursor.skipValue r.cursor | return false
+    let some bodiesR := Dion.Network.CborCursor.decodeArrayHeader afterHeader | return false
     if bodiesR.value != 0 then
       IO.eprintln s!"  expected 0 tx bodies, got {bodiesR.value}"
       return false
@@ -147,17 +147,17 @@ def testBlockWithOneTx : IO TestResult :=
     }
     let bc := encodeBlockBody [tx]
     let fullBlock ← buildFullBlock bc
-    let c := Cleanode.Network.CborCursor.Cursor.mk' fullBlock
-    let some r := Cleanode.Network.CborCursor.decodeArrayHeader c | return false
+    let c := Dion.Network.CborCursor.Cursor.mk' fullBlock
+    let some r := Dion.Network.CborCursor.decodeArrayHeader c | return false
     if r.value != 5 then return false
-    let some afterHeader := Cleanode.Network.CborCursor.skipValue r.cursor | return false
-    let some bodiesR := Cleanode.Network.CborCursor.decodeArrayHeader afterHeader | return false
+    let some afterHeader := Dion.Network.CborCursor.skipValue r.cursor | return false
+    let some bodiesR := Dion.Network.CborCursor.decodeArrayHeader afterHeader | return false
     if bodiesR.value != 1 then
       IO.eprintln s!"  expected 1 tx body, got {bodiesR.value}"
       return false
     -- Verify witness_sets also has count 1
-    let some afterBodies := Cleanode.Network.CborCursor.skipValue afterHeader | return false
-    let some witR := Cleanode.Network.CborCursor.decodeArrayHeader afterBodies | return false
+    let some afterBodies := Dion.Network.CborCursor.skipValue afterHeader | return false
+    let some witR := Dion.Network.CborCursor.decodeArrayHeader afterBodies | return false
     if witR.value != 1 then
       IO.eprintln s!"  expected 1 witness set, got {witR.value}"
       return false
@@ -170,8 +170,8 @@ def testHeaderBody10Elements : IO TestResult :=
       42 1000 zeroHash32 zeroHash28 zeroHash32
       dummyVrfProof dummyVrfOutput
       100 zeroHash32 dummyOpCert 10 0
-    let c := Cleanode.Network.CborCursor.Cursor.mk' headerBody
-    let some r := Cleanode.Network.CborCursor.decodeArrayHeader c | return false
+    let c := Dion.Network.CborCursor.Cursor.mk' headerBody
+    let some r := Dion.Network.CborCursor.decodeArrayHeader c | return false
     if r.value != 10 then
       IO.eprintln s!"  expected 10 elements, got {r.value}"
       return false
@@ -206,13 +206,13 @@ def testBlockWithAuxData : IO TestResult :=
     }
     let bc := encodeBlockBody [tx1, tx2]
     let fullBlock ← buildFullBlock bc
-    let c := Cleanode.Network.CborCursor.Cursor.mk' fullBlock
-    let some r := Cleanode.Network.CborCursor.decodeArrayHeader c | return false
-    let some afterHeader := Cleanode.Network.CborCursor.skipValue r.cursor | return false
-    let some afterBodies := Cleanode.Network.CborCursor.skipValue afterHeader | return false
-    let some afterWit := Cleanode.Network.CborCursor.skipValue afterBodies | return false
+    let c := Dion.Network.CborCursor.Cursor.mk' fullBlock
+    let some r := Dion.Network.CborCursor.decodeArrayHeader c | return false
+    let some afterHeader := Dion.Network.CborCursor.skipValue r.cursor | return false
+    let some afterBodies := Dion.Network.CborCursor.skipValue afterHeader | return false
+    let some afterWit := Dion.Network.CborCursor.skipValue afterBodies | return false
     -- aux_data map should have 1 entry (only tx1 has aux data)
-    let some auxR := Cleanode.Network.CborCursor.decodeMapHeader afterWit | return false
+    let some auxR := Dion.Network.CborCursor.decodeMapHeader afterWit | return false
     if auxR.value != 1 then
       IO.eprintln s!"  expected 1 aux_data entry, got {auxR.value}"
       return false
@@ -233,4 +233,4 @@ def runBlockRoundTripTests : IO (List TestResult) := do
   results := results ++ [← testBlockWithAuxData]
   return results
 
-end Cleanode.Test.BlockRoundTripTest
+end Dion.Test.BlockRoundTripTest

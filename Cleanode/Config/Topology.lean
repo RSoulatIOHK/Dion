@@ -29,7 +29,7 @@ The topology file specifies bootstrap peers, local roots, and public roots.
 - https://github.com/input-output-hk/cardano-node/blob/master/doc/getting-started/understanding-config-files.md
 -/
 
-namespace Cleanode.Config.Topology
+namespace Dion.Config.Topology
 
 open Lean (Json)
 
@@ -167,4 +167,4 @@ def Topology.allPeers (t : Topology) : List AccessPoint :=
   let public_ := t.publicRoots.foldl (fun acc pr => acc ++ pr.accessPoints) []
   bootstrap ++ local_ ++ public_
 
-end Cleanode.Config.Topology
+end Dion.Config.Topology

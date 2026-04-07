@@ -1,5 +1,5 @@
-import Cleanode.Mithril.Types
-import Cleanode.Network.Http
+import Dion.Mithril.Types
+import Dion.Network.Http
 import Lean
 
 /-!
@@ -19,10 +19,10 @@ forming an unbroken chain back to the genesis certificate.
 - https://mithril.network/doc/mithril/mithril-protocol/certificates
 -/
 
-namespace Cleanode.Mithril.Certificate
+namespace Dion.Mithril.Certificate
 
-open Cleanode.Mithril.Types
-open Cleanode.Network.Http
+open Dion.Mithril.Types
+open Dion.Network.Http
 open Lean (Json)
 
 -- ====================
@@ -182,4 +182,4 @@ def fetchEpochSettings (baseUrl : String) : IO (Except CertChainError StmParamet
       | some params => return .ok params
       | none => return .error (.parseError "Failed to parse STM parameters")
 
-end Cleanode.Mithril.Certificate
+end Dion.Mithril.Certificate

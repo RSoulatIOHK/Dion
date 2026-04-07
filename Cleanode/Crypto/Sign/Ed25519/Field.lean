@@ -1,6 +1,6 @@
-import Cleanode.Crypto.Integer
+import Dion.Crypto.Integer
 
-namespace Cleanode.Crypto.Sign.Ed25519.Field
+namespace Dion.Crypto.Sign.Ed25519.Field
 
 /-! ## Field Arithmetic for Curve25519-/
 
@@ -102,4 +102,4 @@ partial def toBytesLE (a : Fp) : List UInt8 :=
 
 end Fp
 
-end Cleanode.Crypto.Sign.Ed25519.Field
+end Dion.Crypto.Sign.Ed25519.Field

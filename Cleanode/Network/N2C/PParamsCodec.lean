@@ -1,5 +1,5 @@
-import Cleanode.Network.Cbor
-import Cleanode.Ledger.State
+import Dion.Network.Cbor
+import Dion.Ledger.State
 
 /-!
 # Conway Protocol Parameters CBOR Encoding
@@ -24,10 +24,10 @@ Encodes `ProtocolParamsState` as a CBOR array (list) matching the Conway ledger'
 - cardano-ledger: Cardano.Ledger.Conway.PParams (EncCBOR instance)
 -/
 
-namespace Cleanode.Network.N2C.PParamsCodec
+namespace Dion.Network.N2C.PParamsCodec
 
-open Cleanode.Network.Cbor
-open Cleanode.Ledger.State
+open Dion.Network.Cbor
+open Dion.Ledger.State
 
 -- ====================
 -- = Helpers          =
@@ -134,4 +134,4 @@ def encodeConwayPParams (params : ProtocolParamsState) : ByteArray :=
   -- 30: minFeeRefScriptCostPerByte (NonNegativeInterval → rational)
   ++ encodeRational 15 1
 
-end Cleanode.Network.N2C.PParamsCodec
+end Dion.Network.N2C.PParamsCodec

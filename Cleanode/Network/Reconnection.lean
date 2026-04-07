@@ -1,5 +1,5 @@
-import Cleanode.Network.Socket
-import Cleanode.Network.Logging
+import Dion.Network.Socket
+import Dion.Network.Logging
 
 /-!
 # Connection Reconnection
@@ -16,10 +16,10 @@ Implements exponential backoff with jitter.
 - Ouroboros Network: Connection Manager
 -/
 
-namespace Cleanode.Network.Reconnection
+namespace Dion.Network.Reconnection
 
-open Cleanode.Network.Socket
-open Cleanode.Network.Logging
+open Dion.Network.Socket
+open Dion.Network.Logging
 
 -- ====================
 -- = Configuration    =
@@ -117,4 +117,4 @@ def ReconnectManager.onError (mgr : ReconnectManager) (err : SocketError) : IO (
   let mgr := { mgr with state := .Disconnected, logger := logger }
   mgr.reconnect
 
-end Cleanode.Network.Reconnection
+end Dion.Network.Reconnection

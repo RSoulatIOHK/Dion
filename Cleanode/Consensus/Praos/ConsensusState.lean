@@ -1,7 +1,7 @@
-import Cleanode.Config.Genesis
-import Cleanode.Consensus.Praos.LeaderElection
-import Cleanode.Crypto.Hash.Sha512
-import Cleanode.Network.Crypto
+import Dion.Config.Genesis
+import Dion.Consensus.Praos.LeaderElection
+import Dion.Crypto.Hash.Sha512
+import Dion.Network.Crypto
 
 /-!
 # Consensus State
@@ -16,11 +16,11 @@ Tracks the evolving consensus state needed for Ouroboros Praos:
 - Ouroboros Praos specification, Section 4
 -/
 
-namespace Cleanode.Consensus.Praos.ConsensusState
+namespace Dion.Consensus.Praos.ConsensusState
 
-open Cleanode.Config.Genesis
-open Cleanode.Consensus.Praos.LeaderElection
-open Cleanode.Crypto.Hash.Sha512
+open Dion.Config.Genesis
+open Dion.Consensus.Praos.LeaderElection
+open Dion.Crypto.Hash.Sha512
 
 -- ====================
 -- = Operational Cert =
@@ -95,13 +95,13 @@ def needsEpochTransition (state : ConsensusState) (slot : Nat) : Bool :=
 /-- Hash two byte arrays using Blake2b-256 for nonce evolution.
     Per Praos spec, all nonce hashing uses Blake2b-256. -/
 private def hashNonceIO (a b : ByteArray) : IO ByteArray :=
-  Cleanode.Network.Crypto.blake2b_256 (a ++ b)
+  Dion.Network.Crypto.blake2b_256 (a ++ b)
 
 /-- Pure SHA-512 fallback for nonce hashing (used only when IO is unavailable). -/
 private def hashNoncePure (a b : ByteArray) : ByteArray :=
   let input := a.toList ++ b.toList
   let hashOutput := Internal.hashMessage input
-  let hashBytes := hashOutput.flatMap Cleanode.Crypto.Integer.UInt64.toUInt8BE
+  let hashBytes := hashOutput.flatMap Dion.Crypto.Integer.UInt64.toUInt8BE
   ByteArray.mk (hashBytes.take 32).toArray
 
 /-- Process epoch transition: rotate nonces and snapshots.
@@ -202,12 +202,12 @@ structure DualVRFResult where
 
 /-- Verify both VRF proofs from a block header -/
 def verifyDualVRF (vrfPublicKey : List UInt8) (epochNonce : ByteArray)
-    (slot : Nat) (certProof nonceProof : Cleanode.Crypto.VRF.ECVRF.VRFProof)
+    (slot : Nat) (certProof nonceProof : Dion.Crypto.VRF.ECVRF.VRFProof)
     (activeSlotsCoeff : Rational) (poolStake totalStake : Nat) : DualVRFResult :=
   -- Verify certVRF (leader election, domain sep 0x4C)
   let certInput := vrfInput epochNonce slot 0x4C
-  let certValid := Cleanode.Crypto.VRF.ECVRF.verify vrfPublicKey certInput certProof
-  let certOutput := Cleanode.Crypto.VRF.ECVRF.proofToHash certProof
+  let certValid := Dion.Crypto.VRF.ECVRF.verify vrfPublicKey certInput certProof
+  let certOutput := Dion.Crypto.VRF.ECVRF.proofToHash certProof
   let certThresholdOk := if certValid then
     let y := vrfOutputToNat certOutput
     let threshold := computeThresholdAccurate activeSlotsCoeff poolStake totalStake
@@ -215,8 +215,8 @@ def verifyDualVRF (vrfPublicKey : List UInt8) (epochNonce : ByteArray)
   else false
   -- Verify nonceVRF (nonce contribution, domain sep 0x4E)
   let nonceInput := vrfInputNonce epochNonce slot
-  let nonceValid := Cleanode.Crypto.VRF.ECVRF.verify vrfPublicKey nonceInput nonceProof
-  let nonceOutput := Cleanode.Crypto.VRF.ECVRF.proofToHash nonceProof
+  let nonceValid := Dion.Crypto.VRF.ECVRF.verify vrfPublicKey nonceInput nonceProof
+  let nonceOutput := Dion.Crypto.VRF.ECVRF.proofToHash nonceProof
   { certVRFValid := certValid && certThresholdOk
     nonceVRFValid := nonceValid
     nonceVRFOutput := ByteArray.mk nonceOutput.toArray }
@@ -288,4 +288,4 @@ def loadConsensusState (path : String := "data/consensus.state") : IO (Option (N
     | _ => return none
   catch _ => return none
 
-end Cleanode.Consensus.Praos.ConsensusState
+end Dion.Consensus.Praos.ConsensusState

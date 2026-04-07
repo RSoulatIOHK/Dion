@@ -9,7 +9,7 @@ the caller) trigger an `extract`.
 This eliminates ~100+ allocations per block compared to the Cbor.lean decoder.
 -/
 
-namespace Cleanode.Network.CborCursor
+namespace Dion.Network.CborCursor
 
 -- ========================
 -- = Core Types           =
@@ -266,4 +266,4 @@ end
 @[inline] def extractBetween (c1 c2 : Cursor) : ByteArray :=
   c1.data.extract c1.pos c2.pos
 
-end Cleanode.Network.CborCursor
+end Dion.Network.CborCursor

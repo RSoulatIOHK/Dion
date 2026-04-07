@@ -1,9 +1,9 @@
-import Cleanode.Consensus.Praos.BlockForge
-import Cleanode.Network.ChainSync
-import Cleanode.Network.BlockFetch
-import Cleanode.Network.Multiplexer
-import Cleanode.Network.Socket
-import Cleanode.Network.Crypto
+import Dion.Consensus.Praos.BlockForge
+import Dion.Network.ChainSync
+import Dion.Network.BlockFetch
+import Dion.Network.Multiplexer
+import Dion.Network.Socket
+import Dion.Network.Crypto
 
 /-!
 # Block Announcement
@@ -36,13 +36,13 @@ Handshake → MsgFindIntersect → MsgRequestNext → (waiting for us)
 - Ouroboros Network Spec: BlockFetch mini-protocol (server role)
 -/
 
-namespace Cleanode.Consensus.Praos.BlockAnnounce
+namespace Dion.Consensus.Praos.BlockAnnounce
 
-open Cleanode.Consensus.Praos.BlockForge
-open Cleanode.Network.ChainSync
-open Cleanode.Network.BlockFetch
-open Cleanode.Network.Multiplexer
-open Cleanode.Network.Socket
+open Dion.Consensus.Praos.BlockForge
+open Dion.Network.ChainSync
+open Dion.Network.BlockFetch
+open Dion.Network.Multiplexer
+open Dion.Network.Socket
 
 -- ====================
 -- = Peer Registry    =
@@ -106,7 +106,7 @@ def forgedBlockToHeader (block : ForgedBlock) (era : Nat := 6) : Header :=
 /-- Build a Tip from a ForgedBlock -/
 def forgedBlockToTip (block : ForgedBlock) : IO Tip := do
   -- Compute block hash from header bytes
-  let blockHash ← Cleanode.Network.Crypto.blake2b_256 block.headerBytes
+  let blockHash ← Dion.Network.Crypto.blake2b_256 block.headerBytes
   return {
     point := { slot := UInt64.ofNat block.slot, hash := blockHash },
     blockNo := UInt64.ofNat block.blockNumber
@@ -244,7 +244,7 @@ def PeerRegistry.findBlockByPoint (reg : PeerRegistry) (point : Point)
   for block in reg.forgedBlocks do
     if block.slot == point.slot.toNat then
       -- Verify hash matches
-      let blockHash ← Cleanode.Network.Crypto.blake2b_256 block.headerBytes
+      let blockHash ← Dion.Network.Crypto.blake2b_256 block.headerBytes
       if blockHash == point.hash then
         return some block
   return none
@@ -283,4 +283,4 @@ def printAnnouncementStatus (registryRef : IO.Ref PeerRegistry) : IO Unit := do
   let waiting := reg.subscribers.filter (·.isWaiting) |>.size
   IO.println s!"  Waiting peers: {waiting}"
 
-end Cleanode.Consensus.Praos.BlockAnnounce
+end Dion.Consensus.Praos.BlockAnnounce

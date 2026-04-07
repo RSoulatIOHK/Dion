@@ -1,5 +1,5 @@
-import Cleanode.Network.Cbor
-import Cleanode.Test.TestHarness
+import Dion.Network.Cbor
+import Dion.Test.TestHarness
 
 /-!
 # CBOR Roundtrip & Golden Tests
@@ -14,10 +14,10 @@ Validates CBOR encoding/decoding correctness:
 - Cardano node CBOR encoding conventions
 -/
 
-namespace Cleanode.Test.CborTest
+namespace Dion.Test.CborTest
 
-open Cleanode.Network.Cbor
-open Cleanode.Test.TestHarness
+open Dion.Network.Cbor
+open Dion.Test.TestHarness
 
 -- ====================
 -- = Roundtrip Tests  =
@@ -148,4 +148,4 @@ def runCborTests : IO (Array TestResult) := do
 
   return results
 
-end Cleanode.Test.CborTest
+end Dion.Test.CborTest

@@ -1,14 +1,14 @@
-import Cleanode.Crypto.Integer
-import Cleanode.Crypto.CString
+import Dion.Crypto.Integer
+import Dion.Crypto.CString
 
-namespace Cleanode.Crypto.Hash.Sha512
+namespace Dion.Crypto.Hash.Sha512
 
 /-! ## SHA-512 Hash Implementation-/
 
 namespace Internal
 
-open Cleanode.Crypto.Integer
-open Cleanode.Crypto.CString
+open Dion.Crypto.Integer
+open Dion.Crypto.CString
 
 -- SHA-512 round constants
 def k : List UInt64 := [
@@ -138,4 +138,4 @@ end Internal
 
 export Internal (hashMessage hash)
 
-end Cleanode.Crypto.Hash.Sha512
+end Dion.Crypto.Hash.Sha512

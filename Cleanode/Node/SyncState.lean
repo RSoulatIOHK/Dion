@@ -1,83 +1,83 @@
-import Cleanode.Network.Basic
-import Cleanode.Network.Socket
-import Cleanode.Network.Handshake
-import Cleanode.Network.Multiplexer
-import Cleanode.Network.ChainSync
-import Cleanode.Network.Byron
-import Cleanode.Network.Shelley
-import Cleanode.Network.BlockFetch
-import Cleanode.Network.BlockFetchClient
-import Cleanode.Network.ConwayBlock
-import Cleanode.Network.Crypto
-import Cleanode.Network.Bech32
-import Cleanode.Network.TxSubmission2
-import Cleanode.Network.Mempool
-import Cleanode.Network.PeerSharing
-import Cleanode.Network.PeerDb
-import Cleanode.Network.PeerConnection
-import Cleanode.Network.ConnectionManager
-import Cleanode.Network.MuxDispatcher
-import Cleanode.Network.HandshakeServer
-import Cleanode.Config.Topology
-import Cleanode.Config.Genesis
-import Cleanode.Storage.BlockStore
-import Cleanode.Storage.ChainDB
-import Cleanode.Storage.Database
-import Cleanode.Consensus.Praos.LeaderElection
-import Cleanode.Consensus.Praos.ConsensusState
-import Cleanode.Crypto.VRF.ECVRF
-import Cleanode.Crypto.Sign.Ed25519.Signature
+import Dion.Network.Basic
+import Dion.Network.Socket
+import Dion.Network.Handshake
+import Dion.Network.Multiplexer
+import Dion.Network.ChainSync
+import Dion.Network.Byron
+import Dion.Network.Shelley
+import Dion.Network.BlockFetch
+import Dion.Network.BlockFetchClient
+import Dion.Network.ConwayBlock
+import Dion.Network.Crypto
+import Dion.Network.Bech32
+import Dion.Network.TxSubmission2
+import Dion.Network.Mempool
+import Dion.Network.PeerSharing
+import Dion.Network.PeerDb
+import Dion.Network.PeerConnection
+import Dion.Network.ConnectionManager
+import Dion.Network.MuxDispatcher
+import Dion.Network.HandshakeServer
+import Dion.Config.Topology
+import Dion.Config.Genesis
+import Dion.Storage.BlockStore
+import Dion.Storage.ChainDB
+import Dion.Storage.Database
+import Dion.Consensus.Praos.LeaderElection
+import Dion.Consensus.Praos.ConsensusState
+import Dion.Crypto.VRF.ECVRF
+import Dion.Crypto.Sign.Ed25519.Signature
 import Std.Sync
 import Pigment
-import Cleanode.TUI.State
-import Cleanode.TUI.Render
-import Cleanode.Mithril.Types
-import Cleanode.Mithril.Client
-import Cleanode.Mithril.Replay
-import Cleanode.CLI.Args
-import Cleanode.CLI.Query
-import Cleanode.Monitoring.Server
-import Cleanode.Consensus.Praos.SPOKeys
-import Cleanode.Consensus.Praos.ForgeLoop
-import Cleanode.Consensus.Praos.BlockAnnounce
-import Cleanode.Network.N2C.Server
-import Cleanode.Ledger.State
-import Cleanode.Ledger.Certificate
-import Cleanode.Ledger.Snapshot
-import Cleanode.Consensus.Praos.StakeDistribution
+import Dion.TUI.State
+import Dion.TUI.Render
+import Dion.Mithril.Types
+import Dion.Mithril.Client
+import Dion.Mithril.Replay
+import Dion.CLI.Args
+import Dion.CLI.Query
+import Dion.Monitoring.Server
+import Dion.Consensus.Praos.SPOKeys
+import Dion.Consensus.Praos.ForgeLoop
+import Dion.Consensus.Praos.BlockAnnounce
+import Dion.Network.N2C.Server
+import Dion.Ledger.State
+import Dion.Ledger.Certificate
+import Dion.Ledger.Snapshot
+import Dion.Consensus.Praos.StakeDistribution
 
-open Cleanode.Network
-open Cleanode.Network.Socket
-open Cleanode.Network.Handshake
-open Cleanode.Network.Multiplexer
-open Cleanode.Network.ChainSync
-open Cleanode.Network.Byron
-open Cleanode.Network.Shelley
-open Cleanode.Network.BlockFetch
-open Cleanode.Network.Crypto
-open Cleanode.Network.Bech32
-open Cleanode.Network.BlockFetchClient
-open Cleanode.Network.ConwayBlock
-open Cleanode.Network.TxSubmission2
-open Cleanode.Network.Mempool
-open Cleanode.Network.PeerDb
-open Cleanode.Network.PeerConnection
-open Cleanode.Network.ConnectionManager
-open Cleanode.Network.MuxDispatcher
-open Cleanode.Network.PeerSharing
-open Cleanode.Network.HandshakeServer
-open Cleanode.Config.Topology
-open Cleanode.Config.Genesis
-open Cleanode.Storage.BlockStore
-open Cleanode.Storage.ChainDB
-open Cleanode.Storage.Database
-open Cleanode.Consensus.Praos.LeaderElection
-open Cleanode.Consensus.Praos.ConsensusState
+open Dion.Network
+open Dion.Network.Socket
+open Dion.Network.Handshake
+open Dion.Network.Multiplexer
+open Dion.Network.ChainSync
+open Dion.Network.Byron
+open Dion.Network.Shelley
+open Dion.Network.BlockFetch
+open Dion.Network.Crypto
+open Dion.Network.Bech32
+open Dion.Network.BlockFetchClient
+open Dion.Network.ConwayBlock
+open Dion.Network.TxSubmission2
+open Dion.Network.Mempool
+open Dion.Network.PeerDb
+open Dion.Network.PeerConnection
+open Dion.Network.ConnectionManager
+open Dion.Network.MuxDispatcher
+open Dion.Network.PeerSharing
+open Dion.Network.HandshakeServer
+open Dion.Config.Topology
+open Dion.Config.Genesis
+open Dion.Storage.BlockStore
+open Dion.Storage.ChainDB
+open Dion.Storage.Database
+open Dion.Consensus.Praos.LeaderElection
+open Dion.Consensus.Praos.ConsensusState
 open Pigment
-open Cleanode.TUI.State
-open Cleanode.TUI.Render
+open Dion.TUI.State
+open Dion.TUI.Render
 
-namespace Cleanode.Node
+namespace Dion.Node
 
 /-- Atomically check if a key is in the set; if not, add it.
     Returns true if the key was already present (= duplicate).
@@ -153,7 +153,7 @@ partial def pollResponderQueue (q : IO.Ref (List ByteArray)) : IO ByteArray := d
 partial def txSubmResponderLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
     (responderQueue : IO.Ref (List ByteArray))
     (tuiRef : Option (IO.Ref TUIState) := none)
-    (ledgerStateRef : Option (Std.Mutex Cleanode.Ledger.State.LedgerState) := none)
+    (ledgerStateRef : Option (Std.Mutex Dion.Ledger.State.LedgerState) := none)
     (ackedSoFar : Nat := 0) (initialized : Bool := false) : IO Unit := do
   if !initialized then
     -- Wait for peer's MsgInit on the responder instance
@@ -188,7 +188,7 @@ partial def txSubmResponderLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
           let txReplyPayload ← pollResponderQueue responderQueue
           match decodeTxSubmission2Message txReplyPayload with
           | some (.MsgReplyTxs txBodies) => do
-              let now ← Cleanode.TUI.Render.nowMs
+              let now ← Dion.TUI.Render.nowMs
               let slot ← match ledgerStateRef with
                 | some r => do let ls ← r.atomically (fun ref => ref.get); pure ls.lastSlot
                 | none => pure 0
@@ -220,6 +220,7 @@ partial def receiveChainSyncFrame (sock : Socket)
     (mempoolRef : Option (IO.Ref Mempool) := none)
     (txSubmPeerRef : Option (IO.Ref TxSubmPeerState) := none)
     (txSubmResponderQueue : Option (IO.Ref (List ByteArray)) := none)
+    (selfAddr : Option Dion.Network.PeerSharing.PeerAddress := none)
     : IO (Except String MuxFrame) := do
   -- Check if there's a pending blocking MsgRequestTxIds to flush
   let hasPending ← match mempoolRef, txSubmPeerRef with
@@ -246,7 +247,7 @@ partial def receiveChainSyncFrame (sock : Socket)
     | .error e => pure (Except.error s!"Failed to receive MUX header: {e}")
     | .ok none => do
       -- Timeout: loop back to re-check mempool
-      return ← receiveChainSyncFrame sock discoveryRef mempoolRef txSubmPeerRef txSubmResponderQueue
+      return ← receiveChainSyncFrame sock discoveryRef mempoolRef txSubmPeerRef txSubmResponderQueue selfAddr
     | .ok (some bytes) => pure (Except.ok bytes)
   else
     match ← socket_receive_exact sock 8 with
@@ -261,7 +262,7 @@ partial def receiveChainSyncFrame (sock : Socket)
           let payloadLen := (headerBytes.get! 6).toNat * 256 + (headerBytes.get! 7).toNat
           if payloadLen > 0 then
             let _ ← socket_receive_exact sock payloadLen.toUInt32
-          receiveChainSyncFrame sock discoveryRef mempoolRef txSubmPeerRef txSubmResponderQueue
+          receiveChainSyncFrame sock discoveryRef mempoolRef txSubmPeerRef txSubmResponderQueue selfAddr
       | some header => do
           match ← socket_receive_exact sock header.payloadLength.toNat.toUInt32 with
           | .error e => return .error s!"Failed to receive payload: {e}"
@@ -271,7 +272,7 @@ partial def receiveChainSyncFrame (sock : Socket)
                 match extractKeepAliveCookie payload with
                 | some cookie => sendKeepAliveResponse sock cookie
                 | none => pure ()
-                receiveChainSyncFrame sock discoveryRef mempoolRef txSubmPeerRef txSubmResponderQueue
+                receiveChainSyncFrame sock discoveryRef mempoolRef txSubmPeerRef txSubmResponderQueue selfAddr
               else if header.protocolId == .TxSubmission2 then
                 let modeStr := if header.mode == .Initiator then "Init" else "Resp"
                 let msgDesc := match decodeTxSubmission2Message payload with
@@ -285,14 +286,8 @@ partial def receiveChainSyncFrame (sock : Socket)
                 IO.eprintln s!"[TxSub] mode={modeStr} {msgDesc}"
                 match decodeTxSubmission2Message payload with
                   | some .MsgInit => do
-                      if header.mode == .Initiator then
-                        -- Peer is mini-protocol initiator (instance B) — wants to relay txs to us
-                        let _ ← sendTxSubmission2Responder sock .MsgInit
-                        let _ ← sendTxSubmission2Responder sock (.MsgRequestTxIds true 0 10)
-                        IO.eprintln "[TxSub] → Instance B init, requesting their txs"
-                      else
-                        -- Peer is mini-protocol responder (instance A ack) — no action
-                        IO.eprintln "[TxSub] → Instance A ack, ignoring"
+                      -- Peer acknowledged our MsgInit — our MsgRequestTxIds was already sent
+                      IO.eprintln s!"[TxSub] → Peer MsgInit ack (mode={modeStr}), pull already in flight"
                   | some (.MsgRequestTxIds blocking ack req) => do
                       IO.eprintln s!"[TxSub] → Peer requesting our txs (mode={modeStr}, mpRef={mempoolRef.isSome}, peerRef={txSubmPeerRef.isSome})"
                       match mempoolRef, txSubmPeerRef with
@@ -368,10 +363,11 @@ partial def receiveChainSyncFrame (sock : Socket)
                           let _ ← sendTxSubmission2 sock (.MsgReplyTxs [])
                           pure ()
                   | some (.MsgReplyTxIds txIds) => do
+                      -- Peer replied to OUR MsgRequestTxIds (we're pulling from them)
                       IO.eprintln s!"[TxSub] → Peer announced {txIds.length} tx IDs (mode={modeStr})"
                       if txIds.isEmpty then
                         IO.eprintln "[TxSub] → Empty, re-requesting (blocking)"
-                        let _ ← sendTxSubmission2Responder sock (.MsgRequestTxIds true 0 10)
+                        let _ ← sendTxSubmission2 sock (.MsgRequestTxIds true 0 10)
                       else
                         match mempoolRef with
                         | some mpRef => do
@@ -379,20 +375,20 @@ partial def receiveChainSyncFrame (sock : Socket)
                             let wanted := txIds.filter fun tid => !pool.contains tid.hash
                             IO.eprintln s!"[TxSub] → Want {wanted.length}/{txIds.length}"
                             if wanted.isEmpty then
-                              let _ ← sendTxSubmission2Responder sock
+                              let _ ← sendTxSubmission2 sock
                                 (.MsgRequestTxIds false (UInt16.ofNat txIds.length) 10)
                             else
-                              let _ ← sendTxSubmission2Responder sock
+                              let _ ← sendTxSubmission2 sock
                                 (.MsgRequestTxs (wanted.map (·.hash)))
                         | none =>
                             IO.eprintln "[TxSub] → No mempoolRef for MsgReplyTxIds!"
-                            let _ ← sendTxSubmission2Responder sock
+                            let _ ← sendTxSubmission2 sock
                               (.MsgRequestTxIds false (UInt16.ofNat txIds.length) 10)
                   | some (.MsgReplyTxs txBodies) => do
                       IO.eprintln s!"[TxSub] → Received {txBodies.length} tx bodies! (mode={modeStr})"
                       match mempoolRef with
                       | some mpRef => do
-                          let now ← Cleanode.TUI.Render.nowMs
+                          let now ← Dion.TUI.Render.nowMs
                           for txBytes in txBodies do
                             let pool ← mpRef.get
                             match ← pool.addTxRaw txBytes now with
@@ -401,7 +397,7 @@ partial def receiveChainSyncFrame (sock : Socket)
                                 IO.eprintln s!"[TxSub] → addTxRaw OK (size={txBytes.size})"
                             | .error e =>
                                 IO.eprintln s!"[TxSub] → addTxRaw FAILED: {e}"
-                          let _ ← sendTxSubmission2Responder sock
+                          let _ ← sendTxSubmission2 sock
                             (.MsgRequestTxIds false (UInt16.ofNat txBodies.length) 10)
                       | none =>
                           IO.eprintln "[TxSub] → No mempoolRef for MsgReplyTxs!"
@@ -409,13 +405,26 @@ partial def receiveChainSyncFrame (sock : Socket)
                       IO.eprintln "[TxSub] → MsgDone"
                   | none =>
                       IO.eprintln s!"[TxSub] → DECODE FAILED (size={payload.size})"
-                receiveChainSyncFrame sock discoveryRef mempoolRef txSubmPeerRef txSubmResponderQueue
+                receiveChainSyncFrame sock discoveryRef mempoolRef txSubmPeerRef txSubmResponderQueue selfAddr
               else if header.protocolId == .PeerSharing then
-                -- Handle PeerSharing responses inline (non-blocking)
-                match discoveryRef with
-                | some dRef =>
-                    match decodePeerSharingMessage payload with
-                    | some (.MsgSharePeers peers) => do
+                -- Handle PeerSharing inline: respond to requests AND process responses
+                match decodePeerSharingMessage payload with
+                | some (.MsgShareRequest amount) => do
+                    -- Peer wants our known peers. Respond with selfAddr + some discovered peers.
+                    let knownPeers ← match discoveryRef with
+                      | some dRef => do
+                          let ds ← dRef.get
+                          pure (ds.discovered.take amount.toNat |>.map fun (h, p) =>
+                            (Dion.Network.PeerSharing.PeerAddress.mk h p))
+                      | none => pure []
+                    let replyPeers := match selfAddr with
+                      | some sa => (sa :: knownPeers).take amount.toNat
+                      | none    => knownPeers.take amount.toNat
+                    let _ ← sendPeerSharing sock (.MsgSharePeers replyPeers)
+                    IO.eprintln s!"[PeerSharing] Responded to MsgShareRequest({amount}) with {replyPeers.length} peers"
+                | some (.MsgSharePeers peers) => do
+                    match discoveryRef with
+                    | some dRef =>
                         let peerAddrs := peers.map fun p => (p.host, p.port)
                         if peerAddrs.length > 0 then
                           dRef.modify fun ds =>
@@ -423,9 +432,9 @@ partial def receiveChainSyncFrame (sock : Socket)
                             { ds with discovered := ds.discovered ++ newPeers }
                         -- Send MsgDone to cleanly close PeerSharing
                         let _ ← sendPeerSharing sock .MsgDone
-                    | _ => pure ()  -- Ignore decode failures silently
-                | none => pure ()
-                receiveChainSyncFrame sock discoveryRef mempoolRef txSubmPeerRef txSubmResponderQueue
+                    | none => pure ()
+                | _ => pure ()  -- MsgDone or decode failure: ignore
+                receiveChainSyncFrame sock discoveryRef mempoolRef txSubmPeerRef txSubmResponderQueue selfAddr
               else
                 return .ok { header := header, payload := payload }
 
@@ -435,4 +444,4 @@ inductive SyncExit where
   | protocolError (reason : String)   -- Not recoverable without reconnect
   | done                              -- Clean exit
 
-end Cleanode.Node
+end Dion.Node

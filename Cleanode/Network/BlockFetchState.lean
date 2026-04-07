@@ -1,5 +1,5 @@
-import Cleanode.Network.BlockFetch
-import Cleanode.Network.ChainSync
+import Dion.Network.BlockFetch
+import Dion.Network.ChainSync
 
 /-!
 # BlockFetch Client State Machine
@@ -17,10 +17,10 @@ Ouroboros Network Specification Section 3.8.
 - Ouroboros Network Spec Section 3.8 (Block Fetch)
 -/
 
-namespace Cleanode.Network.BlockFetchState
+namespace Dion.Network.BlockFetchState
 
-open Cleanode.Network.BlockFetch
-open Cleanode.Network.ChainSync
+open Dion.Network.BlockFetch
+open Dion.Network.ChainSync
 
 -- ====================
 -- = State Machine    =
@@ -138,4 +138,4 @@ theorem blockfetch_done_terminal :
   intro t
   cases t <;> rfl
 
-end Cleanode.Network.BlockFetchState
+end Dion.Network.BlockFetchState

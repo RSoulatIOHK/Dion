@@ -8,7 +8,7 @@ Pigment handles color/style but not cursor positioning, so we
 output these directly as string literals.
 -/
 
-namespace Cleanode.TUI.Ansi
+namespace Dion.TUI.Ansi
 
 /-- ESC[ control sequence introducer -/
 def csi : String := "\x1b["
@@ -82,6 +82,18 @@ def brightYellow : String := fg 93
 /-- Bright green foreground -/
 def brightGreen : String := fg 92
 
+/-- Bright magenta foreground -/
+def brightMagenta : String := fg 95
+
+/-- Bright red foreground -/
+def brightRed : String := fg 91
+
+/-- Reverse video (swap fg/bg) -/
+def reverse : String := s!"{csi}7m"
+
+/-- Blink (slow blink — supported by most terminals) -/
+def blink : String := s!"{csi}5m"
+
 /-- Compute the visible length of a string, ignoring ANSI escape sequences.
     An ANSI sequence starts with ESC[ and ends at the first letter (m, H, J, K, etc). -/
 def visibleLength (s : String) : Nat :=
@@ -110,4 +122,4 @@ def padLeft (s : String) (width : Nat) : String :=
   if vis >= width then s
   else String.mk (List.replicate (width - vis) ' ') ++ s
 
-end Cleanode.TUI.Ansi
+end Dion.TUI.Ansi

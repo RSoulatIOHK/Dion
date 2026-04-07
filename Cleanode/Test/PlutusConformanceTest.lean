@@ -1,8 +1,8 @@
-import Cleanode.Test.TestHarness
-import Cleanode.Plutus.UPLC.Term
-import Cleanode.Plutus.UPLC.CEK
-import Cleanode.Plutus.UPLC.Flat
-import Cleanode.Plutus.ScriptContext
+import Dion.Test.TestHarness
+import Dion.Plutus.UPLC.Term
+import Dion.Plutus.UPLC.CEK
+import Dion.Plutus.UPLC.Flat
+import Dion.Plutus.ScriptContext
 
 /-!
 # Plutus Conformance Tests
@@ -14,13 +14,13 @@ error handling, and budget enforcement.
 Based on test patterns from `IntersectMBO/plutus` plutus-conformance test suite.
 -/
 
-namespace Cleanode.Test.PlutusConformanceTest
+namespace Dion.Test.PlutusConformanceTest
 
-open Cleanode.Test.TestHarness
-open Cleanode.Plutus.UPLC
-open Cleanode.Plutus.UPLC.CEK
-open Cleanode.Plutus.UPLC.Flat
-open Cleanode.Plutus.ScriptContext
+open Dion.Test.TestHarness
+open Dion.Plutus.UPLC
+open Dion.Plutus.UPLC.CEK
+open Dion.Plutus.UPLC.Flat
+open Dion.Plutus.ScriptContext
 
 -- ====================
 -- = Helper Functions =
@@ -871,4 +871,4 @@ def runPlutusConformanceTests : IO (List TestResult) := do
   results := results ++ (← runSerialiseConvertCompositeTests)
   return results
 
-end Cleanode.Test.PlutusConformanceTest
+end Dion.Test.PlutusConformanceTest

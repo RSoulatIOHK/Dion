@@ -1,6 +1,6 @@
-import Cleanode.Crypto.TextEnvelope
-import Cleanode.Consensus.Praos.BlockForge
-import Cleanode.Network.Crypto
+import Dion.Crypto.TextEnvelope
+import Dion.Consensus.Praos.BlockForge
+import Dion.Network.Crypto
 
 /-!
 # SPO Key Management
@@ -30,12 +30,12 @@ keys/
 - https://www.coincashew.com/coins/overview-ada/guide-how-to-build-a-haskell-stakepool-node
 -/
 
-namespace Cleanode.Consensus.Praos.SPOKeys
+namespace Dion.Consensus.Praos.SPOKeys
 
-open Cleanode.Crypto.TextEnvelope
-open Cleanode.Consensus.Praos.BlockForge
-open Cleanode.Consensus.Praos.ConsensusState
-open Cleanode.Network.Crypto
+open Dion.Crypto.TextEnvelope
+open Dion.Consensus.Praos.BlockForge
+open Dion.Consensus.Praos.ConsensusState
+open Dion.Network.Crypto
 
 -- ====================
 -- = SPO Config       =
@@ -61,7 +61,8 @@ def SPOKeyPaths.default (keyDir : String) : SPOKeyPaths :=
 -- ====================
 
 /-- Load all SPO keys and build ForgeParams -/
-def loadSPOKeys (paths : SPOKeyPaths) : IO (Except String ForgeParams) := do
+def loadSPOKeys (paths : SPOKeyPaths) (protocolMajor : Nat := 10) (protocolMinor : Nat := 0)
+    : IO (Except String ForgeParams) := do
   -- Load VRF signing key (returns seed + public key)
   let vrfResult ← loadVrfSigningKey paths.vrfSigningKey
   let (vrfSeed, vrfPub) ← match vrfResult with
@@ -86,7 +87,7 @@ def loadSPOKeys (paths : SPOKeyPaths) : IO (Except String ForgeParams) := do
     | .ok r => pure r
     | .error e => return .error s!"Pool verification key: {e}"
 
-  let poolId ← blake2b_256 poolVKey
+  let poolId ← blake2b_224 poolVKey
 
   -- Build the operational cert structure
   let opCert : OperationalCert := {
@@ -103,8 +104,8 @@ def loadSPOKeys (paths : SPOKeyPaths) : IO (Except String ForgeParams) := do
     kesSigningKey := kesBytes.toList.map (·)
     operationalCert := opCert
     poolId := poolId
-    protocolMajor := 10  -- Conway era
-    protocolMinor := 0
+    protocolMajor := protocolMajor
+    protocolMinor := protocolMinor
   }
 
 -- ====================
@@ -142,4 +143,4 @@ def printKeyInfo (paths : SPOKeyPaths) : IO Unit := do
     for e in errors do
       IO.println s!"  - {e}"
 
-end Cleanode.Consensus.Praos.SPOKeys
+end Dion.Consensus.Praos.SPOKeys

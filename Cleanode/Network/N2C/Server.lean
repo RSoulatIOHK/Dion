@@ -1,12 +1,12 @@
-import Cleanode.Network.Socket
-import Cleanode.Network.Handshake
-import Cleanode.Network.N2C.Mux
-import Cleanode.Network.N2C.Handshake
-import Cleanode.Network.N2C.LocalTxSubmission
-import Cleanode.Network.N2C.LocalStateQuery
-import Cleanode.Network.N2C.LocalTxMonitor
-import Cleanode.Network.Mempool
-import Cleanode.Ledger.State
+import Dion.Network.Socket
+import Dion.Network.Handshake
+import Dion.Network.N2C.Mux
+import Dion.Network.N2C.Handshake
+import Dion.Network.N2C.LocalTxSubmission
+import Dion.Network.N2C.LocalStateQuery
+import Dion.Network.N2C.LocalTxMonitor
+import Dion.Network.Mempool
+import Dion.Ledger.State
 import Std.Sync
 
 /-!
@@ -18,7 +18,7 @@ own async task.
 
 ## Usage
 ```
-CARDANO_NODE_SOCKET_PATH=./cleanode.socket cardano-cli query tip --testnet-magic 1
+CARDANO_NODE_SOCKET_PATH=./dion.socket cardano-cli query tip --testnet-magic 1
 ```
 
 ## Architecture
@@ -30,18 +30,18 @@ CARDANO_NODE_SOCKET_PATH=./cleanode.socket cardano-cli query tip --testnet-magic
 - Ouroboros Network Spec Section 3.17 (Node-to-Client)
 -/
 
-namespace Cleanode.Network.N2C.Server
+namespace Dion.Network.N2C.Server
 
-open Cleanode.Network.Socket
-open Cleanode.Network.Handshake (NetworkMagic)
-open Cleanode.Network.N2C.Mux
-open Cleanode.Network.N2C.MiniProtocolId
-open Cleanode.Network.N2C.Handshake
-open Cleanode.Network.N2C.LocalTxSubmission
-open Cleanode.Network.N2C.LocalStateQuery
-open Cleanode.Network.N2C.LocalTxMonitor
-open Cleanode.Network.Mempool
-open Cleanode.Ledger.State
+open Dion.Network.Socket
+open Dion.Network.Handshake (NetworkMagic)
+open Dion.Network.N2C.Mux
+open Dion.Network.N2C.MiniProtocolId
+open Dion.Network.N2C.Handshake
+open Dion.Network.N2C.LocalTxSubmission
+open Dion.Network.N2C.LocalStateQuery
+open Dion.Network.N2C.LocalTxMonitor
+open Dion.Network.Mempool
+open Dion.Ledger.State
 
 -- ====================
 -- = Connection State =
@@ -156,4 +156,4 @@ partial def n2cServerLoop (socketPath : String)
     -- Cleanup
     unix_close_and_unlink listenSock socketPath
 
-end Cleanode.Network.N2C.Server
+end Dion.Network.N2C.Server

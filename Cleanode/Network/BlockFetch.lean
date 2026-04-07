@@ -1,9 +1,9 @@
-import Cleanode.Network.Cbor
-import Cleanode.Network.Multiplexer
-import Cleanode.Network.Socket
-import Cleanode.Network.ChainSync
-import Cleanode.Network.TxSubmission2
-import Cleanode.Network.Mempool
+import Dion.Network.Cbor
+import Dion.Network.Multiplexer
+import Dion.Network.Socket
+import Dion.Network.ChainSync
+import Dion.Network.TxSubmission2
+import Dion.Network.Mempool
 
 /-!
 # BlockFetch Mini-Protocol
@@ -30,12 +30,12 @@ block including all transactions.
 - Protocol number: 3 (node-to-node)
 -/
 
-namespace Cleanode.Network.BlockFetch
+namespace Dion.Network.BlockFetch
 
-open Cleanode.Network.Cbor
-open Cleanode.Network.Multiplexer
-open Cleanode.Network.Socket
-open Cleanode.Network.ChainSync
+open Dion.Network.Cbor
+open Dion.Network.Multiplexer
+open Dion.Network.Socket
+open Dion.Network.ChainSync
 
 -- ==============
 -- = Core Types =
@@ -174,8 +174,8 @@ private def handleKeepAlive (sock : Socket) (payload : ByteArray) : IO Unit := d
 /-- Handle TxSubmission2 MsgRequestTxs inline during BlockFetch.
     When a peer requests tx bodies, we reply immediately from the mempool. -/
 private def handleTxSubmission2Inline (sock : Socket) (payload : ByteArray)
-    (mempoolRef : Option (IO.Ref Cleanode.Network.Mempool.Mempool)) : IO Unit := do
-  match Cleanode.Network.TxSubmission2.decodeTxSubmission2Message payload with
+    (mempoolRef : Option (IO.Ref Dion.Network.Mempool.Mempool)) : IO Unit := do
+  match Dion.Network.TxSubmission2.decodeTxSubmission2Message payload with
   | some (.MsgRequestTxs hashes) => do
       IO.eprintln s!"[TxSub] MsgRequestTxs received during BlockFetch ({hashes.length} hashes)"
       match mempoolRef with
@@ -183,10 +183,10 @@ private def handleTxSubmission2Inline (sock : Socket) (payload : ByteArray)
           let pool ← mpRef.get
           let txBodies := pool.getTxsByHash hashes
           IO.eprintln s!"[TxSub] → Replying with {txBodies.length} tx bodies"
-          let _ ← Cleanode.Network.TxSubmission2.sendTxSubmission2 sock (.MsgReplyTxs txBodies)
+          let _ ← Dion.Network.TxSubmission2.sendTxSubmission2 sock (.MsgReplyTxs txBodies)
           pure ()
       | none =>
-          let _ ← Cleanode.Network.TxSubmission2.sendTxSubmission2 sock (.MsgReplyTxs [])
+          let _ ← Dion.Network.TxSubmission2.sendTxSubmission2 sock (.MsgReplyTxs [])
           pure ()
   | some (.MsgRequestTxIds blocking ack req) => do
       IO.eprintln s!"[TxSub] MsgRequestTxIds during BlockFetch (blk={blocking},ack={ack},req={req})"
@@ -195,24 +195,24 @@ private def handleTxSubmission2Inline (sock : Socket) (payload : ByteArray)
           let pool ← mpRef.get
           let txIds := pool.getTxIds req.toNat
           IO.eprintln s!"[TxSub] → Replying with {txIds.length} tx IDs from mempool (inline)"
-          let _ ← Cleanode.Network.TxSubmission2.sendTxSubmission2 sock (.MsgReplyTxIds txIds)
+          let _ ← Dion.Network.TxSubmission2.sendTxSubmission2 sock (.MsgReplyTxIds txIds)
           pure ()
       | none =>
           -- No mempool ref — reply empty (non-blocking only; blocking + empty is a protocol violation)
           if !blocking then
-            let _ ← Cleanode.Network.TxSubmission2.sendTxSubmission2 sock (.MsgReplyTxIds [])
+            let _ ← Dion.Network.TxSubmission2.sendTxSubmission2 sock (.MsgReplyTxIds [])
             pure ()
           else
             -- For blocking requests with no mempool, we have no choice but to reply empty
             -- This is technically a protocol violation but avoids hanging
-            let _ ← Cleanode.Network.TxSubmission2.sendTxSubmission2 sock (.MsgReplyTxIds [])
+            let _ ← Dion.Network.TxSubmission2.sendTxSubmission2 sock (.MsgReplyTxIds [])
             pure ()
   | _ => pure ()  -- Ignore other TxSubmission2 messages during BlockFetch
 
 /-- Read a single MUX frame from the socket, responding to KeepAlive and
     TxSubmission2 transparently. Returns only BlockFetch frames. -/
 private partial def receiveMuxFrame (sock : Socket)
-    (mempoolRef : Option (IO.Ref Cleanode.Network.Mempool.Mempool) := none)
+    (mempoolRef : Option (IO.Ref Dion.Network.Mempool.Mempool) := none)
     : IO (Except SocketError (MuxHeader × ByteArray)) := do
   match ← socket_receive_exact sock 8 with
   | .error e => return .error e
@@ -239,7 +239,7 @@ private partial def receiveMuxFrame (sock : Socket)
 /-- Receive BlockFetch message from socket, handling multi-frame messages, KeepAlive,
     and TxSubmission2 transparently. If leftoverBytes is provided, starts decoding from those. -/
 def receiveBlockFetch (sock : Socket) (leftoverBytes : ByteArray := ⟨#[]⟩) (maxSize : UInt32 := 65535)
-    (mempoolRef : Option (IO.Ref Cleanode.Network.Mempool.Mempool) := none)
+    (mempoolRef : Option (IO.Ref Dion.Network.Mempool.Mempool) := none)
     : IO (Except SocketError (Option BlockFetchReceiveResult)) := do
   -- Start with leftover bytes from previous decode (if any)
   let mut completePayload := leftoverBytes
@@ -290,4 +290,4 @@ def requestBlockRange (fromPoint : Point) (toPoint : Point) : BlockFetchMessage 
 def requestSingleBlock (point : Point) : BlockFetchMessage :=
   .MsgRequestRange point point
 
-end Cleanode.Network.BlockFetch
+end Dion.Network.BlockFetch

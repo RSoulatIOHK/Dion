@@ -1,18 +1,18 @@
-import Cleanode.Network.Socket
-import Cleanode.Network.Multiplexer
-import Cleanode.Network.Handshake
-import Cleanode.Network.ChainSync
-import Cleanode.Network.BlockFetch
-import Cleanode.Network.BlockFetchClient
-import Cleanode.Network.TxSubmission2
-import Cleanode.Network.KeepAlive
-import Cleanode.Network.PeerSharing
-import Cleanode.Network.Mempool
-import Cleanode.Network.PeerDb
-import Cleanode.Network.PeerConnection
-import Cleanode.Network.MuxDispatcher
-import Cleanode.Storage.ChainDB
-import Cleanode.Config.Topology
+import Dion.Network.Socket
+import Dion.Network.Multiplexer
+import Dion.Network.Handshake
+import Dion.Network.ChainSync
+import Dion.Network.BlockFetch
+import Dion.Network.BlockFetchClient
+import Dion.Network.TxSubmission2
+import Dion.Network.KeepAlive
+import Dion.Network.PeerSharing
+import Dion.Network.Mempool
+import Dion.Network.PeerDb
+import Dion.Network.PeerConnection
+import Dion.Network.MuxDispatcher
+import Dion.Storage.ChainDB
+import Dion.Config.Topology
 
 /-!
 # Connection Manager
@@ -29,23 +29,23 @@ that maintains target connection counts.
 - Peer scoring based on sync performance and connection stability
 -/
 
-namespace Cleanode.Network.ConnectionManager
+namespace Dion.Network.ConnectionManager
 
-open Cleanode.Network.Socket
-open Cleanode.Network.Multiplexer
-open Cleanode.Network.Handshake
-open Cleanode.Network.ChainSync
-open Cleanode.Network.BlockFetch
-open Cleanode.Network.BlockFetchClient
-open Cleanode.Network.TxSubmission2
-open Cleanode.Network.KeepAlive
-open Cleanode.Network.PeerSharing
-open Cleanode.Network.Mempool
-open Cleanode.Network.PeerDb
-open Cleanode.Network.PeerConnection
-open Cleanode.Network.MuxDispatcher
-open Cleanode.Storage.ChainDB
-open Cleanode.Config.Topology
+open Dion.Network.Socket
+open Dion.Network.Multiplexer
+open Dion.Network.Handshake
+open Dion.Network.ChainSync
+open Dion.Network.BlockFetch
+open Dion.Network.BlockFetchClient
+open Dion.Network.TxSubmission2
+open Dion.Network.KeepAlive
+open Dion.Network.PeerSharing
+open Dion.Network.Mempool
+open Dion.Network.PeerDb
+open Dion.Network.PeerConnection
+open Dion.Network.MuxDispatcher
+open Dion.Storage.ChainDB
+open Dion.Config.Topology
 
 -- ====================
 -- = Configuration    =
@@ -231,4 +231,4 @@ def ConnectionManagerState.stats (mgr : ConnectionManagerState) : ConnectionStat
     mempoolSize := mgr.mempool.size
     peerDbStats := mgr.peerDb.stats }
 
-end Cleanode.Network.ConnectionManager
+end Dion.Network.ConnectionManager

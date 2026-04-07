@@ -1,7 +1,7 @@
 /-!
 # Logging and Metrics
 
-Structured logging system for the Cleanode node with support for:
+Structured logging system for the Dion node with support for:
 - Log levels (Debug, Info, Warn, Error)
 - Structured context (key-value pairs)
 - Metrics tracking (block count, sync speed, peer latency)
@@ -10,7 +10,7 @@ Structured logging system for the Cleanode node with support for:
 - iohk-monitoring-framework (Haskell Cardano node)
 -/
 
-namespace Cleanode.Network.Logging
+namespace Dion.Network.Logging
 
 -- ====================
 -- = Log Levels       =
@@ -154,4 +154,4 @@ def NodeMetrics.format (m : NodeMetrics) : String :=
   s!"rollbacks={m.rollbacks} slot={m.currentSlot} blockNo={m.currentBlockNo} " ++
   s!"sync={m.syncProgress}%"
 
-end Cleanode.Network.Logging
+end Dion.Network.Logging

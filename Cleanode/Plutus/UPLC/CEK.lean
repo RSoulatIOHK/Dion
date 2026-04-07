@@ -1,7 +1,7 @@
-import Cleanode.Plutus.UPLC.Term
-import Cleanode.Plutus.ScriptContext
-import Cleanode.Crypto.BLS12_381
-import Cleanode.Network.Crypto
+import Dion.Plutus.UPLC.Term
+import Dion.Plutus.ScriptContext
+import Dion.Crypto.BLS12_381
+import Dion.Network.Crypto
 
 /-!
 # CEK Machine for UPLC Evaluation
@@ -24,10 +24,10 @@ budget and errors on exhaustion.
 - plutus-core/untyped-plutus-core/src/UntypedPlutusCore/Evaluation/Machine/Cek.hs
 -/
 
-namespace Cleanode.Plutus.UPLC.CEK
+namespace Dion.Plutus.UPLC.CEK
 
-open Cleanode.Plutus.UPLC
-open Cleanode.Plutus.ScriptContext
+open Dion.Plutus.UPLC
+open Dion.Plutus.ScriptContext
 
 -- ====================
 -- = Execution Budget =
@@ -519,7 +519,7 @@ private partial def intToScalarBytes (n : Int) : ByteArray :=
       else go (v / 256) (acc.push (UInt8.ofNat (v % 256)))
     ByteArray.mk (go nat #[])
 
-open Cleanode.Crypto.BLS12_381 in
+open Dion.Crypto.BLS12_381 in
 /-- Apply BLS12-381 and crypto builtins that require IO (FFI calls).
     Returns `none` if the builtin is not IO-based (use pure `applyBuiltin` instead). -/
 def applyBuiltinIO (fun_ : BuiltinFun) (args : List CekValue) : IO (Option (Except String CekValue)) := do
@@ -602,36 +602,36 @@ def applyBuiltinIO (fun_ : BuiltinFun) (args : List CekValue) : IO (Option (Exce
     return some (.ok (.VConst (.Bool r)))
   -- Crypto builtins via FFI
   | .Blake2b_256, [.VConst (.ByteString bs)] =>
-    let r ← Cleanode.Network.Crypto.blake2b_256 bs
+    let r ← Dion.Network.Crypto.blake2b_256 bs
     return some (.ok (.VConst (.ByteString r)))
   | .VerifyEd25519Signature, [.VConst (.ByteString vk), .VConst (.ByteString msg), .VConst (.ByteString sig)] =>
-    let r ← Cleanode.Network.Crypto.ed25519_verify_ffi vk msg sig
+    let r ← Dion.Network.Crypto.ed25519_verify_ffi vk msg sig
     return some (.ok (.VConst (.Bool r)))
   -- SHA-256 and SHA3-256 via FFI
   | .Sha2_256, [.VConst (.ByteString bs)] =>
-    let r ← Cleanode.Network.Crypto.sha256 bs
+    let r ← Dion.Network.Crypto.sha256 bs
     return some (.ok (.VConst (.ByteString r)))
   | .Sha3_256, [.VConst (.ByteString bs)] =>
-    let r ← Cleanode.Network.Crypto.sha3_256 bs
+    let r ← Dion.Network.Crypto.sha3_256 bs
     return some (.ok (.VConst (.ByteString r)))
   -- Secp256k1 ECDSA and Schnorr verification via FFI
   | .VerifyEcdsaSecp256k1Signature, [.VConst (.ByteString vk), .VConst (.ByteString msg), .VConst (.ByteString sig)] =>
-    let r ← Cleanode.Network.Crypto.secp256k1_ecdsa_verify vk msg sig
+    let r ← Dion.Network.Crypto.secp256k1_ecdsa_verify vk msg sig
     return some (.ok (.VConst (.Bool r)))
   | .VerifySchnorrSecp256k1Signature, [.VConst (.ByteString vk), .VConst (.ByteString msg), .VConst (.ByteString sig)] =>
-    let r ← Cleanode.Network.Crypto.secp256k1_schnorr_verify vk msg sig
+    let r ← Dion.Network.Crypto.secp256k1_schnorr_verify vk msg sig
     return some (.ok (.VConst (.Bool r)))
   -- #406: Keccak-256 (NOT the same as SHA3-256 — different padding)
   | .Keccak_256, [.VConst (.ByteString bs)] =>
-    let r ← Cleanode.Network.Crypto.keccak_256 bs
+    let r ← Dion.Network.Crypto.keccak_256 bs
     return some (.ok (.VConst (.ByteString r)))
   -- Blake2b-224 (28-byte hash, used for credential hashing)
   | .Blake2b_224, [.VConst (.ByteString bs)] =>
-    let r ← Cleanode.Network.Crypto.blake2b_224 bs
+    let r ← Dion.Network.Crypto.blake2b_224 bs
     return some (.ok (.VConst (.ByteString r)))
   -- #407: RIPEMD-160 (20-byte hash, used in Bitcoin-compatible scripts)
   | .Ripemd_160, [.VConst (.ByteString bs)] =>
-    let r ← Cleanode.Network.Crypto.ripemd_160 bs
+    let r ← Dion.Network.Crypto.ripemd_160 bs
     return some (.ok (.VConst (.ByteString r)))
   | _, _ => return none
 
@@ -673,4 +673,4 @@ partial def evaluateIO (term : Term) (budget : ExBudget) : IO (Except String (Ce
         go state' budget' (fuel - 1)
   go (.Computing #[] term []) budget 10000000
 
-end Cleanode.Plutus.UPLC.CEK
+end Dion.Plutus.UPLC.CEK

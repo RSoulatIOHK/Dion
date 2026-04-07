@@ -1,7 +1,7 @@
-import Cleanode.Crypto.Sign.KESSign
-import Cleanode.Network.Crypto
-import Cleanode.Network.CryptoSpec
-import Cleanode.Test.TestHarness
+import Dion.Crypto.Sign.KESSign
+import Dion.Network.Crypto
+import Dion.Network.CryptoSpec
+import Dion.Test.TestHarness
 
 /-!
 # KES Property Tests
@@ -21,12 +21,12 @@ the FFI plumbing.
 - Cardano KES: Sum-KES depth 6, 64 periods, 129600 slots/period
 -/
 
-namespace Cleanode.Test.KESTest
+namespace Dion.Test.KESTest
 
-open Cleanode.Crypto.Sign.KESSign
-open Cleanode.Network.Crypto
-open Cleanode.Network.CryptoSpec
-open Cleanode.Test.TestHarness
+open Dion.Crypto.Sign.KESSign
+open Dion.Network.Crypto
+open Dion.Network.CryptoSpec
+open Dion.Test.TestHarness
 
 -- ====================
 -- = KES Tests        =
@@ -80,4 +80,4 @@ def runKESTests : IO (Array TestResult) := do
 
   return results
 
-end Cleanode.Test.KESTest
+end Dion.Test.KESTest

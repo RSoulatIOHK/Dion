@@ -1,96 +1,102 @@
-import Cleanode.Network.Basic
-import Cleanode.Network.Socket
-import Cleanode.Network.Handshake
-import Cleanode.Network.Multiplexer
-import Cleanode.Network.ChainSync
-import Cleanode.Network.Byron
-import Cleanode.Network.Shelley
-import Cleanode.Network.BlockFetch
-import Cleanode.Network.BlockFetchClient
-import Cleanode.Network.ConwayBlock
-import Cleanode.Network.Crypto
-import Cleanode.Network.Bech32
-import Cleanode.Network.TxSubmission2
-import Cleanode.Network.Mempool
-import Cleanode.Network.PeerSharing
-import Cleanode.Network.PeerDb
-import Cleanode.Network.PeerConnection
-import Cleanode.Network.ConnectionManager
-import Cleanode.Network.MuxDispatcher
-import Cleanode.Network.HandshakeServer
-import Cleanode.Config.Topology
-import Cleanode.Config.Genesis
-import Cleanode.Storage.BlockStore
-import Cleanode.Storage.ChainDB
-import Cleanode.Storage.Database
-import Cleanode.Consensus.Praos.LeaderElection
-import Cleanode.Consensus.Praos.ConsensusState
-import Cleanode.Crypto.VRF.ECVRF
-import Cleanode.Crypto.Sign.Ed25519.Signature
+import Dion.Network.Basic
+import Dion.Network.Socket
+import Dion.Network.Handshake
+import Dion.Network.Multiplexer
+import Dion.Network.ChainSync
+import Dion.Network.Byron
+import Dion.Network.Shelley
+import Dion.Network.BlockFetch
+import Dion.Network.BlockFetchClient
+import Dion.Network.ConwayBlock
+import Dion.Network.Crypto
+import Dion.Network.Bech32
+import Dion.Network.TxSubmission2
+import Dion.Network.Mempool
+import Dion.Network.PeerSharing
+import Dion.Network.PeerDb
+import Dion.Network.PeerConnection
+import Dion.Network.ConnectionManager
+import Dion.Network.MuxDispatcher
+import Dion.Network.HandshakeServer
+import Dion.Config.Topology
+import Dion.Config.Genesis
+import Dion.Storage.BlockStore
+import Dion.Storage.ChainDB
+import Dion.Storage.Database
+import Dion.Consensus.Praos.LeaderElection
+import Dion.Consensus.Praos.ConsensusState
+import Dion.Crypto.VRF.ECVRF
+import Dion.Crypto.Sign.Ed25519.Signature
 import Std.Sync
 import Pigment
-import Cleanode.TUI.State
-import Cleanode.TUI.Render
-import Cleanode.Mithril.Types
-import Cleanode.Mithril.Client
-import Cleanode.Mithril.Replay
-import Cleanode.CLI.Args
-import Cleanode.CLI.Query
-import Cleanode.Monitoring.Server
-import Cleanode.Consensus.Praos.SPOKeys
-import Cleanode.Consensus.Praos.ForgeLoop
-import Cleanode.Consensus.Praos.BlockAnnounce
-import Cleanode.Network.N2C.Server
-import Cleanode.Ledger.State
-import Cleanode.Ledger.Certificate
-import Cleanode.Ledger.Snapshot
-import Cleanode.Consensus.Praos.StakeDistribution
-import Cleanode.Node.InboundPeer
+import Dion.TUI.State
+import Dion.TUI.Render
+import Dion.Mithril.Types
+import Dion.Mithril.Client
+import Dion.Mithril.Replay
+import Dion.CLI.Args
+import Dion.CLI.Query
+import Dion.Monitoring.Server
+import Dion.Consensus.Praos.SPOKeys
+import Dion.Consensus.Praos.ForgeLoop
+import Dion.Consensus.Praos.BlockAnnounce
+import Dion.Network.N2C.Server
+import Dion.Ledger.State
+import Dion.Ledger.Certificate
+import Dion.Ledger.Snapshot
+import Dion.Consensus.Praos.StakeDistribution
+import Dion.Node.InboundPeer
 
-open Cleanode.Network
-open Cleanode.Network.Socket
-open Cleanode.Network.Handshake
-open Cleanode.Network.Multiplexer
-open Cleanode.Network.ChainSync
-open Cleanode.Network.Byron
-open Cleanode.Network.Shelley
-open Cleanode.Network.BlockFetch
-open Cleanode.Network.Crypto
-open Cleanode.Network.Bech32
-open Cleanode.Network.BlockFetchClient
-open Cleanode.Network.ConwayBlock
-open Cleanode.Network.TxSubmission2
-open Cleanode.Network.Mempool
-open Cleanode.Network.PeerDb
-open Cleanode.Network.PeerConnection
-open Cleanode.Network.ConnectionManager
-open Cleanode.Network.MuxDispatcher
-open Cleanode.Network.PeerSharing
-open Cleanode.Network.HandshakeServer
-open Cleanode.Config.Topology
-open Cleanode.Config.Genesis
-open Cleanode.Storage.BlockStore
-open Cleanode.Storage.ChainDB
-open Cleanode.Storage.Database
-open Cleanode.Consensus.Praos.LeaderElection
-open Cleanode.Consensus.Praos.ConsensusState
+open Dion.Network
+open Dion.Network.Socket
+open Dion.Network.Handshake
+open Dion.Network.Multiplexer
+open Dion.Network.ChainSync
+open Dion.Network.Byron
+open Dion.Network.Shelley
+open Dion.Network.BlockFetch
+open Dion.Network.Crypto
+open Dion.Network.Bech32
+open Dion.Network.BlockFetchClient
+open Dion.Network.ConwayBlock
+open Dion.Network.TxSubmission2
+open Dion.Network.Mempool
+open Dion.Network.PeerDb
+open Dion.Network.PeerConnection
+open Dion.Network.ConnectionManager
+open Dion.Network.MuxDispatcher
+open Dion.Network.PeerSharing
+open Dion.Network.HandshakeServer
+open Dion.Config.Topology
+open Dion.Config.Genesis
+open Dion.Storage.BlockStore
+open Dion.Storage.ChainDB
+open Dion.Storage.Database
+open Dion.Consensus.Praos.LeaderElection
+open Dion.Consensus.Praos.ConsensusState
 open Pigment
-open Cleanode.TUI.State
-open Cleanode.TUI.Render
-open Cleanode.Node
+open Dion.TUI.State
+open Dion.TUI.Render
+open Dion.Node
 
-namespace Cleanode.Node
+namespace Dion.Node
 
 /-- Multi-peer relay node mode -/
 def relayNode (proposal : HandshakeMessage) (networkName : String)
     (tuiMode : Bool := false) (listenPort : UInt16 := 3001)
     (metricsPort : Option UInt16 := none)
-    (forgeParams : Option Cleanode.Consensus.Praos.BlockForge.ForgeParams := none)
+    (forgeParams : Option Dion.Consensus.Praos.BlockForge.ForgeParams := none)
     (socketPath : Option String := none)
     (epochNonceSeed : Option String := none)
     (chainDb : ChainDB)
-    (syncOrigin : Cleanode.TUI.State.SyncOrigin := .genesis)
-    (replayedLedgerState : Option Cleanode.Ledger.State.LedgerState := none) : IO Unit := do
+    (syncOrigin : Dion.TUI.State.SyncOrigin := .genesis)
+    (replayedLedgerState : Option Dion.Ledger.State.LedgerState := none)
+    (skipToTip : Bool := false)
+    (extraPeers : List (String × UInt16) := [])
+    (externalAddr : Option (String × UInt16) := none)
+    (customSystemStart : Option UInt64 := none)
+    (customEpochLength : Option Nat := none)
+    (customMagic : Option Nat := none) : IO Unit := do
 
   -- Build topology from bootstrap peers
   let bootstrapPeers := match networkName with
@@ -104,8 +110,8 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
   let relayPeers := match networkName with
     | "Mainnet" => mainnetRelayPeers
     | _ => []  -- Only mainnet has curated relays for now
-  -- Merge: bootstrap peers + relay peers
-  let peerAddrs := bootstrapPeers ++ relayPeers
+  -- Merge: bootstrap peers + relay peers + extra peers from CLI (--peer flags)
+  let peerAddrs := bootstrapPeers ++ relayPeers ++ extraPeers
 
   -- Shared peer discovery state (plain data, safe across threads)
   let discoveryRef ← IO.mkRef ({
@@ -123,21 +129,27 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
   -- Use replayed state from Mithril if available, otherwise start empty
   let initialLedgerState := match replayedLedgerState with
     | some ls => ls
-    | none => { Cleanode.Ledger.State.LedgerState.initial with
+    | none => { Dion.Ledger.State.LedgerState.initial with
         treasury := if networkName == "Preprod" then 1766738361646723 else 0
         reserves := if networkName == "Preprod" then 13181724972929461 else 0
-        protocolParams := { Cleanode.Ledger.State.ProtocolParamsState.mainnetDefaults with
-          networkId := if networkName == "Preprod" then 0 else 1 } }
+        protocolParams := { Dion.Ledger.State.ProtocolParamsState.mainnetDefaults with
+          networkId := match networkName with | "Mainnet" => 1 | _ => 0 } }
   let ledgerStateRef ← Std.Mutex.new initialLedgerState
 
   -- Shared consensus state (epoch nonces, stake snapshots, chain selection)
-  let genesis : Cleanode.Config.Genesis.ShelleyGenesis := {
-    epochLength := 432000
+  let resolvedEpochLength := customEpochLength.getD (match networkName with
+    | "Preview" => 86400
+    | _ => 432000)
+  let resolvedMagic := match customMagic with
+    | some n => n
+    | none => match networkName with | "Preprod" => 1 | "Preview" => 2 | "SanchoNet" => 4 | _ => 764824073
+  let genesis : Dion.Config.Genesis.ShelleyGenesis := {
+    epochLength := resolvedEpochLength
     slotLength := 1
     activeSlotsCoeff := { numerator := 1, denominator := 20 }
     securityParam := 2160
     maxLovelaceSupply := 45000000000000000
-    networkMagic := match networkName with | "Preprod" => 1 | "Preview" => 2 | "SanchoNet" => 4 | _ => 764824073
+    networkMagic := resolvedMagic
     networkId := networkName
     protocolParams := none
   }
@@ -156,38 +168,105 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
       pure initialCs
   let consensusRef ← IO.mkRef cs
 
+  IO.eprintln "[dbg] post-consensus-restore"
   -- Apply epoch nonce seed from CLI if provided (--epoch-nonce HEX)
   if let some hexStr := epochNonceSeed then
     let hexClean := hexStr.trim
     if hexClean.length == 64 then
-      let nonceBytes := Cleanode.Network.ChainSync.hexToBytes hexClean
-      consensusRef.modify fun c => { c with epochNonce := nonceBytes }
+      let nonceBytes := Dion.Network.ChainSync.hexToBytes hexClean
+      -- Also set currentEpoch so the first block doesn't fire a spurious epoch transition
+      let curEpoch ← do
+        let cs ← consensusRef.get
+        if cs.currentEpoch > 0 then pure cs.currentEpoch
+        else match ← chainDb.loadSyncState with
+          | some ss => pure (ss.lastSlot / resolvedEpochLength)
+          | none => pure 0
+      consensusRef.modify fun c => { c with
+        epochNonce := nonceBytes
+        currentEpoch := if curEpoch > 0 then curEpoch else c.currentEpoch
+        epochFirstSlot := if curEpoch > 0 then curEpoch * c.epochLength else c.epochFirstSlot }
       IO.println s!"[consensus] Epoch nonce seeded from CLI: {hexClean.take 16}..."
     else
       IO.eprintln s!"[consensus] Warning: --epoch-nonce must be 64 hex chars (got {hexClean.length}), ignoring"
+  else
+    -- Auto-fetch epoch nonce from Koios when nonce is zeros (first startup after Mithril sync)
+    let cs ← consensusRef.get
+    if cs.epochNonce.data.all (· == 0) then
+      let curEpoch ←
+        if cs.currentEpoch > 0 then pure cs.currentEpoch
+        else match ← chainDb.loadSyncState with
+          | some ss => pure (ss.lastSlot / resolvedEpochLength)
+          | none => pure 0
+      let koiosBase := match networkName with
+        | "Mainnet" => "https://api.koios.rest/api/v1"
+        | "Preprod" => "https://preprod.koios.rest/api/v1"
+        | "Preview" => "https://preview.koios.rest/api/v1"
+        | _ => ""
+      if curEpoch > 0 && !koiosBase.isEmpty then
+        IO.println s!"[consensus] Epoch nonce is zeros — auto-fetching from Koios (epoch {curEpoch})..."
+        try
+          let url := s!"{koiosBase}/epoch_params?_epoch_no={curEpoch}"
+          match ← Dion.Network.Http.httpGetJson url with
+          | .error e =>
+            IO.eprintln s!"[consensus] Koios fetch failed: {e}"
+            IO.eprintln "[consensus] Use --epoch-nonce <64-hex> to seed manually"
+          | .ok body =>
+            match Lean.Json.parse body with
+            | .error _ => IO.eprintln "[consensus] Failed to parse Koios epoch_params response"
+            | .ok json =>
+              let result : Option ByteArray := do
+                let arr ← json.getArr?.toOption
+                let item ← arr[0]?
+                let hex ← (item.getObjValAs? String "nonce").toOption
+                let bytes := Dion.Network.ChainSync.hexToBytes hex
+                if bytes.size == 32 then some bytes else none
+              match result with
+              | some nonceBytes =>
+                consensusRef.modify fun c => { c with
+                  epochNonce := nonceBytes
+                  currentEpoch := curEpoch
+                  epochFirstSlot := curEpoch * c.epochLength }
+                IO.println s!"[consensus] Epoch nonce auto-seeded from Koios: {(bytesToHex nonceBytes).take 16}..."
+              | none =>
+                IO.eprintln "[consensus] Could not extract nonce from Koios response"
+                IO.eprintln "[consensus] Use --epoch-nonce <64-hex> to seed manually"
+        catch e =>
+          IO.eprintln s!"[consensus] Koios request error: {e}"
+          IO.eprintln "[consensus] Use --epoch-nonce <64-hex> to seed manually"
 
+  IO.eprintln "[dbg] pre-stake-snapshot"
   -- Seed initial stake snapshot from ledger state (don't wait for epoch boundary)
   let initLs ← ledgerStateRef.atomically (fun ref => ref.get)
-  let initSnap := Cleanode.Consensus.Praos.StakeDistribution.buildSnapshotFromLedger initLs
+  IO.eprintln "[dbg] got-ledger"
+  IO.eprintln s!"[dbg] ledger pools={initLs.pools.registeredPools.length} utxo={initLs.utxo.size}"
+  let initSnap := Dion.Consensus.Praos.StakeDistribution.buildSnapshotFromLedger initLs
+  IO.eprintln s!"[dbg] snapshot-built stake={initSnap.totalStake} pools={initSnap.poolStakes.length}"
   if initSnap.totalStake > 0 then do
     consensusRef.modify fun c => { c with stakeSnapshot := initSnap }
+    IO.eprintln "[dbg] stake-set"
     IO.println s!"[consensus] Initial stake snapshot: {initSnap.poolStakes.length} pools, {initSnap.totalStake} lovelace"
-  else
+  else do
+    IO.eprintln "[dbg] no-stake-branch"
     IO.println "[consensus] No stake data yet — forge loop will wait for epoch boundary"
 
+  IO.eprintln "[dbg] pre-tui-init"
   -- TUI state (always created — also used by metrics server)
-  let now ← Cleanode.TUI.Render.nowMs
+  let now ← Dion.TUI.Render.nowMs
+  IO.eprintln "[dbg] post-nowMs"
   let tuiStateRefInner ← IO.mkRef ({ TUIState.empty networkName now with syncOrigin := syncOrigin })
   let tuiStateRef : Option (IO.Ref TUIState) := some tuiStateRefInner
 
   -- Start metrics server if configured
   if let some mp := metricsPort then
-    let _ ← Cleanode.Monitoring.Server.startMetricsServer mp tuiStateRefInner
+    let _ ← Dion.Monitoring.Server.startMetricsServer mp tuiStateRefInner
 
-  -- Start periodic status file writer (for `cleanode query` commands)
-  let _ ← IO.asTask (Cleanode.CLI.Query.statusFileWriterLoop tuiStateRefInner)
+  -- Start periodic status file writer (for `dion query` commands)
+  IO.eprintln "[dbg] pre-status-writer"
+  let _ ← IO.asTask (Dion.CLI.Query.statusFileWriterLoop tuiStateRefInner)
+  IO.eprintln "[dbg] post-status-writer"
 
   -- In TUI mode: launch the render loop; otherwise: print banner
+  IO.eprintln s!"[dbg] tuiMode={tuiMode}"
   if tuiMode then
     let _ ← startTUI tuiStateRefInner
   else do
@@ -199,6 +278,8 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
     IO.println s!"  Bootstrap peers: {bootstrapPeers.length}"
     if relayPeers.length > 0 then
       IO.println s!"  Relay peers (from peer snapshot): {relayPeers.length}"
+    if extraPeers.length > 0 then
+      IO.println s!"  Extra peers (--peer flags): {extraPeers.length}"
     IO.println s!"  Total initial peers: {peerAddrs.length}"
     IO.println ""
     IO.println "=== Relay Node Active (Ctrl+C to stop) ==="
@@ -212,7 +293,7 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
     | "SanchoNet" => .SanchoNet
     | _           => .Mainnet
   -- Shared peer registry for ChainSync/BlockFetch server + announcement loop
-  let registryRef ← IO.mkRef Cleanode.Consensus.Praos.BlockAnnounce.PeerRegistry.empty
+  let registryRef ← IO.mkRef Dion.Consensus.Praos.BlockAnnounce.PeerRegistry.empty
 
   let mut tasks : List (Task (Except IO.Error Unit)) := []
   IO.eprintln s!"[Listen] Creating listener task for port {listenPort}..."
@@ -235,7 +316,7 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
   if let some sockPath := socketPath then
     let n2cTask ← IO.asTask (do
       try
-        Cleanode.Network.N2C.Server.n2cServerLoop sockPath ledgerStateRef mempoolRef network tuiMode
+        Dion.Network.N2C.Server.n2cServerLoop sockPath ledgerStateRef mempoolRef network tuiMode
       catch e =>
         IO.eprintln s!"[n2c] Server crashed: {e}")
     tasks := tasks ++ [n2cTask]
@@ -252,11 +333,19 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
       pure (ByteArray.mk (Array.replicate 32 0), 0)
   let prevHashRef ← IO.mkRef initPrevHash
   let blockNoRef ← IO.mkRef initBlockNo
+  let checkpointRef ← IO.mkRef Dion.Ledger.State.CheckpointRing.empty
+  -- Build our self-address for PeerSharing advertisement (so peers can connect back to us)
+  let selfAddr : Option Dion.Network.PeerSharing.PeerAddress :=
+    match externalAddr with
+    | some (host, port) => some { host := host, port := port }
+    | none => none
+  if let some sa := selfAddr then
+    IO.println s!"  [peersharing] Advertising self as {sa.host}:{sa.port}"
   -- Launch per-peer reconnect loops — each task owns its connection lifecycle
   for (host, port) in peerAddrs do
     let task ← IO.asTask (do
       try
-        peerReconnectLoop host port proposal chainDb (some discoveryRef) (some seenBlocksRef) tuiStateRef (some mempoolRef) (some consensusRef) (some ledgerStateRef) (some prevHashRef) (some blockNoRef)
+        peerReconnectLoop host port proposal chainDb (some discoveryRef) (some seenBlocksRef) tuiStateRef (some mempoolRef) (some consensusRef) (some ledgerStateRef) (some prevHashRef) (some blockNoRef) (some checkpointRef) skipToTip selfAddr
       catch e =>
         tuiLog tuiStateRef s!"Peer {host}:{port}: {e}")
     tasks := tasks ++ [task]
@@ -264,22 +353,29 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
   -- Launch peer discovery spawner
   let spawnerTask ← IO.asTask (do
     try
-      peerSpawnerLoop discoveryRef proposal chainDb (some seenBlocksRef) tuiStateRef (some mempoolRef) (some consensusRef) (some ledgerStateRef) (some prevHashRef) (some blockNoRef)
+      peerSpawnerLoop discoveryRef proposal chainDb (some seenBlocksRef) tuiStateRef (some mempoolRef) (some consensusRef) (some ledgerStateRef) (some prevHashRef) (some blockNoRef) (some checkpointRef) skipToTip selfAddr
     catch e =>
       tuiLog tuiStateRef s!"Peer spawner: {e}")
   tasks := tasks ++ [spawnerTask]
 
   -- Start block production forge loop if SPO keys are configured
   if let some fp := forgeParams then
-    let clock := match networkName with
-      | "Preprod" => Cleanode.Consensus.Praos.ForgeLoop.SlotClock.preprod
-      | "Preview" => Cleanode.Consensus.Praos.ForgeLoop.SlotClock.preview
-      | _ => Cleanode.Consensus.Praos.ForgeLoop.SlotClock.mainnet
+    let baseClock := match networkName with
+      | "Preprod" => Dion.Consensus.Praos.ForgeLoop.SlotClock.preprod
+      | "Preview" => Dion.Consensus.Praos.ForgeLoop.SlotClock.preview
+      | _ => Dion.Consensus.Praos.ForgeLoop.SlotClock.mainnet
+    -- Override with custom params when provided (e.g. local private testnet)
+    let clock : Dion.Consensus.Praos.ForgeLoop.SlotClock := {
+      systemStart    := customSystemStart.getD baseClock.systemStart
+      slotLength     := baseClock.slotLength
+      epochLength    := customEpochLength.getD baseClock.epochLength
+      slotsPerKESPeriod := baseClock.slotsPerKESPeriod
+    }
     let (forgeTask, _forgeStateRef, forgedBlocksRef) ←
-      Cleanode.Consensus.Praos.ForgeLoop.startForgeLoop fp clock consensusRef mempoolRef ledgerStateRef prevHashRef blockNoRef
+      Dion.Consensus.Praos.ForgeLoop.startForgeLoop fp clock consensusRef mempoolRef ledgerStateRef prevHashRef blockNoRef tuiStateRef
     tasks := tasks ++ [forgeTask]
     -- Start block announcement loop (broadcasts forged blocks to shared registry)
-    let announceTask ← Cleanode.Consensus.Praos.BlockAnnounce.startAnnouncementLoop registryRef forgedBlocksRef
+    let announceTask ← Dion.Consensus.Praos.BlockAnnounce.startAnnouncementLoop registryRef forgedBlocksRef
     tasks := tasks ++ [announceTask]
     IO.println "  [spo] Block production + announcement loops started"
 
@@ -296,4 +392,4 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
 
   chainDb.close
 
-end Cleanode.Node
+end Dion.Node

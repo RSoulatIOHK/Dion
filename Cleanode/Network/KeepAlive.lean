@@ -1,6 +1,6 @@
-import Cleanode.Network.Cbor
-import Cleanode.Network.Multiplexer
-import Cleanode.Network.Socket
+import Dion.Network.Cbor
+import Dion.Network.Multiplexer
+import Dion.Network.Socket
 
 /-!
 # Keep-Alive Mini-Protocol
@@ -24,11 +24,11 @@ the connection should be terminated.
 - Protocol ID: 0x0008
 -/
 
-namespace Cleanode.Network.KeepAlive
+namespace Dion.Network.KeepAlive
 
-open Cleanode.Network.Cbor
-open Cleanode.Network.Multiplexer
-open Cleanode.Network.Socket
+open Dion.Network.Cbor
+open Dion.Network.Multiplexer
+open Dion.Network.Socket
 
 -- ====================
 -- = Types            =
@@ -254,4 +254,4 @@ theorem timeout_increases_missed (state : KeepAliveState) :
     (recordMissed state).missedResponses = state.missedResponses + 1 := by
   simp [recordMissed]
 
-end Cleanode.Network.KeepAlive
+end Dion.Network.KeepAlive

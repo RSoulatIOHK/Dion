@@ -1,5 +1,5 @@
-import Cleanode.Network.Cbor
-import Cleanode.Network.CborValue
+import Dion.Network.Cbor
+import Dion.Network.CborValue
 
 /-!
 # CBOR Encoding/Decoding Correctness Proofs
@@ -16,10 +16,10 @@ Formal proof scaffolding for CBOR codec correctness properties.
 - RFC 8949: Concise Binary Object Representation (CBOR)
 -/
 
-namespace Cleanode.Proofs.CborProofs
+namespace Dion.Proofs.CborProofs
 
-open Cleanode.Network.Cbor
-open Cleanode.Network.CborValue
+open Dion.Network.Cbor
+open Dion.Network.CborValue
 
 -- ====================
 -- = Round-trip       =
@@ -94,4 +94,4 @@ theorem uint_injective (n1 n2 : Nat) :
     encodeUInt n1 = encodeUInt n2 → n1 = n2 := by
   sorry
 
-end Cleanode.Proofs.CborProofs
+end Dion.Proofs.CborProofs

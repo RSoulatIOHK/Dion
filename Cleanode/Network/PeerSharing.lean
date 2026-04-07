@@ -1,7 +1,7 @@
-import Cleanode.Network.Cbor
-import Cleanode.Network.ByteArrayBuilder
-import Cleanode.Network.Multiplexer
-import Cleanode.Network.Socket
+import Dion.Network.Cbor
+import Dion.Network.ByteArrayBuilder
+import Dion.Network.Multiplexer
+import Dion.Network.Socket
 
 /-!
 # PeerSharing Mini-Protocol
@@ -25,11 +25,11 @@ from the server, which responds with known peer addresses.
 - Protocol number: 10 (0x000a, node-to-node)
 -/
 
-namespace Cleanode.Network.PeerSharing
+namespace Dion.Network.PeerSharing
 
-open Cleanode.Network.Cbor
-open Cleanode.Network.Multiplexer
-open Cleanode.Network.Socket
+open Dion.Network.Cbor
+open Dion.Network.Multiplexer
+open Dion.Network.Socket
 
 -- ==============
 -- = Core Types =
@@ -208,4 +208,4 @@ def receivePeerSharing (sock : Socket) : IO (Except SocketError (Option PeerShar
 def requestPeers (amount : UInt8 := 10) : PeerSharingMessage :=
   .MsgShareRequest amount
 
-end Cleanode.Network.PeerSharing
+end Dion.Network.PeerSharing

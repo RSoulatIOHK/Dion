@@ -1,10 +1,10 @@
-import Cleanode.Network.Multiplexer
-import Cleanode.Network.Socket
-import Cleanode.Network.ChainSync
-import Cleanode.Network.BlockFetch
-import Cleanode.Network.TxSubmission2
-import Cleanode.Network.KeepAlive
-import Cleanode.Network.PeerSharing
+import Dion.Network.Multiplexer
+import Dion.Network.Socket
+import Dion.Network.ChainSync
+import Dion.Network.BlockFetch
+import Dion.Network.TxSubmission2
+import Dion.Network.KeepAlive
+import Dion.Network.PeerSharing
 
 /-!
 # MUX Frame Dispatcher
@@ -20,15 +20,15 @@ ad-hoc `receiveChainSyncFrame` pattern with a unified event loop.
 - Optionally handles KeepAlive transparently (auto-respond)
 -/
 
-namespace Cleanode.Network.MuxDispatcher
+namespace Dion.Network.MuxDispatcher
 
-open Cleanode.Network.Multiplexer
-open Cleanode.Network.Socket
-open Cleanode.Network.ChainSync
-open Cleanode.Network.BlockFetch
-open Cleanode.Network.TxSubmission2
-open Cleanode.Network.KeepAlive
-open Cleanode.Network.PeerSharing
+open Dion.Network.Multiplexer
+open Dion.Network.Socket
+open Dion.Network.ChainSync
+open Dion.Network.BlockFetch
+open Dion.Network.TxSubmission2
+open Dion.Network.KeepAlive
+open Dion.Network.PeerSharing
 
 -- ====================
 -- = MUX Events       =
@@ -141,4 +141,4 @@ partial def muxDispatchLoop (sock : Socket)
       else
         return .ok ()
 
-end Cleanode.Network.MuxDispatcher
+end Dion.Network.MuxDispatcher

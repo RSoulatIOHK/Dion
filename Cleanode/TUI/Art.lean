@@ -1,4 +1,4 @@
-import Cleanode.TUI.Ansi
+import Dion.TUI.Ansi
 
 /-!
 # ASCII Art Logo
@@ -6,9 +6,9 @@ import Cleanode.TUI.Ansi
 The "DION" logo rendered in block letters with ANSI color codes.
 -/
 
-namespace Cleanode.TUI.Art
+namespace Dion.TUI.Art
 
-open Cleanode.TUI.Ansi
+open Dion.TUI.Ansi
 
 /-- The DION ASCII art logo lines (raw, no color) -/
 def dionLogoLines : List String :=
@@ -27,4 +27,4 @@ def renderLogo : List String :=
 def subtitle : String :=
   s!"{Ansi.cyan}{Ansi.dim}  A Cardano LEAN 4 Node{Ansi.reset}"
 
-end Cleanode.TUI.Art
+end Dion.TUI.Art

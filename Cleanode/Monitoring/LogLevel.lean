@@ -11,7 +11,7 @@ to stdout and/or TUI state based on severity.
 - Error: Failures requiring attention (handshake failed, DB error)
 -/
 
-namespace Cleanode.Monitoring.LogLevel
+namespace Dion.Monitoring.LogLevel
 
 /-- Log severity levels -/
 inductive LogLevel where
@@ -72,4 +72,4 @@ def logWarn (config : LogConfig) (component msg : String) : IO Unit :=
 def logError (config : LogConfig) (component msg : String) : IO Unit :=
   logMsg config .error component msg
 
-end Cleanode.Monitoring.LogLevel
+end Dion.Monitoring.LogLevel

@@ -1,4 +1,4 @@
-import Cleanode.Network.Socket
+import Dion.Network.Socket
 
 /-!
 # Ouroboros Network Multiplexer
@@ -16,9 +16,9 @@ Each message is framed with a header containing:
 - https://ouroboros-network.cardano.intersectmbo.org/pdfs/network-spec/network-spec.pdf
 -/
 
-namespace Cleanode.Network.Multiplexer
+namespace Dion.Network.Multiplexer
 
-open Cleanode.Network.Socket
+open Dion.Network.Socket
 
 /-- Mini-protocol identifiers for node-to-node communication -/
 inductive MiniProtocolId where
@@ -249,4 +249,4 @@ def sendSegmented (sock : Socket) (protocolId : MiniProtocolId) (mode : Mode)
     | .ok () => pure ()
   return .ok ()
 
-end Cleanode.Network.Multiplexer
+end Dion.Network.Multiplexer

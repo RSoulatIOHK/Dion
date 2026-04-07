@@ -1,6 +1,6 @@
-import Cleanode.Ledger.State
-import Cleanode.Ledger.Governance
-import Cleanode.Network.ConwayBlock
+import Dion.Ledger.State
+import Dion.Ledger.Governance
+import Dion.Network.ConwayBlock
 
 /-!
 # Cardano Certificates
@@ -24,10 +24,10 @@ Certificates appear in transaction body field key 4 as a list of
 - Cardano Ledger Spec: DELEG, POOL, GOVCERT STS rules
 -/
 
-namespace Cleanode.Ledger.Certificate
+namespace Dion.Ledger.Certificate
 
-open Cleanode.Ledger.State
-open Cleanode.Ledger.Governance
+open Dion.Ledger.State
+open Dion.Ledger.Governance
 
 -- ====================
 -- = Certificate Types =
@@ -163,7 +163,7 @@ def applyCertificates (state : LedgerState) (certs : List Certificate) : LedgerS
 
 /-- Convert a RawCertificate from the parser to a full Certificate.
     Note: pool registration loses some fields in the raw parse. -/
-def fromRawCertificate (raw : Cleanode.Network.ConwayBlock.RawCertificate) : Certificate :=
+def fromRawCertificate (raw : Dion.Network.ConwayBlock.RawCertificate) : Certificate :=
   match raw with
   | .stakeKeyRegistration _ kh => .stakeKeyRegistration kh
   | .stakeKeyDeregistration _ kh => .stakeKeyDeregistration kh
@@ -289,4 +289,4 @@ def validateCertificate (state : LedgerState) (cert : Certificate)
   | .authCommitteeHot _ _ => pure ()
   | .resignCommitteeCold _ => pure ()
 
-end Cleanode.Ledger.Certificate
+end Dion.Ledger.Certificate

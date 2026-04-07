@@ -1,10 +1,10 @@
-import Cleanode.TUI.State
+import Dion.TUI.State
 
 /-!
 # Node Status File & Query Commands
 
 The running node periodically writes a JSON status file.
-The `cleanode query` subcommands read this file.
+The `dion query` subcommands read this file.
 
 ## Status File Format
 ```json
@@ -18,9 +18,9 @@ The `cleanode query` subcommands read this file.
 ```
 -/
 
-namespace Cleanode.CLI.Query
+namespace Dion.CLI.Query
 
-open Cleanode.TUI.State
+open Dion.TUI.State
 
 /-- Default path for the node status file -/
 def statusFilePath : String := "./data/node-status.json"
@@ -89,4 +89,4 @@ def queryMempool : IO Unit := do
   let content ← IO.FS.readFile statusFilePath
   IO.println content
 
-end Cleanode.CLI.Query
+end Dion.CLI.Query

@@ -1,6 +1,6 @@
-import Cleanode.Network.Crypto
-import Cleanode.Network.CryptoSpec
-import Cleanode.Test.TestHarness
+import Dion.Network.Crypto
+import Dion.Network.CryptoSpec
+import Dion.Test.TestHarness
 
 /-!
 # Ed25519 Conformance Tests
@@ -11,11 +11,11 @@ All 7 test vectors from RFC 8032 Section 7.1 plus property-based tests.
 - RFC 8032: Edwards-Curve Digital Signature Algorithm (Ed25519)
 -/
 
-namespace Cleanode.Test.Ed25519Test
+namespace Dion.Test.Ed25519Test
 
-open Cleanode.Network.Crypto
-open Cleanode.Network.CryptoSpec
-open Cleanode.Test.TestHarness
+open Dion.Network.Crypto
+open Dion.Network.CryptoSpec
+open Dion.Test.TestHarness
 
 /-- Verify a known signature against public key and message -/
 private def verifyVector (pkHex msgHex sigHex : String) : IO Bool := do
@@ -137,4 +137,4 @@ def runEd25519Tests : IO (Array TestResult) := do
 
   return results
 
-end Cleanode.Test.Ed25519Test
+end Dion.Test.Ed25519Test

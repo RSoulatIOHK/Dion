@@ -1,4 +1,4 @@
-import Cleanode.Network.Socket
+import Dion.Network.Socket
 
 /-!
 # Socket Layer Correctness Proofs
@@ -16,9 +16,9 @@ that the C implementation should satisfy.
 - POSIX socket specification
 -/
 
-namespace Cleanode.Proofs.SocketProofs
+namespace Dion.Proofs.SocketProofs
 
-open Cleanode.Network.Socket
+open Dion.Network.Socket
 
 /-- Socket connect is total: it either succeeds or returns an error -/
 theorem socket_connect_liveness (_host : String) (_port : UInt16) :
@@ -44,4 +44,4 @@ theorem socket_close_idempotent :
       True := by
   intros; trivial
 
-end Cleanode.Proofs.SocketProofs
+end Dion.Proofs.SocketProofs

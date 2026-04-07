@@ -1,13 +1,13 @@
-import Cleanode.Ledger.UTxO
-import Cleanode.Ledger.State
-import Cleanode.Ledger.Fee
-import Cleanode.Ledger.Value
-import Cleanode.Plutus.Evaluate
-import Cleanode.Network.Cbor
-import Cleanode.Network.CborCursor
-import Cleanode.Network.Crypto
-import Cleanode.Network.CryptoSpec
-import Cleanode.Network.EraTx
+import Dion.Ledger.UTxO
+import Dion.Ledger.State
+import Dion.Ledger.Fee
+import Dion.Ledger.Value
+import Dion.Plutus.Evaluate
+import Dion.Network.Cbor
+import Dion.Network.CborCursor
+import Dion.Network.Crypto
+import Dion.Network.CryptoSpec
+import Dion.Network.EraTx
 
 /-!
 # Transaction Validation
@@ -23,17 +23,17 @@ Complete transaction validation including:
 - CIP-0032: Alonzo validation
 -/
 
-namespace Cleanode.Ledger.Validation
+namespace Dion.Ledger.Validation
 
-open Cleanode.Ledger.UTxO
-open Cleanode.Ledger.State
-open Cleanode.Ledger.Fee
-open Cleanode.Ledger.Value
-open Cleanode.Network.Cbor
-open Cleanode.Network.ConwayBlock
-open Cleanode.Network.Crypto
-open Cleanode.Network.CryptoSpec
-open Cleanode.Network.EraTx
+open Dion.Ledger.UTxO
+open Dion.Ledger.State
+open Dion.Ledger.Fee
+open Dion.Ledger.Value
+open Dion.Network.Cbor
+open Dion.Network.ConwayBlock
+open Dion.Network.Crypto
+open Dion.Network.CryptoSpec
+open Dion.Network.EraTx
 
 -- ====================
 -- = ByteArray Ordering =
@@ -271,7 +271,7 @@ def validateNativeScripts (witnesses : WitnessSet) (signerKeyHashes : List ByteA
     (currentSlot : Nat) : ValidationResult := do
   if witnesses.nativeScripts.isEmpty then return ()
   for rawScript in witnesses.nativeScripts do
-    match Cleanode.Network.ConwayBlock.parseNativeScriptCbor rawScript with
+    match Dion.Network.ConwayBlock.parseNativeScriptCbor rawScript with
     | none => throw (ValidationError.ScriptFailure rawScript "failed to parse native script CBOR")
     | some parsed =>
       let script := toNativeScript parsed
@@ -572,7 +572,7 @@ structure PlutusExecResult where
     Evaluates all scripts referenced by redeemers in the transaction. -/
 def validatePlutusScriptsIO (body : TransactionBody) (witnesses : WitnessSet)
     (utxo : UTxOSet) (txHash : ByteArray) : IO ValidationResult := do
-  match ← Cleanode.Plutus.Evaluate.evaluateTransactionScriptsIO body witnesses utxo txHash with
+  match ← Dion.Plutus.Evaluate.evaluateTransactionScriptsIO body witnesses utxo txHash with
   | .ok () => return .ok ()
   | .error msg => return .error (.ScriptFailure ByteArray.empty msg)
 
@@ -837,18 +837,18 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
     --     voter = [0,keyhash] / [1,scripthash] / [2,keyhash] / [3,scripthash] / [4,keyhash]
     --     Types 1 (CC hot script) and 3 (DRep script) require the script.
     if let some vpBytes := body.votingProcedures then
-      let vp0 := Cleanode.Network.CborCursor.Cursor.mk' vpBytes
-      if let some outerMap := Cleanode.Network.CborCursor.decodeMapHeader vp0 then
+      let vp0 := Dion.Network.CborCursor.Cursor.mk' vpBytes
+      if let some outerMap := Dion.Network.CborCursor.decodeMapHeader vp0 then
         let mut vpCur := outerMap.cursor
         for _ in [0:outerMap.value] do
           -- Each key is a voter: [voter_type, credential]
-          if let some arrR := Cleanode.Network.CborCursor.decodeArrayHeader vpCur then
-            if let some typeR := Cleanode.Network.CborCursor.decodeUInt arrR.cursor then
-              if let some credR := Cleanode.Network.CborCursor.decodeBytes typeR.cursor then
+          if let some arrR := Dion.Network.CborCursor.decodeArrayHeader vpCur then
+            if let some typeR := Dion.Network.CborCursor.decodeUInt arrR.cursor then
+              if let some credR := Dion.Network.CborCursor.decodeBytes typeR.cursor then
                 if typeR.value == 1 || typeR.value == 3 then
                   -- Script credential voter: add hash to scriptsNeeded
                   scriptsNeeded := credR.value :: scriptsNeeded
-                if let some after := Cleanode.Network.CborCursor.skipValue credR.cursor then
+                if let some after := Dion.Network.CborCursor.skipValue credR.cursor then
                   vpCur := after
                 else break
               else break
@@ -1043,4 +1043,4 @@ theorem balance_validation_correct :
       True → True := by
   intros; trivial
 
-end Cleanode.Ledger.Validation
+end Dion.Ledger.Validation

@@ -1,7 +1,7 @@
-import Cleanode.Network.ConwayBlock
-import Cleanode.Network.CborCursor
-import Cleanode.Ledger.UTxO
-import Cleanode.Ledger.Value
+import Dion.Network.ConwayBlock
+import Dion.Network.CborCursor
+import Dion.Ledger.UTxO
+import Dion.Ledger.Value
 
 /-!
 # Plutus Script Context
@@ -29,11 +29,11 @@ ScriptPurpose:
 - CIP-0069: PlutusV3 script context
 -/
 
-namespace Cleanode.Plutus.ScriptContext
+namespace Dion.Plutus.ScriptContext
 
-open Cleanode.Network.ConwayBlock
-open Cleanode.Ledger.UTxO
-open Cleanode.Ledger.Value
+open Dion.Network.ConwayBlock
+open Dion.Ledger.UTxO
+open Dion.Ledger.Value
 
 -- ====================
 -- = Plutus Data      =
@@ -72,56 +72,56 @@ instance : Repr PlutusData where
 
 mutual
   /-- Decode a single PlutusData value from a cursor position. -/
-  private partial def decodePD (c : Cleanode.Network.CborCursor.Cursor) :
-      Option (Cleanode.Network.CborCursor.CResult PlutusData) :=
+  private partial def decodePD (c : Dion.Network.CborCursor.Cursor) :
+      Option (Dion.Network.CborCursor.CResult PlutusData) :=
     if c.remaining == 0 then none
     else
       let major := c.peek.toNat >>> 5
       match major with
       | 0 =>
-        Cleanode.Network.CborCursor.decodeUInt c |>.map fun r =>
+        Dion.Network.CborCursor.decodeUInt c |>.map fun r =>
           { value := .Integer (Int.ofNat r.value), cursor := r.cursor }
       | 1 =>
-        Cleanode.Network.CborCursor.decodeHead c |>.map fun r =>
+        Dion.Network.CborCursor.decodeHead c |>.map fun r =>
           { value := .Integer (-1 - Int.ofNat r.value.2), cursor := r.cursor }
       | 2 =>
-        Cleanode.Network.CborCursor.decodeBytes c |>.map fun r =>
+        Dion.Network.CborCursor.decodeBytes c |>.map fun r =>
           { value := .ByteString r.value, cursor := r.cursor }
       | 4 =>
-        Cleanode.Network.CborCursor.decodeArrayHeader c >>= fun hdr =>
+        Dion.Network.CborCursor.decodeArrayHeader c >>= fun hdr =>
         decodePDList hdr.value hdr.cursor |>.map fun (items, cur') =>
           { value := .List items, cursor := cur' }
       | 5 =>
-        Cleanode.Network.CborCursor.decodeMapHeader c >>= fun hdr =>
+        Dion.Network.CborCursor.decodeMapHeader c >>= fun hdr =>
         decodePDPairs hdr.value hdr.cursor |>.map fun (pairs, cur') =>
           { value := .Map pairs, cursor := cur' }
       | 6 =>
-        Cleanode.Network.CborCursor.skipTag c >>= fun r =>
+        Dion.Network.CborCursor.skipTag c >>= fun r =>
         let tag := r.value
         if tag >= 121 && tag <= 127 then
-          Cleanode.Network.CborCursor.decodeArrayHeader r.cursor >>= fun hdr =>
+          Dion.Network.CborCursor.decodeArrayHeader r.cursor >>= fun hdr =>
           decodePDList hdr.value hdr.cursor |>.map fun (fields, cur') =>
             { value := .Constr (tag - 121) fields, cursor := cur' }
         else if tag >= 1280 && tag <= 1400 then
-          Cleanode.Network.CborCursor.decodeArrayHeader r.cursor >>= fun hdr =>
+          Dion.Network.CborCursor.decodeArrayHeader r.cursor >>= fun hdr =>
           decodePDList hdr.value hdr.cursor |>.map fun (fields, cur') =>
             { value := .Constr (tag - 1280 + 7) fields, cursor := cur' }
         else if tag == 102 then
           -- Alternative encoding: tag 102 wrapping [constrIdx, [fields]]
-          Cleanode.Network.CborCursor.decodeArrayHeader r.cursor >>= fun outer =>
+          Dion.Network.CborCursor.decodeArrayHeader r.cursor >>= fun outer =>
           if outer.value < 2 then none
           else
-            Cleanode.Network.CborCursor.decodeUInt outer.cursor >>= fun tagR =>
-            Cleanode.Network.CborCursor.decodeArrayHeader tagR.cursor >>= fun fHdr =>
+            Dion.Network.CborCursor.decodeUInt outer.cursor >>= fun tagR =>
+            Dion.Network.CborCursor.decodeArrayHeader tagR.cursor >>= fun fHdr =>
             decodePDList fHdr.value fHdr.cursor |>.map fun (fields, cur') =>
               { value := .Constr tagR.value fields, cursor := cur' }
         else none
       | _ => none
 
   /-- Decode n PlutusData items (n=9999 = indefinite). -/
-  private partial def decodePDList (n : Nat) (c : Cleanode.Network.CborCursor.Cursor) :
-      Option (List PlutusData × Cleanode.Network.CborCursor.Cursor) :=
-    if n == 9999 && Cleanode.Network.CborCursor.isBreak c then some ([], c.advance 1)
+  private partial def decodePDList (n : Nat) (c : Dion.Network.CborCursor.Cursor) :
+      Option (List PlutusData × Dion.Network.CborCursor.Cursor) :=
+    if n == 9999 && Dion.Network.CborCursor.isBreak c then some ([], c.advance 1)
     else if n == 0 then some ([], c)
     else
       decodePD c >>= fun r =>
@@ -129,9 +129,9 @@ mutual
         (r.value :: rest, cur')
 
   /-- Decode n key-value pairs of PlutusData (n=9999 = indefinite). -/
-  private partial def decodePDPairs (n : Nat) (c : Cleanode.Network.CborCursor.Cursor) :
-      Option (List (PlutusData × PlutusData) × Cleanode.Network.CborCursor.Cursor) :=
-    if n == 9999 && Cleanode.Network.CborCursor.isBreak c then some ([], c.advance 1)
+  private partial def decodePDPairs (n : Nat) (c : Dion.Network.CborCursor.Cursor) :
+      Option (List (PlutusData × PlutusData) × Dion.Network.CborCursor.Cursor) :=
+    if n == 9999 && Dion.Network.CborCursor.isBreak c then some ([], c.advance 1)
     else if n == 0 then some ([], c)
     else
       decodePD c >>= fun k =>
@@ -143,7 +143,7 @@ end -- mutual
 /-- Decode PlutusData from a CBOR-encoded byte array.
     Returns `none` on malformed input; falls back to `.ByteString` at call sites. -/
 def decodePlutusDataFromCbor (bs : ByteArray) : Option PlutusData :=
-  decodePD (Cleanode.Network.CborCursor.Cursor.mk' bs) |>.map (·.value)
+  decodePD (Dion.Network.CborCursor.Cursor.mk' bs) |>.map (·.value)
 
 -- ==============================
 -- = Certificate PlutusData     =
@@ -357,4 +357,4 @@ def resolveInputs (utxo : UTxOSet) (inputs : List TxInput) : List (TxInput × Tx
     | some output => some (inp, output)
     | none => none
 
-end Cleanode.Plutus.ScriptContext
+end Dion.Plutus.ScriptContext

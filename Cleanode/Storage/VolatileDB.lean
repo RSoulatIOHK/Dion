@@ -1,5 +1,5 @@
-import Cleanode.Storage.BlockStore
-import Cleanode.Network.ChainSync
+import Dion.Storage.BlockStore
+import Dion.Network.ChainSync
 
 /-!
 # Volatile Block Database
@@ -16,10 +16,10 @@ Blocks are kept in memory and persisted for crash recovery.
 - Ouroboros Consensus: VolatileDB design
 -/
 
-namespace Cleanode.Storage.VolatileDB
+namespace Dion.Storage.VolatileDB
 
-open Cleanode.Storage.BlockStore
-open Cleanode.Network.ChainSync
+open Dion.Storage.BlockStore
+open Dion.Network.ChainSync
 open System (FilePath)
 
 -- ====================
@@ -119,4 +119,4 @@ def VolatileDB.persist (db : VolatileDB) : IO Unit := do
     data := data ++ block.headerBytes
     IO.FS.writeBinFile filename data
 
-end Cleanode.Storage.VolatileDB
+end Dion.Storage.VolatileDB

@@ -13,7 +13,7 @@ Cardano uses it to encode addresses in a human-readable format:
 - CIP-0005: Cardano address encoding
 -/
 
-namespace Cleanode.Network.Bech32
+namespace Dion.Network.Bech32
 
 -- Bech32 character set (base32)
 def bech32Charset : Array Char := #[
@@ -117,4 +117,4 @@ def encodeAddress (addressBytes : ByteArray) (isTestnet : Bool := false) : Strin
 
       bech32Encode hrp data
 
-end Cleanode.Network.Bech32
+end Dion.Network.Bech32

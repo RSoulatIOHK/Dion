@@ -1,5 +1,5 @@
-import Cleanode.Test.TestHarness
-import Cleanode.Crypto.BLS12_381
+import Dion.Test.TestHarness
+import Dion.Crypto.BLS12_381
 
 /-!
 # BLS12-381 FFI Tests
@@ -8,10 +8,10 @@ Verifies BLS12-381 elliptic curve operations via the blst C library.
 Tests cover G1/G2 point operations, serialization, and pairing.
 -/
 
-namespace Cleanode.Test.BLS12_381Test
+namespace Dion.Test.BLS12_381Test
 
-open Cleanode.Test.TestHarness
-open Cleanode.Crypto.BLS12_381
+open Dion.Test.TestHarness
+open Dion.Crypto.BLS12_381
 
 -- ====================
 -- = Known Constants  =
@@ -264,4 +264,4 @@ def runBLS12_381Tests : IO (List TestResult) := do
   results := results ++ (← runPairingTests)
   return results
 
-end Cleanode.Test.BLS12_381Test
+end Dion.Test.BLS12_381Test

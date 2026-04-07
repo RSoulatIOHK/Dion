@@ -1,5 +1,5 @@
 import Std.Data.HashMap
-import Cleanode.Network.CborCursor
+import Dion.Network.CborCursor
 
 /-!
 # Conway Governance State
@@ -25,7 +25,7 @@ Conway introduces on-chain governance with these action types:
 - Conway Ledger Spec: GOV, GOVCERT rules
 -/
 
-namespace Cleanode.Ledger.Governance
+namespace Dion.Ledger.Governance
 
 -- ====================
 -- = DRep Credential  =
@@ -283,7 +283,7 @@ def GovernanceState.pruneProposals (gs : GovernanceState)
 -- = Param Update CBOR=
 -- ====================
 
-open Cleanode.Network.CborCursor in
+open Dion.Network.CborCursor in
 /-- Parse one key-value entry from pparams_update map, return updated acc and next cursor. -/
 private def parsePParamsEntry (kR : CResult Nat) (acc : ProtocolParamsUpdate)
     : Option (ProtocolParamsUpdate × Cursor) :=
@@ -311,7 +311,7 @@ private def parsePParamsEntry (kR : CResult Nat) (acc : ProtocolParamsUpdate)
   | 38 => (decodeUInt kR.cursor).map fun vR => ({ acc with dRepDeposit := some vR.value }, vR.cursor)
   | _  => (skipValue kR.cursor).map fun after => (acc, after)
 
-open Cleanode.Network.CborCursor in
+open Dion.Network.CborCursor in
 /-- Parse a Conway pparams_update CBOR map {* uint => any} into a ProtocolParamsUpdate.
     Only extracts the fields we care about; unknown keys are skipped. -/
 private partial def parsePParamsUpdateMap (cur : Cursor) : ProtocolParamsUpdate :=
@@ -327,7 +327,7 @@ private partial def parsePParamsUpdateMap (cur : Cursor) : ProtocolParamsUpdate 
         | none => (acc, c)
     ) ({}, mR.cursor) |>.1
 
-open Cleanode.Network.CborCursor in
+open Dion.Network.CborCursor in
 /-- Try to parse one proposal_procedure and return (parsed update or none, next cursor). -/
 private def parseOneProposal (c : Cursor)
     : Option (Option ProtocolParamsUpdate × Cursor) :=
@@ -370,7 +370,7 @@ private def parseOneProposal (c : Cursor)
           | none => none
           | some afterAnchor => some (some update, afterAnchor)
 
-open Cleanode.Network.CborCursor in
+open Dion.Network.CborCursor in
 /-- Parse proposal_procedures raw CBOR, extract all ParameterChangeAction param updates.
     Conway CDDL: proposal_procedures = #{+ proposal_procedure}
     proposal_procedure = [deposit, reward_account, gov_action, anchor]
@@ -415,4 +415,4 @@ def GovernanceState.drainRatifiedChanges (gs : GovernanceState)
   let (ready, waiting) := gs.pendingParamChanges.partition (·.ratified)
   (ready.map (·.update), { gs with pendingParamChanges := waiting })
 
-end Cleanode.Ledger.Governance
+end Dion.Ledger.Governance

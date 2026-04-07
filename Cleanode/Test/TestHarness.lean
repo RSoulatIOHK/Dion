@@ -4,7 +4,7 @@
 Shared test infrastructure: result tracking, timing, hex utilities.
 -/
 
-namespace Cleanode.Test.TestHarness
+namespace Dion.Test.TestHarness
 
 /-- A single test result -/
 structure TestResult where
@@ -86,4 +86,4 @@ def hexToBytes (hex : String) : ByteArray :=
       UInt8.ofNat (hexCharToNat hi * 16 + hexCharToNat lo) :: loop rest
   ByteArray.mk (loop chars).toArray
 
-end Cleanode.Test.TestHarness
+end Dion.Test.TestHarness

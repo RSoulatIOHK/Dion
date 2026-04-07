@@ -361,7 +361,13 @@
       "Bash(ls -la /Users/romainsoulat/Cleanode/*.log /Users/romainsoulat/Cleanode/stderr*)",
       "Bash(find /Users/romainsoulat/cardano-node-clone -type d -name *onsensus* -o -type d -name *orge*)",
       "Bash(git push:*)",
-      "Read(//Users/romainsoulat/Cleanode/NR>=1620 && NR<=1660 && /^\\(partial \\)?def /**)"
+      "Read(//Users/romainsoulat/Cleanode/NR>=1620 && NR<=1660 && /^\\(partial \\)?def /**)",
+      "Bash(grep -v \"^$\\\\|^commit\\\\|^Author\\\\|^Date\\\\|^ \")",
+      "Bash(find /Users/romainsoulat/Cleanode/data -name *.json)",
+      "Bash(find /Users/romainsoulat/ -name *alonzo*genesis* -o -name *conway*genesis*)",
+      "Bash(ls /tmp/*.socket)",
+      "Bash(ls /run/*.socket)",
+      "Bash(find /Users/romainsoulat/tools -name *.json)"
     ],
     "additionalDirectories": [
       "/tmp",

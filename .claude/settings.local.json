@@ -6,7 +6,24 @@
       "Bash(\"/c/Program Files/LLVM/bin/clang\" -c native/blake2b.c -o native/blake2b.o -I~/.elan/toolchains/leanprover--lean4---v4.24.0/include -fPIC)",
       "Bash(\"/c/Program Files/LLVM/bin/clang\" -c native/test_ffi.c -o native/test_ffi.o -I~/.elan/toolchains/leanprover--lean4---v4.24.0/include -fPIC)",
       "Bash(sudo apt-get update:*)",
-      "Bash(sudo apt-get install:*)"
+      "Bash(sudo apt-get install:*)",
+      "Bash(find /Users/romainsoulat/Cleanode -type f \\\\\\( -name \"*.c\" -o -name \"*.h\" \\\\\\) -exec grep -l \"cleanode\" {} \\\\;)",
+      "Bash(ls /Users/romainsoulat/Cleanode/native/*.h)",
+      "Bash(grep -rn \"cleanode_get_unix_time\\\\|get_unix_time\" /Users/romainsoulat/Cleanode/native/*.c)",
+      "Bash(cardano-cli latest:*)",
+      "Bash(curl -s \"https://preview.koios.rest/api/v1/epoch_params?_epoch_no=1\")",
+      "Bash(curl -s \"https://preprod.koios.rest/api/v1/epoch_params?_epoch_no=1\")",
+      "Bash(curl -s \"https://api.koios.rest/api/v1/epoch_params?_epoch_no=1\")",
+      "Bash(curl -s \"https://preprod.koios.rest/api/v1/epoch_params?_epoch_no=4\")",
+      "Bash(.lake/build/bin/cleanode spo:*)",
+      "Bash(ln -sf cold.skey pool.skey)",
+      "Bash(ln -sf cold.vkey pool.vkey)",
+      "Bash(ls -la pool.*)",
+      "Bash(curl -s https://preview.koios.rest/api/v1/pool_info -H 'Content-Type: application/json' -d '{\"_pool_bech32_ids\":[\"pool1udne4vnaat7gamwpf42ppdjky0dun5v8zfqf5h767ft57edy23r\"]}')",
+      "Bash(curl -s https://preview.koios.rest/api/v1/tx_status -H 'Content-Type: application/json' -d '{\"_tx_hashes\":[\"4708e9b20a6ddc208a0cad8b9ddb2d815f11d1c92f8ab15ec342f1bdd401f311\"]}')",
+      "Bash(curl -s -X POST https://preview.koios.rest/api/v1/submittx -H 'Content-Type: application/cbor' --data-binary @/Users/romainsoulat/spo-preview/reg.tx)",
+      "Bash(curl -s -X POST https://preview.koios.rest/api/v1/submittx -H 'Content-Type: application/cbor' --data-binary @/tmp/reg.tx.cbor)",
+      "Bash(curl -X POST https://preview.koios.rest/api/v1/pool_info -H 'Content-Type: application/json' -d '{\"_pool_bech32_ids\": [\"pool1udne4vnaat7gamwpf42ppdjky0dun5v8zfqf5h767ft57edy23r\"]}')"
     ]
   }
 }

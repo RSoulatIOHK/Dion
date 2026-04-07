@@ -1,4 +1,4 @@
-import Cleanode.Network.TxSubmission2
+import Dion.Network.TxSubmission2
 
 /-!
 # TxSubmission2 Protocol State Machine
@@ -30,9 +30,9 @@ typed states and transition rules per the Ouroboros network spec.
 - Ouroboros Network Spec Section 3.9 (TxSubmission)
 -/
 
-namespace Cleanode.Network.TxSubmission2State
+namespace Dion.Network.TxSubmission2State
 
-open Cleanode.Network.TxSubmission2
+open Dion.Network.TxSubmission2
 
 -- ====================
 -- = State Type       =
@@ -98,16 +98,16 @@ def isTerminal : TxSubmission2State → Bool
 
 /-- A typed TxSubmission2 handle that tracks the current protocol state -/
 structure TypedTxSubmission2 where
-  sock : Cleanode.Network.Socket.Socket
+  sock : Dion.Network.Socket.Socket
   state : TxSubmission2State
 
 /-- Create a new TxSubmission2 session (starts in StInit) -/
-def TypedTxSubmission2.new (sock : Cleanode.Network.Socket.Socket) : TypedTxSubmission2 :=
+def TypedTxSubmission2.new (sock : Dion.Network.Socket.Socket) : TypedTxSubmission2 :=
   { sock := sock, state := .StInit }
 
 /-- Send a message and transition state. Returns none if the transition is invalid. -/
 def TypedTxSubmission2.send (ts : TypedTxSubmission2) (msg : TxSubmission2Message)
-    : IO (Except Cleanode.Network.Socket.SocketError (Option TypedTxSubmission2)) := do
+    : IO (Except Dion.Network.Socket.SocketError (Option TypedTxSubmission2)) := do
   match nextState ts.state msg with
   | none => return .ok none  -- Invalid transition
   | some newState => do
@@ -117,7 +117,7 @@ def TypedTxSubmission2.send (ts : TypedTxSubmission2) (msg : TxSubmission2Messag
 
 /-- Receive a message and transition state. Returns none if decode fails or transition is invalid. -/
 def TypedTxSubmission2.recv (ts : TypedTxSubmission2)
-    : IO (Except Cleanode.Network.Socket.SocketError (Option (TxSubmission2Message × TypedTxSubmission2))) := do
+    : IO (Except Dion.Network.Socket.SocketError (Option (TxSubmission2Message × TypedTxSubmission2))) := do
   match ← receiveTxSubmission2 ts.sock with
   | .error e => return .error e
   | .ok none => return .ok none
@@ -158,4 +158,4 @@ theorem txsubmission_deterministic (s : TxSubmission2State) (msg : TxSubmission2
     nextState s msg = some s1 → nextState s msg = some s2 → s1 = s2 := by
   intros h1 h2; rw [h1] at h2; exact Option.some.inj h2
 
-end Cleanode.Network.TxSubmission2State
+end Dion.Network.TxSubmission2State

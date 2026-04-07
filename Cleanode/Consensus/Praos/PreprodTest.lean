@@ -1,11 +1,11 @@
-import Cleanode.Consensus.Praos.ForgeLoop
-import Cleanode.Consensus.Praos.BlockForge
-import Cleanode.Consensus.Praos.ConsensusState
-import Cleanode.Consensus.Praos.StakeDistribution
-import Cleanode.Consensus.Praos.LeaderElection
-import Cleanode.Consensus.Praos.SPOKeys
-import Cleanode.Config.Genesis
-import Cleanode.Network.Mempool
+import Dion.Consensus.Praos.ForgeLoop
+import Dion.Consensus.Praos.BlockForge
+import Dion.Consensus.Praos.ConsensusState
+import Dion.Consensus.Praos.StakeDistribution
+import Dion.Consensus.Praos.LeaderElection
+import Dion.Consensus.Praos.SPOKeys
+import Dion.Config.Genesis
+import Dion.Network.Mempool
 
 /-!
 # Preprod SPO Integration Test
@@ -22,7 +22,7 @@ Validates that all components work together:
 ## Usage
 
 ```
-cleanode test-forge --preprod --spo-keys ./keys
+dion test-forge --preprod --spo-keys ./keys
 ```
 
 Or programmatically via `runPreprodForgeTest`.
@@ -40,14 +40,14 @@ The `--spo-keys` directory should contain:
 - https://developers.cardano.org/docs/operate-a-stake-pool/
 -/
 
-namespace Cleanode.Consensus.Praos.PreprodTest
+namespace Dion.Consensus.Praos.PreprodTest
 
-open Cleanode.Consensus.Praos.ForgeLoop
-open Cleanode.Consensus.Praos.BlockForge
-open Cleanode.Consensus.Praos.ConsensusState
-open Cleanode.Consensus.Praos.StakeDistribution
-open Cleanode.Consensus.Praos.LeaderElection
-open Cleanode.Config.Genesis
+open Dion.Consensus.Praos.ForgeLoop
+open Dion.Consensus.Praos.BlockForge
+open Dion.Consensus.Praos.ConsensusState
+open Dion.Consensus.Praos.StakeDistribution
+open Dion.Consensus.Praos.LeaderElection
+open Dion.Config.Genesis
 
 -- ====================
 -- = Preprod Genesis  =
@@ -166,8 +166,8 @@ def runDryForgeTest (keyDir : String) (network : String := "Preprod")
         IO.println s!"[test] ELECTED at slot {slot} (offset +{i})"
 
         -- Try to actually forge (with real KES signing)
-        let mempool := Cleanode.Network.Mempool.Mempool.empty {}
-        let blockBody := Cleanode.Consensus.Praos.TxSelection.selectTransactions mempool 90112
+        let mempool := Dion.Network.Mempool.Mempool.empty {}
+        let blockBody := Dion.Consensus.Praos.TxSelection.selectTransactions mempool 90112
         let prevHash := ByteArray.mk (Array.replicate 32 0)
         let kesPeriod := clock.slotKESPeriod slot
 
@@ -258,26 +258,26 @@ def validateSPOSetup (keyDir : String) (network : String := "Preprod") : IO Bool
     with a real cardano-node via the N2N peer protocol. -/
 def runCrossValidationGuide : IO Unit := do
   IO.println "============================================================"
-  IO.println " Cross-Validation: Cleanode <-> cardano-node (Preprod)"
+  IO.println " Cross-Validation: Dion <-> cardano-node (Preprod)"
   IO.println "============================================================"
   IO.println ""
-  IO.println "This validates that blocks forged by Cleanode are accepted by"
+  IO.println "This validates that blocks forged by Dion are accepted by"
   IO.println "cardano-node through the standard Ouroboros N2N peer protocol."
   IO.println ""
   IO.println "--- Prerequisites ---"
   IO.println ""
   IO.println "1. A synced cardano-node on preprod"
-  IO.println "2. Cleanode built with SPO keys (cold, VRF, KES, opcert)"
+  IO.println "2. Dion built with SPO keys (cold, VRF, KES, opcert)"
   IO.println "3. Your pool registered on preprod with non-zero stake"
   IO.println ""
-  IO.println "--- Step 1: Start Cleanode as a relay with SPO keys ---"
+  IO.println "--- Step 1: Start Dion as a relay with SPO keys ---"
   IO.println ""
-  IO.println "  cleanode relay --preprod \\"
+  IO.println "  dion relay --preprod \\"
   IO.println "    --spo-keys ./keys \\"
   IO.println "    --listen 3002 \\"
-  IO.println "    --socket-path /tmp/cleanode.socket"
+  IO.println "    --socket-path /tmp/dion.socket"
   IO.println ""
-  IO.println "  Cleanode will:"
+  IO.println "  Dion will:"
   IO.println "    - Sync the chain from bootstrap peers"
   IO.println "    - Build stake distribution from certificates during sync"
   IO.println "    - Run leader election each slot using real VRF"
@@ -285,7 +285,7 @@ def runCrossValidationGuide : IO Unit := do
   IO.println "    - Announce forged blocks via ChainSync server on port 3002"
   IO.println "    - Serve block bodies via BlockFetch server on port 3002"
   IO.println ""
-  IO.println "--- Step 2: Configure cardano-node to peer with Cleanode ---"
+  IO.println "--- Step 2: Configure cardano-node to peer with Dion ---"
   IO.println ""
   IO.println "  Add to your cardano-node topology file (topology.json):"
   IO.println ""
@@ -306,7 +306,7 @@ def runCrossValidationGuide : IO Unit := do
   IO.println ""
   IO.println "--- Step 3: Verify the connection ---"
   IO.println ""
-  IO.println "  In Cleanode logs, look for:"
+  IO.println "  In Dion logs, look for:"
   IO.println "    [listen] Accepted inbound peer from 127.0.0.1:XXXXX"
   IO.println "    [inbound] ChainSync: MsgFindIntersect from 127.0.0.1:XXXXX"
   IO.println "    [inbound] ChainSync: MsgRequestNext from 127.0.0.1:XXXXX"
@@ -315,7 +315,7 @@ def runCrossValidationGuide : IO Unit := do
   IO.println ""
   IO.println "--- Step 4: Wait for block production ---"
   IO.println ""
-  IO.println "  When Cleanode wins a slot and forges a block:"
+  IO.println "  When Dion wins a slot and forges a block:"
   IO.println "    [forge] Forged block #N at slot S (VRF proof: ...)"
   IO.println "    [announce] Block N (slot S) sent to 1 peers"
   IO.println ""
@@ -346,15 +346,15 @@ def runCrossValidationGuide : IO Unit := do
   IO.println "  1. Enable trace logging on cardano-node:"
   IO.println "     Set TraceBlockFetchDecisions: true in config.json"
   IO.println ""
-  IO.println "  2. Check Cleanode's stake snapshot:"
-  IO.println "     cleanode query stake-snapshot --socket /tmp/cleanode.socket"
+  IO.println "  2. Check Dion's stake snapshot:"
+  IO.println "     dion query stake-snapshot --socket /tmp/dion.socket"
   IO.println ""
   IO.println "  3. Verify KES key hasn't expired:"
-  IO.println "     cleanode test-forge --preprod --spo-keys ./keys --validate-only"
+  IO.println "     dion test-forge --preprod --spo-keys ./keys --validate-only"
   IO.println ""
   IO.println "  4. Check pool registration on-chain:"
   IO.println "     cardano-cli query stake-snapshot --testnet-magic 1 --stake-pool-id <POOL_ID>"
   IO.println ""
   IO.println "============================================================"
 
-end Cleanode.Consensus.Praos.PreprodTest
+end Dion.Consensus.Praos.PreprodTest

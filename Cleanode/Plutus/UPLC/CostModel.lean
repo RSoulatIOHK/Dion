@@ -1,5 +1,5 @@
-import Cleanode.Plutus.UPLC.Term
-import Cleanode.Plutus.UPLC.CEK
+import Dion.Plutus.UPLC.Term
+import Dion.Plutus.UPLC.CEK
 
 /-!
 # Plutus Cost Model
@@ -21,10 +21,10 @@ updated via governance. Default values match mainnet Conway era.
 - cardano-ledger: Alonzo cost model encoding
 -/
 
-namespace Cleanode.Plutus.UPLC.CostModel
+namespace Dion.Plutus.UPLC.CostModel
 
-open Cleanode.Plutus.UPLC
-open Cleanode.Plutus.UPLC.CEK
+open Dion.Plutus.UPLC
+open Dion.Plutus.UPLC.CEK
 
 -- ====================
 -- = Cost Functions   =
@@ -161,4 +161,4 @@ def cekBuiltinCost : ExBudget := { mem := 100, steps := 23000 }
 def cekConstrCost : ExBudget := { mem := 100, steps := 23000 }
 def cekCaseCost : ExBudget := { mem := 100, steps := 23000 }
 
-end Cleanode.Plutus.UPLC.CostModel
+end Dion.Plutus.UPLC.CostModel

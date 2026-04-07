@@ -1,9 +1,9 @@
-import Cleanode.Network.Socket
-import Cleanode.Network.PeerSharing
-import Cleanode.Network.ChainSyncState
-import Cleanode.Network.TxSubmission2State
-import Cleanode.Network.PeerSharingState
-import Cleanode.Network.KeepAlive
+import Dion.Network.Socket
+import Dion.Network.PeerSharing
+import Dion.Network.ChainSyncState
+import Dion.Network.TxSubmission2State
+import Dion.Network.PeerSharingState
+import Dion.Network.KeepAlive
 
 /-!
 # Peer Connection
@@ -13,14 +13,14 @@ Each connected peer gets one PeerConnection tracking where each protocol
 is in its state machine.
 -/
 
-namespace Cleanode.Network.PeerConnection
+namespace Dion.Network.PeerConnection
 
-open Cleanode.Network.Socket
-open Cleanode.Network.PeerSharing
-open Cleanode.Network.ChainSyncState
-open Cleanode.Network.TxSubmission2State
-open Cleanode.Network.PeerSharingState
-open Cleanode.Network.KeepAlive
+open Dion.Network.Socket
+open Dion.Network.PeerSharing
+open Dion.Network.ChainSyncState
+open Dion.Network.TxSubmission2State
+open Dion.Network.PeerSharingState
+open Dion.Network.KeepAlive
 
 -- ====================
 -- = Connection Dir   =
@@ -78,4 +78,4 @@ def PeerConnection.withTxSubmState (pc : PeerConnection) (s : TxSubmission2State
 def PeerConnection.onBlockSynced (pc : PeerConnection) : PeerConnection :=
   { pc with blocksSynced := pc.blocksSynced + 1 }
 
-end Cleanode.Network.PeerConnection
+end Dion.Network.PeerConnection

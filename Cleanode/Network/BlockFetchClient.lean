@@ -1,9 +1,9 @@
-import Cleanode.Network.Socket
-import Cleanode.Network.Multiplexer
-import Cleanode.Network.ChainSync
-import Cleanode.Network.BlockFetch
-import Cleanode.Network.ConwayBlock
-import Cleanode.Network.Mempool
+import Dion.Network.Socket
+import Dion.Network.Multiplexer
+import Dion.Network.ChainSync
+import Dion.Network.BlockFetch
+import Dion.Network.ConwayBlock
+import Dion.Network.Mempool
 
 /-!
 # BlockFetch Client Helper
@@ -11,17 +11,17 @@ import Cleanode.Network.Mempool
 High-level client function for fetching blocks.
 -/
 
-namespace Cleanode.Network.BlockFetchClient
+namespace Dion.Network.BlockFetchClient
 
-open Cleanode.Network.Socket
-open Cleanode.Network.ChainSync
-open Cleanode.Network.BlockFetch
-open Cleanode.Network.ConwayBlock
+open Dion.Network.Socket
+open Dion.Network.ChainSync
+open Dion.Network.BlockFetch
+open Dion.Network.ConwayBlock
 
 /-- Fetch a single block by point. Passes mempoolRef so TxSubmission2
     messages arriving during BlockFetch are handled inline (not dropped). -/
 def fetchBlock (sock : Socket) (point : Point)
-    (mempoolRef : Option (IO.Ref Cleanode.Network.Mempool.Mempool) := none)
+    (mempoolRef : Option (IO.Ref Dion.Network.Mempool.Mempool) := none)
     : IO (Except SocketError (Option ByteArray)) := do
   -- Send request
   match ← sendBlockFetch sock (.MsgRequestRange point point) with
@@ -67,4 +67,4 @@ def fetchBlock (sock : Socket) (point : Point)
               IO.println "[WARN] Expected MsgStartBatch or MsgNoBlocks"
               return .ok none
 
-end Cleanode.Network.BlockFetchClient
+end Dion.Network.BlockFetchClient

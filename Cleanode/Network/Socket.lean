@@ -1,7 +1,7 @@
 /-!
 # TCP Socket Interface
 
-This module provides a low-level TCP socket interface for Cleanode,
+This module provides a low-level TCP socket interface for Dion,
 implemented via FFI to C for actual socket operations.
 
 ## Overview
@@ -18,7 +18,7 @@ socket API. This module provides:
 - Ouroboros Network Spec (for protocol requirements)
 -/
 
-namespace Cleanode.Network.Socket
+namespace Dion.Network.Socket
 
 /-- Opaque socket handle type (external object wrapping file descriptor) -/
 opaque SocketPointed : NonemptyType
@@ -43,40 +43,40 @@ instance : ToString SocketError where
     | .Closed => "Socket closed"
 
 /-- Connect to a remote host -/
-@[extern "cleanode_socket_connect"]
+@[extern "dion_socket_connect"]
 opaque socket_connect (host : @& String) (port : @& UInt16) : IO (Except SocketError Socket)
 
 /-- Send bytes over socket -/
-@[extern "cleanode_socket_send"]
+@[extern "dion_socket_send"]
 opaque socket_send (sock : @& Socket) (data : @& ByteArray) : IO (Except SocketError Unit)
 
 /-- Receive up to maxBytes from socket (single recv, may return fewer) -/
-@[extern "cleanode_socket_receive"]
+@[extern "dion_socket_receive"]
 opaque socket_receive (sock : @& Socket) (maxBytes : @& UInt32) : IO (Except SocketError ByteArray)
 
 /-- Receive exactly numBytes from socket (loops until all received) -/
-@[extern "cleanode_socket_receive_exact"]
+@[extern "dion_socket_receive_exact"]
 opaque socket_receive_exact (sock : @& Socket) (numBytes : @& UInt32) : IO (Except SocketError ByteArray)
 
 /-- Receive exactly numBytes with a timeout in milliseconds.
     Returns `some bytes` on success, `none` on clean timeout (no data arrived). -/
-@[extern "cleanode_socket_receive_exact_timeout"]
+@[extern "dion_socket_receive_exact_timeout"]
 opaque socket_receive_exact_timeout (sock : @& Socket) (numBytes : @& UInt32) (timeoutMs : @& UInt32) : IO (Except SocketError (Option ByteArray))
 
 /-- Close socket -/
-@[extern "cleanode_socket_close"]
+@[extern "dion_socket_close"]
 opaque socket_close (sock : @& Socket) : IO Unit
 
 /-- Create a listening socket on the given port (dual-stack IPv4+IPv6) -/
-@[extern "cleanode_socket_listen"]
+@[extern "dion_socket_listen"]
 opaque socket_listen (port : @& UInt16) : IO (Except SocketError Socket)
 
 /-- Accept one connection from a listening socket -/
-@[extern "cleanode_socket_accept"]
+@[extern "dion_socket_accept"]
 opaque socket_accept (listenSock : @& Socket) : IO (Except SocketError Socket)
 
 /-- Resolve hostname to all IP addresses via DNS -/
-@[extern "cleanode_dns_resolve"]
+@[extern "dion_dns_resolve"]
 opaque dns_resolve (host : @& String) : IO (Array String)
 
 -- ====================
@@ -85,15 +85,15 @@ opaque dns_resolve (host : @& String) : IO (Array String)
 
 /-- Create a listening Unix domain socket at the given path.
     Unlinks any stale socket file before binding. -/
-@[extern "cleanode_unix_listen"]
+@[extern "dion_unix_listen"]
 opaque unix_listen (path : @& String) : IO (Except SocketError Socket)
 
 /-- Accept one connection from a Unix domain listening socket -/
-@[extern "cleanode_unix_accept"]
+@[extern "dion_unix_accept"]
 opaque unix_accept (listenSock : @& Socket) : IO (Except SocketError Socket)
 
 /-- Close a Unix socket and unlink the socket file from the filesystem -/
-@[extern "cleanode_unix_close_and_unlink"]
+@[extern "dion_unix_close_and_unlink"]
 opaque unix_close_and_unlink (sock : @& Socket) (path : @& String) : IO Unit
 
 /-- High-level connection helper -/
@@ -113,4 +113,4 @@ def receive (sock : Socket) (maxBytes : UInt32 := 4096) : IO (Except SocketError
 def close (sock : Socket) : IO Unit := do
   socket_close sock
 
-end Cleanode.Network.Socket
+end Dion.Network.Socket

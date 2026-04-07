@@ -191,6 +191,39 @@ static size_t write_file_callback(char *ptr, size_t size, size_t nmemb, void *us
     return fwrite(ptr, size, nmemb, fp);
 }
 
+typedef struct {
+    curl_off_t total;
+    int last_percent;
+} ProgressState;
+
+static int progress_callback(void *userdata, curl_off_t total, curl_off_t now,
+                              curl_off_t ultotal, curl_off_t ulnow) {
+    (void)ultotal; (void)ulnow;
+    if (total <= 0) return 0;
+
+    ProgressState *state = (ProgressState *)userdata;
+    state->total = total;
+
+    int percent = (int)(now * 100 / total);
+    if (percent == state->last_percent) return 0;
+    state->last_percent = percent;
+
+    /* Build bar: 40 chars wide */
+    int filled = percent * 40 / 100;
+    char bar[41];
+    for (int i = 0; i < 40; i++)
+        bar[i] = (i < filled) ? '=' : (i == filled ? '>' : ' ');
+    bar[40] = '\0';
+
+    long now_mb  = (long)(now   / (1024 * 1024));
+    long tot_mb  = (long)(total / (1024 * 1024));
+
+    fprintf(stderr, "\r[mithril] Downloading  [%s] %3d%%  %ld / %ld MB  ",
+            bar, percent, now_mb, tot_mb);
+    fflush(stderr);
+    return 0;
+}
+
 LEAN_EXPORT lean_obj_res cleanode_http_download(b_lean_obj_arg url_obj, b_lean_obj_arg path_obj, lean_obj_arg world) {
     const char *url = lean_string_cstr(url_obj);
     const char *path = lean_string_cstr(path_obj);
@@ -208,14 +241,23 @@ LEAN_EXPORT lean_obj_res cleanode_http_download(b_lean_obj_arg url_obj, b_lean_o
         return lean_io_result_mk_ok(mk_except_error(lean_mk_string("Failed to initialize curl")));
     }
 
+    ProgressState progress = { .total = 0, .last_percent = -1 };
+
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_file_callback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3600L);  /* 1 hour for large snapshots */
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "cleanode/0.1");
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progress);
 
     CURLcode res = curl_easy_perform(curl);
+
+    /* Move to next line after progress bar */
+    if (progress.last_percent >= 0)
+        fprintf(stderr, "\n");
 
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);

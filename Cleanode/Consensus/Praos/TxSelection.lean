@@ -1,6 +1,6 @@
-import Cleanode.Network.Mempool
-import Cleanode.Network.ConwayBlock
-import Cleanode.Ledger.State
+import Dion.Network.Mempool
+import Dion.Network.ConwayBlock
+import Dion.Ledger.State
 
 /-!
 # Transaction Selection for Block Forging
@@ -17,10 +17,10 @@ Uses a greedy algorithm sorted by fee density (fee / size).
 - Cardano Node: Mempool snapshotting and tx selection
 -/
 
-namespace Cleanode.Consensus.Praos.TxSelection
+namespace Dion.Consensus.Praos.TxSelection
 
-open Cleanode.Network.Mempool
-open Cleanode.Ledger.State
+open Dion.Network.Mempool
+open Dion.Ledger.State
 
 -- ====================
 -- = Selection Types  =
@@ -75,9 +75,9 @@ def selectTransactions (mempool : Mempool) (maxBodySize : Nat)
       let fee := entry.transaction.body.fee
       -- Split raw tx CBOR into body/witness/auxdata components
       let (bodyBytes, witnessBytes, auxBytes) :=
-        match Cleanode.Network.ConwayBlock.splitTxCbor entry.rawBytes with
+        match Dion.Network.ConwayBlock.splitTxCbor entry.rawBytes with
         | some components => (components.bodyRawBytes, components.witnessRawBytes, components.auxDataRawBytes)
-        | none => (entry.rawBytes, Cleanode.Network.Cbor.encodeMapHeader 0, none)  -- fallback
+        | none => (entry.rawBytes, Dion.Network.Cbor.encodeMapHeader 0, none)  -- fallback
       let tx : SelectedTx := {
         txHash := entry.txHash
         rawBytes := entry.rawBytes
@@ -93,4 +93,4 @@ def selectTransactions (mempool : Mempool) (maxBodySize : Nat)
     totalSize := totalSize
     totalFees := totalFees }
 
-end Cleanode.Consensus.Praos.TxSelection
+end Dion.Consensus.Praos.TxSelection

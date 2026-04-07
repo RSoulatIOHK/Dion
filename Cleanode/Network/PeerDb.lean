@@ -1,5 +1,5 @@
-import Cleanode.Network.PeerSharing
-import Cleanode.Config.Topology
+import Dion.Network.PeerSharing
+import Dion.Config.Topology
 
 /-!
 # Peer Database
@@ -17,10 +17,10 @@ Seeded from topology configuration and enriched via PeerSharing discovery.
 - Cardano node peer selection: warm/hot/cold peer classification
 -/
 
-namespace Cleanode.Network.PeerDb
+namespace Dion.Network.PeerDb
 
-open Cleanode.Network.PeerSharing
-open Cleanode.Config.Topology
+open Dion.Network.PeerSharing
+open Dion.Config.Topology
 
 -- ====================
 -- = Peer Status      =
@@ -216,4 +216,4 @@ def PeerDb.stats (db : PeerDb) : PeerDbStats :=
     cooling := counts.2.2.1
     banned := counts.2.2.2 }
 
-end Cleanode.Network.PeerDb
+end Dion.Network.PeerDb

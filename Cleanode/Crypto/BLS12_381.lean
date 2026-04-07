@@ -14,60 +14,60 @@ via the `blst` C library. Used by Plutus UPLC builtins.
 - blst: https://github.com/supranational/blst
 -/
 
-namespace Cleanode.Crypto.BLS12_381
+namespace Dion.Crypto.BLS12_381
 
 -- G1 operations (48-byte compressed points)
-@[extern "cleanode_bls12_381_g1_add"]
+@[extern "dion_bls12_381_g1_add"]
 opaque g1Add (a : @& ByteArray) (b : @& ByteArray) : IO ByteArray
 
-@[extern "cleanode_bls12_381_g1_neg"]
+@[extern "dion_bls12_381_g1_neg"]
 opaque g1Neg (a : @& ByteArray) : IO ByteArray
 
-@[extern "cleanode_bls12_381_g1_scalar_mul"]
+@[extern "dion_bls12_381_g1_scalar_mul"]
 opaque g1ScalarMul (scalar : @& ByteArray) (point : @& ByteArray) : IO ByteArray
 
-@[extern "cleanode_bls12_381_g1_equal"]
+@[extern "dion_bls12_381_g1_equal"]
 opaque g1Equal (a : @& ByteArray) (b : @& ByteArray) : IO Bool
 
-@[extern "cleanode_bls12_381_g1_hash_to_group"]
+@[extern "dion_bls12_381_g1_hash_to_group"]
 opaque g1HashToGroup (msg : @& ByteArray) (dst : @& ByteArray) : IO ByteArray
 
-@[extern "cleanode_bls12_381_g1_compress"]
+@[extern "dion_bls12_381_g1_compress"]
 opaque g1Compress (a : @& ByteArray) : IO ByteArray
 
-@[extern "cleanode_bls12_381_g1_uncompress"]
+@[extern "dion_bls12_381_g1_uncompress"]
 opaque g1Uncompress (a : @& ByteArray) : IO ByteArray
 
 -- G2 operations (96-byte compressed points)
-@[extern "cleanode_bls12_381_g2_add"]
+@[extern "dion_bls12_381_g2_add"]
 opaque g2Add (a : @& ByteArray) (b : @& ByteArray) : IO ByteArray
 
-@[extern "cleanode_bls12_381_g2_neg"]
+@[extern "dion_bls12_381_g2_neg"]
 opaque g2Neg (a : @& ByteArray) : IO ByteArray
 
-@[extern "cleanode_bls12_381_g2_scalar_mul"]
+@[extern "dion_bls12_381_g2_scalar_mul"]
 opaque g2ScalarMul (scalar : @& ByteArray) (point : @& ByteArray) : IO ByteArray
 
-@[extern "cleanode_bls12_381_g2_equal"]
+@[extern "dion_bls12_381_g2_equal"]
 opaque g2Equal (a : @& ByteArray) (b : @& ByteArray) : IO Bool
 
-@[extern "cleanode_bls12_381_g2_hash_to_group"]
+@[extern "dion_bls12_381_g2_hash_to_group"]
 opaque g2HashToGroup (msg : @& ByteArray) (dst : @& ByteArray) : IO ByteArray
 
-@[extern "cleanode_bls12_381_g2_compress"]
+@[extern "dion_bls12_381_g2_compress"]
 opaque g2Compress (a : @& ByteArray) : IO ByteArray
 
-@[extern "cleanode_bls12_381_g2_uncompress"]
+@[extern "dion_bls12_381_g2_uncompress"]
 opaque g2Uncompress (a : @& ByteArray) : IO ByteArray
 
 -- Pairing operations
-@[extern "cleanode_bls12_381_miller_loop"]
+@[extern "dion_bls12_381_miller_loop"]
 opaque millerLoop (g1 : @& ByteArray) (g2 : @& ByteArray) : IO ByteArray
 
-@[extern "cleanode_bls12_381_mul_ml_result"]
+@[extern "dion_bls12_381_mul_ml_result"]
 opaque mulMlResult (a : @& ByteArray) (b : @& ByteArray) : IO ByteArray
 
-@[extern "cleanode_bls12_381_final_verify"]
+@[extern "dion_bls12_381_final_verify"]
 opaque finalVerify (a : @& ByteArray) (b : @& ByteArray) : IO Bool
 
-end Cleanode.Crypto.BLS12_381
+end Dion.Crypto.BLS12_381

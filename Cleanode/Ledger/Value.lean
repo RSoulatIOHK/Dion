@@ -1,4 +1,4 @@
-import Cleanode.Network.ConwayBlock
+import Dion.Network.ConwayBlock
 import Std.Data.HashMap
 
 /-!
@@ -13,9 +13,9 @@ The balance equation for Conway is:
 All arithmetic is component-wise across all (policyId, assetName) pairs.
 -/
 
-namespace Cleanode.Ledger.Value
+namespace Dion.Ledger.Value
 
-open Cleanode.Network.ConwayBlock
+open Dion.Network.ConwayBlock
 
 -- ====================
 -- = Asset ID         =
@@ -160,4 +160,4 @@ def Value.toNativeAssets (v : Value) : List NativeAsset :=
     { policyId := aid.policyId, assetName := aid.assetName, amount := amt } :: acc
   ) []
 
-end Cleanode.Ledger.Value
+end Dion.Ledger.Value

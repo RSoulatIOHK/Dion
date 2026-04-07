@@ -1,6 +1,6 @@
-import Cleanode.Crypto.Sign.Ed25519.Point
-import Cleanode.Crypto.Sign.Ed25519.Field
-import Cleanode.Crypto.Hash.Sha512
+import Dion.Crypto.Sign.Ed25519.Point
+import Dion.Crypto.Sign.Ed25519.Field
+import Dion.Crypto.Hash.Sha512
 
 /-!
 # ECVRF-ED25519-SHA512-Elligator2
@@ -19,11 +19,11 @@ Anyone with the public key can verify the proof without learning the secret key.
 - Ouroboros Praos specification
 -/
 
-namespace Cleanode.Crypto.VRF.ECVRF
+namespace Dion.Crypto.VRF.ECVRF
 
-open Cleanode.Crypto.Sign.Ed25519.Point
-open Cleanode.Crypto.Sign.Ed25519.Field
-open Cleanode.Crypto.Hash.Sha512
+open Dion.Crypto.Sign.Ed25519.Point
+open Dion.Crypto.Sign.Ed25519.Field
+open Dion.Crypto.Hash.Sha512
 
 -- ====================
 -- = VRF Types        =
@@ -86,7 +86,7 @@ def hashToCurve (publicKey : List UInt8) (message : List UInt8) : EdPoint :=
   -- hash_string = SHA-512(suite_byte || 0x01 || pk || message)
   let hashInput := [suiteByte, 0x01] ++ publicKey ++ message
   let hashOutput := Internal.hashMessage hashInput
-  let hashBytes := hashOutput.flatMap Cleanode.Crypto.Integer.UInt64.toUInt8BE
+  let hashBytes := hashOutput.flatMap Dion.Crypto.Integer.UInt64.toUInt8BE
   -- Take first 32 bytes, clear high bit, interpret as field element
   let truncated := (hashBytes.take 32).set 31
     ((hashBytes.take 32)[31]! &&& 0x7F)
@@ -106,7 +106,7 @@ def hashPoints (points : List EdPoint) : Nat :=
   let pointBytes := points.flatMap EdPoint.compress
   let hashInput := [suiteByte, 0x02] ++ pointBytes
   let hashOutput := Internal.hashMessage hashInput
-  let hashBytes := hashOutput.flatMap Cleanode.Crypto.Integer.UInt64.toUInt8BE
+  let hashBytes := hashOutput.flatMap Dion.Crypto.Integer.UInt64.toUInt8BE
   -- Take first 16 bytes as challenge (little-endian)
   let cBytes := hashBytes.take 16
   cBytes.foldr (fun b acc => b.toNat + acc * 256) 0
@@ -114,7 +114,7 @@ def hashPoints (points : List EdPoint) : Nat :=
 /-- Decode a secret key to a scalar (using SHA-512 of the seed, clamped) -/
 private def decodeScalar (seed : List UInt8) : Nat :=
   let hashOutput := Internal.hashMessage seed
-  let hashBytes := hashOutput.flatMap Cleanode.Crypto.Integer.UInt64.toUInt8BE
+  let hashBytes := hashOutput.flatMap Dion.Crypto.Integer.UInt64.toUInt8BE
   let scalar := hashBytes.take 32
   -- Clamp: clear bottom 3 bits and top bit, set second-to-top bit
   let scalar := scalar.set 0 (scalar[0]! &&& 0xF8)
@@ -140,10 +140,10 @@ def prove (secretKey : List UInt8) (message : List UInt8) : VRFProof :=
   -- Generate nonce k (deterministic from secret key and H)
   let hBytes := EdPoint.compress h
   let hashOutput := Internal.hashMessage secretKey
-  let truncHash := (hashOutput.flatMap Cleanode.Crypto.Integer.UInt64.toUInt8BE).drop 32
+  let truncHash := (hashOutput.flatMap Dion.Crypto.Integer.UInt64.toUInt8BE).drop 32
   let nonceInput := truncHash ++ hBytes
   let nonceHash := Internal.hashMessage nonceInput
-  let nonceBytes := nonceHash.flatMap Cleanode.Crypto.Integer.UInt64.toUInt8BE
+  let nonceBytes := nonceHash.flatMap Dion.Crypto.Integer.UInt64.toUInt8BE
   let k := (nonceBytes.take 64).foldl (fun acc b => acc * 256 + b.toNat) 0 % curveOrder
   -- U = k * B, V = k * H
   let u := EdPoint.scalarMul k EdPoint.basePoint
@@ -186,6 +186,6 @@ def proofToHash (proof : VRFProof) : List UInt8 :=
   -- output = SHA-512(suite_byte || 0x03 || Gamma_bytes)
   let hashInput := [suiteByte, 0x03] ++ gammaBytes
   let hashOutput := Internal.hashMessage hashInput
-  hashOutput.flatMap Cleanode.Crypto.Integer.UInt64.toUInt8BE
+  hashOutput.flatMap Dion.Crypto.Integer.UInt64.toUInt8BE
 
-end Cleanode.Crypto.VRF.ECVRF
+end Dion.Crypto.VRF.ECVRF

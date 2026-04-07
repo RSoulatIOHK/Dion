@@ -1,7 +1,7 @@
-import Cleanode.Ledger.Validation
-import Cleanode.Ledger.State
-import Cleanode.Network.ConwayBlock
-import Cleanode.Network.Crypto
+import Dion.Ledger.Validation
+import Dion.Ledger.State
+import Dion.Network.ConwayBlock
+import Dion.Network.Crypto
 
 /-!
 # Block Body Validation (BBODY Rules)
@@ -18,13 +18,13 @@ Validates block-level constraints beyond individual transaction validation:
 - Conway BBODY rule: BodyRefScriptsSizeTooBig, HeaderProtVerTooHigh
 -/
 
-namespace Cleanode.Ledger.BlockValidation
+namespace Dion.Ledger.BlockValidation
 
-open Cleanode.Ledger.Validation
-open Cleanode.Ledger.State
-open Cleanode.Ledger.UTxO
-open Cleanode.Network.ConwayBlock
-open Cleanode.Network.Crypto
+open Dion.Ledger.Validation
+open Dion.Ledger.State
+open Dion.Ledger.UTxO
+open Dion.Network.ConwayBlock
+open Dion.Network.Crypto
 
 -- ====================
 -- = Block Errors     =
@@ -135,4 +135,4 @@ def validateBlockBody
   | .ok () => pure ()
   return .ok ()
 
-end Cleanode.Ledger.BlockValidation
+end Dion.Ledger.BlockValidation

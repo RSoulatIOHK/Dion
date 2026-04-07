@@ -1,6 +1,6 @@
-import Cleanode.Network.Socket
-import Cleanode.Network.N2C.MiniProtocolId
-import Cleanode.Network.Multiplexer
+import Dion.Network.Socket
+import Dion.Network.N2C.MiniProtocolId
+import Dion.Network.Multiplexer
 
 /-!
 # Node-to-Client Multiplexer
@@ -13,11 +13,11 @@ helpers from the N2N `Multiplexer` module.
 - Ouroboros Network Spec Section 3 (Multiplexing)
 -/
 
-namespace Cleanode.Network.N2C.Mux
+namespace Dion.Network.N2C.Mux
 
-open Cleanode.Network.Socket
-open Cleanode.Network.N2C.MiniProtocolId
-open Cleanode.Network.Multiplexer (Mode encodeUInt32BE encodeUInt16BE
+open Dion.Network.Socket
+open Dion.Network.N2C.MiniProtocolId
+open Dion.Network.Multiplexer (Mode encodeUInt32BE encodeUInt16BE
   decodeUInt32BE decodeUInt16BE getCurrentTimestamp)
 
 -- ====================
@@ -109,4 +109,4 @@ def sendN2CPayload (sock : Socket) (protocolId : N2CMiniProtocolId) (mode : Mode
   }
   socket_send sock (encodeN2CMuxFrame frame)
 
-end Cleanode.Network.N2C.Mux
+end Dion.Network.N2C.Mux

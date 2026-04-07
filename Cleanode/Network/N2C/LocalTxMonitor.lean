@@ -1,7 +1,7 @@
-import Cleanode.Network.Cbor
-import Cleanode.Network.N2C.Mux
-import Cleanode.Network.Mempool
-import Cleanode.Ledger.State
+import Dion.Network.Cbor
+import Dion.Network.N2C.Mux
+import Dion.Network.Mempool
+import Dion.Ledger.State
 import Std.Sync
 
 /-!
@@ -26,14 +26,14 @@ and query sizes.
 - Ouroboros Network Spec Section 3.14
 -/
 
-namespace Cleanode.Network.N2C.LocalTxMonitor
+namespace Dion.Network.N2C.LocalTxMonitor
 
-open Cleanode.Network.Cbor
-open Cleanode.Network.N2C.Mux
-open Cleanode.Network.N2C.MiniProtocolId
-open Cleanode.Network.Multiplexer (Mode)
-open Cleanode.Network.Socket
-open Cleanode.Network.Mempool
+open Dion.Network.Cbor
+open Dion.Network.N2C.Mux
+open Dion.Network.N2C.MiniProtocolId
+open Dion.Network.Multiplexer (Mode)
+open Dion.Network.Socket
+open Dion.Network.Mempool
 
 -- ====================
 -- = Types            =
@@ -88,7 +88,7 @@ def encodeMsgReplyGetSizes (numTxs totalBytes : Nat) : ByteArray :=
 /-- Handle one LocalTxMonitor frame. Returns (continue, updatedSnapshot). -/
 def handleTxMonitorFrame (sock : Socket) (payload : ByteArray)
     (mempoolRef : IO.Ref Mempool) (snapshot : Option MempoolSnapshot)
-    (ledgerStateRef : Std.Mutex Cleanode.Ledger.State.LedgerState)
+    (ledgerStateRef : Std.Mutex Dion.Ledger.State.LedgerState)
     : IO (Bool × Option MempoolSnapshot) := do
   match decodeTxMonitorMessage payload with
   | none =>
@@ -146,4 +146,4 @@ def handleTxMonitorFrame (sock : Socket) (payload : ByteArray)
       IO.eprintln s!"N2C: Unknown LocalTxMonitor message ID: {msgId}"
       return (true, snapshot)
 
-end Cleanode.Network.N2C.LocalTxMonitor
+end Dion.Network.N2C.LocalTxMonitor

@@ -1,15 +1,15 @@
-import Cleanode.Network.Cbor
-import Cleanode.Network.CborCursor
-import Cleanode.Network.N2C.Mux
-import Cleanode.Network.Mempool
-import Cleanode.Network.ConwayBlock
-import Cleanode.Network.Crypto
+import Dion.Network.Cbor
+import Dion.Network.CborCursor
+import Dion.Network.N2C.Mux
+import Dion.Network.Mempool
+import Dion.Network.ConwayBlock
+import Dion.Network.Crypto
 
 /-!
 # LocalTxSubmission Mini-Protocol (N2C Protocol 6)
 
 Allows `cardano-cli transaction submit` to submit transactions directly
-to Cleanode's mempool via the local Unix socket.
+to Dion's mempool via the local Unix socket.
 
 ## Message Flow
 1. Client sends MsgSubmitTx(eraId, txBytes)
@@ -26,13 +26,13 @@ to Cleanode's mempool via the local Unix socket.
 - Ouroboros Network Spec Section 3.12
 -/
 
-namespace Cleanode.Network.N2C.LocalTxSubmission
+namespace Dion.Network.N2C.LocalTxSubmission
 
-open Cleanode.Network.Cbor
-open Cleanode.Network.N2C.Mux
-open Cleanode.Network.N2C.MiniProtocolId
-open Cleanode.Network.Multiplexer (Mode)
-open Cleanode.Network.Socket
+open Dion.Network.Cbor
+open Dion.Network.N2C.Mux
+open Dion.Network.N2C.MiniProtocolId
+open Dion.Network.Multiplexer (Mode)
+open Dion.Network.Socket
 
 -- ====================
 -- = Types            =
@@ -92,7 +92,7 @@ partial def decodeLocalTxSubmissionMessage (bs : ByteArray)
 
 /-- Handle one LocalTxSubmission frame. Returns false on MsgDone. -/
 def handleTxSubmissionFrame (sock : Socket) (payload : ByteArray)
-    (mempoolRef : IO.Ref Cleanode.Network.Mempool.Mempool)
+    (mempoolRef : IO.Ref Dion.Network.Mempool.Mempool)
     : IO Bool := do
   match decodeLocalTxSubmissionMessage payload with
   | none =>
@@ -114,21 +114,21 @@ def handleTxSubmissionFrame (sock : Socket) (payload : ByteArray)
     -- Unwrap CBOR tag 24 + byte string wrapper if present
     -- Tag 24 = "encoded CBOR data item": d8 18 <bytestring>
     let innerTxBytes ← do
-      let c := Cleanode.Network.CborCursor.Cursor.mk' txBytes
+      let c := Dion.Network.CborCursor.Cursor.mk' txBytes
       -- Check for tag (major type 6)
       let firstByte := txBytes[0]!.toNat
       if firstByte / 32 == 6 then
         -- It's a CBOR tag — skip it, then decode the byte string inside
-        match Cleanode.Network.CborCursor.skipTag c with
+        match Dion.Network.CborCursor.skipTag c with
         | some r =>
-          match Cleanode.Network.CborCursor.decodeBytes r.cursor with
+          match Dion.Network.CborCursor.decodeBytes r.cursor with
           | some r2 => pure r2.value
           | none => pure txBytes  -- fallback
         | none => pure txBytes  -- fallback
       else
         pure txBytes
-    let cursor := Cleanode.Network.CborCursor.Cursor.mk' innerTxBytes
-    match Cleanode.Network.CborCursor.decodeArrayHeader cursor with
+    let cursor := Dion.Network.CborCursor.Cursor.mk' innerTxBytes
+    match Dion.Network.CborCursor.decodeArrayHeader cursor with
     | none =>
       let fb := innerTxBytes[0]!.toNat
       IO.eprintln s!"N2C: Failed to decode transaction array header (first byte: 0x{fb})"
@@ -137,7 +137,7 @@ def handleTxSubmissionFrame (sock : Socket) (payload : ByteArray)
       return true
     | some r => do
       let bodyStart := r.cursor.pos
-      match Cleanode.Network.CborCursor.skipValue r.cursor with
+      match Dion.Network.CborCursor.skipValue r.cursor with
       | none =>
         IO.eprintln "N2C: Failed to skip tx body"
         let response := encodeLocalTxSubmissionMessage (.MsgRejectTx "invalid tx body")
@@ -145,7 +145,7 @@ def handleTxSubmissionFrame (sock : Socket) (payload : ByteArray)
         return true
       | some afterBody => do
         let bodyBytes := innerTxBytes.extract bodyStart afterBody.pos
-        let txHash ← Cleanode.Network.Crypto.blake2b_256 bodyBytes
+        let txHash ← Dion.Network.Crypto.blake2b_256 bodyBytes
         let mempool ← mempoolRef.get
         -- Check for duplicates
         if mempool.contains txHash then
@@ -153,14 +153,17 @@ def handleTxSubmissionFrame (sock : Socket) (payload : ByteArray)
           let response := encodeLocalTxSubmissionMessage .MsgAcceptTx
           let _ ← sendN2CPayload sock .LocalTxSubmission .Responder response
           return true
-        let dummyBody : Cleanode.Network.ConwayBlock.TransactionBody := {
-          inputs := [], outputs := [], fee := 0, certificates := [], rawBytes := bodyBytes
-        }
-        let dummyTx : Cleanode.Network.ConwayBlock.Transaction := {
-          body := dummyBody
+        -- Parse the tx body to extract real inputs (needed for mempool eviction on block apply)
+        let parsedBody := Dion.Network.ConwayBlock.parseTransactionBodyC
+          (Dion.Network.CborCursor.Cursor.mk' bodyBytes) |>.map (·.value)
+        let txBody : Dion.Network.ConwayBlock.TransactionBody := match parsedBody with
+          | some b => b
+          | none   => { inputs := [], outputs := [], fee := 0, certificates := [], rawBytes := bodyBytes }
+        let dummyTx : Dion.Network.ConwayBlock.Transaction := {
+          body := txBody
           witnesses := { redeemers := [] }
         }
-        let entry : Cleanode.Network.Mempool.MempoolEntry := {
+        let entry : Dion.Network.Mempool.MempoolEntry := {
           txHash := txHash
           transaction := dummyTx
           rawBytes := innerTxBytes  -- unwrapped tx for N2N relay
@@ -187,4 +190,4 @@ def handleTxSubmissionFrame (sock : Socket) (payload : ByteArray)
   | some (.MsgRejectTx _) => return true  -- Server shouldn't receive this
   | some .MsgAcceptTx => return true      -- Server shouldn't receive this
 
-end Cleanode.Network.N2C.LocalTxSubmission
+end Dion.Network.N2C.LocalTxSubmission

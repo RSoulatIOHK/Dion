@@ -1,5 +1,5 @@
-import Cleanode.Storage.BlockStore
-import Cleanode.Network.ChainSync
+import Dion.Storage.BlockStore
+import Dion.Network.ChainSync
 
 /-!
 # Immutable Block Database
@@ -16,10 +16,10 @@ Blocks are stored sequentially by block number for efficient access.
 - Ouroboros Consensus: ImmutableDB design
 -/
 
-namespace Cleanode.Storage.ImmutableDB
+namespace Dion.Storage.ImmutableDB
 
-open Cleanode.Storage.BlockStore
-open Cleanode.Network.ChainSync
+open Dion.Storage.BlockStore
+open Dion.Network.ChainSync
 open System (FilePath)
 
 -- ====================
@@ -137,4 +137,4 @@ def ImmutableDB.getTip (db : ImmutableDB) : Nat :=
 def ImmutableDB.blockCount (db : ImmutableDB) : Nat :=
   db.index.length
 
-end Cleanode.Storage.ImmutableDB
+end Dion.Storage.ImmutableDB

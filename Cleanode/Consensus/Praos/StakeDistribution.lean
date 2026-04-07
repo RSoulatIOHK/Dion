@@ -1,6 +1,6 @@
-import Cleanode.Consensus.Praos.ConsensusState
-import Cleanode.Consensus.Praos.LeaderElection
-import Cleanode.Ledger.State
+import Dion.Consensus.Praos.ConsensusState
+import Dion.Consensus.Praos.LeaderElection
+import Dion.Ledger.State
 
 /-!
 # Stake Distribution for Leader Election
@@ -30,11 +30,11 @@ Epoch N-2    Epoch N-1    Epoch N (current)
 - Cardano Ledger Spec: SNAP rule
 -/
 
-namespace Cleanode.Consensus.Praos.StakeDistribution
+namespace Dion.Consensus.Praos.StakeDistribution
 
-open Cleanode.Consensus.Praos.ConsensusState
-open Cleanode.Consensus.Praos.LeaderElection
-open Cleanode.Ledger.State
+open Dion.Consensus.Praos.ConsensusState
+open Dion.Consensus.Praos.LeaderElection
+open Dion.Ledger.State
 
 -- ====================
 -- = Snapshot Ring    =
@@ -92,11 +92,33 @@ def epochBoundaryToSnapshot (ebs : EpochBoundaryState) : StakeSnapshot :=
     totalStake := ebs.totalStake }
 
 /-- Build a StakeSnapshot directly from the ledger state.
-    Computes per-pool stake by summing UTxO values of delegated addresses. -/
+    Uses an efficient two-pass algorithm:
+      1. Build stakeKeyHash → poolId index from delegations (O(delegations))
+      2. Scan UTxO once, accumulating stake per pool (O(UTxO))
+    This avoids the O(pools × UTxO × delegators_per_pool) naive approach. -/
 def buildSnapshotFromLedger (state : LedgerState) : StakeSnapshot :=
-  let ebs := createEpochSnapshot state.pools state.delegation state.utxo
-    state.protocolParams.epoch
-  epochBoundaryToSnapshot ebs
+  -- Pass 1: Build stakeKeyHash → poolId lookup table
+  let delegIndex : Std.HashMap ByteArray ByteArray :=
+    state.delegation.delegations.foldl (fun m d => m.insert d.stakeKeyHash d.poolId)
+      (Std.HashMap.emptyWithCapacity state.delegation.delegations.length)
+  -- Pass 2: Scan UTxO once, accumulate per-pool stake
+  let poolStakeMap : Std.HashMap ByteArray Nat :=
+    state.utxo.map.fold (fun acc _ output =>
+      -- Extract stake credential from base addresses (header type 0x0_ or 0x1_)
+      if output.address.size < 57 then acc
+      else
+        let headerType := (output.address[0]!.toNat) >>> 4
+        if headerType != 0 && headerType != 1 then acc
+        else
+          let stakeHash := output.address.extract 29 57
+          match delegIndex[stakeHash]? with
+          | none => acc
+          | some poolId =>
+            acc.insert poolId ((acc[poolId]?.getD 0) + output.amount)
+    ) Std.HashMap.emptyWithCapacity
+  let poolStakeList := poolStakeMap.toList
+  let totalStake := poolStakeList.foldl (fun acc (_, s) => acc + s) 0
+  { poolStakes := poolStakeList, totalStake := totalStake }
 
 -- ====================
 -- = Consensus Update =
@@ -163,4 +185,4 @@ def printStakeDistribution (ring : StakeSnapshotRing) : IO Unit := do
       let idHex := poolId.toList.take 4 |>.map (fun b => s!"{b.toNat}")
       IO.println s!"    pool[{String.intercalate "." idHex}...]: {stake} lovelace ({stake / 1000000} ADA)"
 
-end Cleanode.Consensus.Praos.StakeDistribution
+end Dion.Consensus.Praos.StakeDistribution

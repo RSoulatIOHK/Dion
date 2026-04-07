@@ -1,14 +1,14 @@
-import Cleanode.Test.TestHarness
-import Cleanode.Consensus.Praos.BlockForge
-import Cleanode.Consensus.Praos.TxSelection
-import Cleanode.Consensus.Praos.ConsensusState
-import Cleanode.Consensus.Praos.LeaderElection
-import Cleanode.Network.ConwayBlock
-import Cleanode.Network.Cbor
-import Cleanode.Network.CborCursor
-import Cleanode.Network.Crypto
-import Cleanode.Crypto.Sign.Ed25519.Point
-import Cleanode.Crypto.VRF.ECVRF
+import Dion.Test.TestHarness
+import Dion.Consensus.Praos.BlockForge
+import Dion.Consensus.Praos.TxSelection
+import Dion.Consensus.Praos.ConsensusState
+import Dion.Consensus.Praos.LeaderElection
+import Dion.Network.ConwayBlock
+import Dion.Network.Cbor
+import Dion.Network.CborCursor
+import Dion.Network.Crypto
+import Dion.Crypto.Sign.Ed25519.Point
+import Dion.Crypto.VRF.ECVRF
 
 /-!
 # Integration Tests: Forge → Encode → Parse → Validate Roundtrip
@@ -20,23 +20,23 @@ End-to-end tests verifying that forged blocks:
 4. Maintain transaction integrity through the roundtrip
 5. Work with the IO (production) forge path using real KES signing
 
-These tests validate that blocks produced by Cleanode would be accepted
+These tests validate that blocks produced by Dion would be accepted
 by any conformant Cardano node parser.
 -/
 
-namespace Cleanode.Test.IntegrationTest
+namespace Dion.Test.IntegrationTest
 
-open Cleanode.Test.TestHarness
-open Cleanode.Consensus.Praos.BlockForge
-open Cleanode.Consensus.Praos.TxSelection
-open Cleanode.Consensus.Praos.ConsensusState
-open Cleanode.Consensus.Praos.LeaderElection
-open Cleanode.Network.Cbor
-open Cleanode.Network.CborCursor
-open Cleanode.Network.ConwayBlock
-open Cleanode.Network.Crypto
-open Cleanode.Crypto.Sign.Ed25519.Point
-open Cleanode.Crypto.VRF.ECVRF
+open Dion.Test.TestHarness
+open Dion.Consensus.Praos.BlockForge
+open Dion.Consensus.Praos.TxSelection
+open Dion.Consensus.Praos.ConsensusState
+open Dion.Consensus.Praos.LeaderElection
+open Dion.Network.Cbor
+open Dion.Network.CborCursor
+open Dion.Network.ConwayBlock
+open Dion.Network.Crypto
+open Dion.Crypto.Sign.Ed25519.Point
+open Dion.Crypto.VRF.ECVRF
 
 -- ====================
 -- = Test Fixtures    =
@@ -192,16 +192,16 @@ def testFullBlockIs5ElementArray : IO TestResult :=
   runTest "Integration" "full block is a 5-element CBOR array" do
     let bc := encodeBlockBody ([] : List SelectedTx)
     let fullBlock ← buildFullBlockIO bc 10 10000
-    let c := Cleanode.Network.CborCursor.Cursor.mk' fullBlock
-    let some r := Cleanode.Network.CborCursor.decodeArrayHeader c | return false
+    let c := Dion.Network.CborCursor.Cursor.mk' fullBlock
+    let some r := Dion.Network.CborCursor.decodeArrayHeader c | return false
     return r.value == 5
 
 def testHeaderIsTag24Wrapped : IO TestResult :=
   runTest "Integration" "block header (element 0) starts with CBOR tag 24" do
     let bc := encodeBlockBody ([] : List SelectedTx)
     let fullBlock ← buildFullBlockIO bc 11 11000
-    let c := Cleanode.Network.CborCursor.Cursor.mk' fullBlock
-    let some r := Cleanode.Network.CborCursor.decodeArrayHeader c | return false
+    let c := Dion.Network.CborCursor.Cursor.mk' fullBlock
+    let some r := Dion.Network.CborCursor.decodeArrayHeader c | return false
     -- Element 0: header should start with tag 24 = 0xd8 0x18
     let headerByte0 := r.cursor.peek
     return headerByte0 == 0xd8
@@ -301,18 +301,18 @@ def testHeaderBodyIs10Elements : IO TestResult :=
   runTest "Integration" "header body inside tag24 is 10-element array" do
     let bc := encodeBlockBody ([] : List SelectedTx)
     let fullBlock ← buildFullBlockIO bc 20 20000
-    let c := Cleanode.Network.CborCursor.Cursor.mk' fullBlock
+    let c := Dion.Network.CborCursor.Cursor.mk' fullBlock
     -- Skip outer array header
-    let some outerArr := Cleanode.Network.CborCursor.decodeArrayHeader c | return false
+    let some outerArr := Dion.Network.CborCursor.decodeArrayHeader c | return false
     -- Header starts with tag 24 (0xd8 0x18) — skip 2 bytes for tag
     let afterTag := outerArr.cursor.advance 2
     -- Tag 24 wraps a 2-element array [headerBody, kesSig] directly (no bytestring wrapper)
-    let some innerArr := Cleanode.Network.CborCursor.decodeArrayHeader afterTag | return false
+    let some innerArr := Dion.Network.CborCursor.decodeArrayHeader afterTag | return false
     if innerArr.value != 2 then
       IO.eprintln s!"  header wrapper expected 2 elements, got {innerArr.value}"
       return false
     -- First element is the header body (10-element array)
-    let some headerBodyArr := Cleanode.Network.CborCursor.decodeArrayHeader innerArr.cursor | return false
+    let some headerBodyArr := Dion.Network.CborCursor.decodeArrayHeader innerArr.cursor | return false
     if headerBodyArr.value != 10 then
       IO.eprintln s!"  header body expected 10 elements, got {headerBodyArr.value}"
       return false
@@ -385,4 +385,4 @@ def runIntegrationTests : IO (List TestResult) := do
   results := results ++ (← runStructureTests)
   return results
 
-end Cleanode.Test.IntegrationTest
+end Dion.Test.IntegrationTest

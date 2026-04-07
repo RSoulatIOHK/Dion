@@ -1,10 +1,10 @@
-import Cleanode.Crypto.Sign.Ed25519.Field
+import Dion.Crypto.Sign.Ed25519.Field
 
-namespace Cleanode.Crypto.Sign.Ed25519.Point
+namespace Dion.Crypto.Sign.Ed25519.Point
 
 /-! ## Ed25519 Curve Points-/
 
-open Cleanode.Crypto.Sign.Ed25519.Field
+open Dion.Crypto.Sign.Ed25519.Field
 
 -- Edwards curve parameter d = -121665/121666 (mod p)
 def d : Fp := Fp.div (Fp.ofInt (-121665)) (Fp.ofNat 121666)
@@ -137,4 +137,4 @@ def compress (p : EdPoint) : List UInt8 :=
 
 end EdPoint
 
-end Cleanode.Crypto.Sign.Ed25519.Point
+end Dion.Crypto.Sign.Ed25519.Point

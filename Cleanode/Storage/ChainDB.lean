@@ -1,5 +1,5 @@
-import Cleanode.Storage.Database
-import Cleanode.Network.ChainSync
+import Dion.Storage.Database
+import Dion.Network.ChainSync
 
 /-!
 # Unified Chain Database
@@ -28,10 +28,10 @@ with a single SQLite-backed store. Provides the same Ouroboros-style semantics:
 - Cardano Node: ImmutableDB + VolatileDB architecture
 -/
 
-namespace Cleanode.Storage.ChainDB
+namespace Dion.Storage.ChainDB
 
-open Cleanode.Storage.Database
-open Cleanode.Network.ChainSync
+open Dion.Storage.Database
+open Dion.Network.ChainSync
 
 -- ====================
 -- = Configuration    =
@@ -145,4 +145,4 @@ def ChainDB.getLastSyncedPoint (cdb : ChainDB) : IO (Option Point) := do
   | some state =>
     return some { slot := UInt64.ofNat state.lastSlot, hash := state.lastHash }
 
-end Cleanode.Storage.ChainDB
+end Dion.Storage.ChainDB

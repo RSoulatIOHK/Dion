@@ -1,6 +1,6 @@
-import Cleanode.Network.Cbor
-import Cleanode.Network.Multiplexer
-import Cleanode.Network.Socket
+import Dion.Network.Cbor
+import Dion.Network.Multiplexer
+import Dion.Network.Socket
 
 /-!
 # Ouroboros Handshake Protocol
@@ -26,11 +26,11 @@ For node-to-node communication:
 - https://github.com/IntersectMBO/ouroboros-network/tree/master/ouroboros-network-protocols
 -/
 
-namespace Cleanode.Network.Handshake
+namespace Dion.Network.Handshake
 
-open Cleanode.Network.Cbor
-open Cleanode.Network.Multiplexer
-open Cleanode.Network.Socket
+open Dion.Network.Cbor
+open Dion.Network.Multiplexer
+open Dion.Network.Socket
 
 /-- Cardano network magic numbers -/
 inductive NetworkMagic where
@@ -279,4 +279,4 @@ def receiveHandshake (sock : Socket) : IO (Except SocketError (Option HandshakeM
           | .error e => return .error e
           | .ok payload => return .ok (decodeHandshakeMessage payload)
 
-end Cleanode.Network.Handshake
+end Dion.Network.Handshake

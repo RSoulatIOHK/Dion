@@ -1,7 +1,7 @@
-import Cleanode.TUI.Ansi
-import Cleanode.TUI.State
-import Cleanode.TUI.Layout
-import Cleanode.TUI.Input
+import Dion.TUI.Ansi
+import Dion.TUI.State
+import Dion.TUI.Layout
+import Dion.TUI.Input
 
 /-!
 # TUI Render Loop
@@ -11,12 +11,12 @@ hides cursor, redraws every 200ms, and restores terminal on exit.
 Also starts the keyboard input handler.
 -/
 
-namespace Cleanode.TUI.Render
+namespace Dion.TUI.Render
 
-open Cleanode.TUI.Ansi
-open Cleanode.TUI.State
-open Cleanode.TUI.Layout
-open Cleanode.TUI.Input
+open Dion.TUI.Ansi
+open Dion.TUI.State
+open Dion.TUI.Layout
+open Dion.TUI.Input
 
 /-- Initialize the terminal for TUI mode -/
 def initTerminal : IO Unit := do
@@ -61,4 +61,4 @@ def startTUI (stateRef : IO.Ref TUIState) : IO (Task (Except IO.Error Unit)) := 
 def stopTUI : IO Unit :=
   restoreTerminal
 
-end Cleanode.TUI.Render
+end Dion.TUI.Render

@@ -1,4 +1,4 @@
-import Cleanode.TUI.State
+import Dion.TUI.State
 
 /-!
 # TUI Keyboard Input
@@ -7,18 +7,18 @@ Raw terminal input handling via FFI. Reads keypresses and dispatches
 them to TUIState navigation functions.
 -/
 
-namespace Cleanode.TUI.Input
+namespace Dion.TUI.Input
 
-open Cleanode.TUI.State
+open Dion.TUI.State
 
 -- FFI declarations for terminal raw mode
-@[extern "cleanode_terminal_enable_raw"]
+@[extern "dion_terminal_enable_raw"]
 opaque enableRawMode : IO Bool
 
-@[extern "cleanode_terminal_disable_raw"]
+@[extern "dion_terminal_disable_raw"]
 opaque disableRawMode : IO Unit
 
-@[extern "cleanode_terminal_read_key"]
+@[extern "dion_terminal_read_key"]
 opaque readKey : IO ByteArray
 
 /-- Keyboard event type -/
@@ -91,4 +91,4 @@ partial def inputLoop (stateRef : IO.Ref TUIState) : IO Unit := do
 def startInputHandler (stateRef : IO.Ref TUIState) : IO (Task (Except IO.Error Unit)) :=
   IO.asTask (inputLoop stateRef)
 
-end Cleanode.TUI.Input
+end Dion.TUI.Input

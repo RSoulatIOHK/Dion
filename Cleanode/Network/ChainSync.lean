@@ -1,7 +1,7 @@
-import Cleanode.Network.Cbor
-import Cleanode.Network.ByteArrayBuilder
-import Cleanode.Network.Multiplexer
-import Cleanode.Network.Socket
+import Dion.Network.Cbor
+import Dion.Network.ByteArrayBuilder
+import Dion.Network.Multiplexer
+import Dion.Network.Socket
 
 /-!
 # Chain Sync Mini-Protocol
@@ -28,11 +28,11 @@ In node-to-node mode, only headers are transferred (full blocks come via BlockFe
 - Protocol number: 2 (node-to-node)
 -/
 
-namespace Cleanode.Network.ChainSync
+namespace Dion.Network.ChainSync
 
-open Cleanode.Network.Cbor
-open Cleanode.Network.Multiplexer
-open Cleanode.Network.Socket
+open Dion.Network.Cbor
+open Dion.Network.Multiplexer
+open Dion.Network.Socket
 
 -- ==============
 -- = Core Types =
@@ -328,4 +328,4 @@ def findIntersectTip : ChainSyncMessage :=
 def requestNext : ChainSyncMessage :=
   .MsgRequestNext
 
-end Cleanode.Network.ChainSync
+end Dion.Network.ChainSync

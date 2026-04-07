@@ -1,4 +1,4 @@
-import Cleanode.Network.ChainSync
+import Dion.Network.ChainSync
 
 /-!
 # ChainSync Protocol State Machine
@@ -35,9 +35,9 @@ typed states and transition rules per the Ouroboros network spec.
 - Ouroboros Network Spec Section 3.7 (Chain Sync)
 -/
 
-namespace Cleanode.Network.ChainSyncState
+namespace Dion.Network.ChainSyncState
 
-open Cleanode.Network.ChainSync
+open Dion.Network.ChainSync
 
 -- ====================
 -- = State Type       =
@@ -107,16 +107,16 @@ def isTerminal : ChainSyncState → Bool
 
 /-- A typed ChainSync handle that tracks the current protocol state -/
 structure TypedChainSync where
-  sock : Cleanode.Network.Socket.Socket
+  sock : Dion.Network.Socket.Socket
   state : ChainSyncState
 
 /-- Create a new ChainSync session (starts in StIdle) -/
-def TypedChainSync.new (sock : Cleanode.Network.Socket.Socket) : TypedChainSync :=
+def TypedChainSync.new (sock : Dion.Network.Socket.Socket) : TypedChainSync :=
   { sock := sock, state := .StIdle }
 
 /-- Send a message and transition state. Returns none if the transition is invalid. -/
 def TypedChainSync.send (cs : TypedChainSync) (msg : ChainSyncMessage)
-    : IO (Except Cleanode.Network.Socket.SocketError (Option TypedChainSync)) := do
+    : IO (Except Dion.Network.Socket.SocketError (Option TypedChainSync)) := do
   match nextState cs.state msg with
   | none => return .ok none  -- Invalid transition
   | some newState => do
@@ -126,7 +126,7 @@ def TypedChainSync.send (cs : TypedChainSync) (msg : ChainSyncMessage)
 
 /-- Receive a message and transition state. Returns none if decode fails or transition is invalid. -/
 def TypedChainSync.recv (cs : TypedChainSync)
-    : IO (Except Cleanode.Network.Socket.SocketError (Option (ChainSyncMessage × TypedChainSync))) := do
+    : IO (Except Dion.Network.Socket.SocketError (Option (ChainSyncMessage × TypedChainSync))) := do
   match ← receiveChainSync cs.sock with
   | .error e => return .error e
   | .ok none => return .ok none
@@ -175,4 +175,4 @@ theorem chainsync_no_deadlock (s : ChainSyncState) :
       exact ⟨.MsgIntersectNotFound ⟨⟨0, ByteArray.empty⟩, 0⟩, .StIdle, rfl⟩
   | StDone => exact absurd rfl h
 
-end Cleanode.Network.ChainSyncState
+end Dion.Network.ChainSyncState

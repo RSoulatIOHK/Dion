@@ -16,7 +16,7 @@ a Unix domain socket.
 - Ouroboros Network Spec Section 3.17
 -/
 
-namespace Cleanode.Network.N2C.MiniProtocolId
+namespace Dion.Network.N2C.MiniProtocolId
 
 /-- Mini-protocol identifiers for node-to-client communication -/
 inductive N2CMiniProtocolId where
@@ -51,4 +51,4 @@ instance : ToString N2CMiniProtocolId where
     | .LocalStateQuery   => "LocalStateQuery"
     | .LocalTxMonitor    => "LocalTxMonitor"
 
-end Cleanode.Network.N2C.MiniProtocolId
+end Dion.Network.N2C.MiniProtocolId

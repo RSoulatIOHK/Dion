@@ -1,4 +1,4 @@
-namespace Cleanode.Crypto.CString
+namespace Dion.Crypto.CString
 
 namespace Internal
 
@@ -22,4 +22,4 @@ export Internal
     uint32ListToHex
   )
 
-end Cleanode.Crypto.CString
+end Dion.Crypto.CString

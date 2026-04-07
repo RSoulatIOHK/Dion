@@ -1,11 +1,11 @@
-import Cleanode.Consensus.Praos.ConsensusState
-import Cleanode.Consensus.Praos.LeaderElection
-import Cleanode.Consensus.Praos.TxSelection
-import Cleanode.Crypto.Sign.KES
-import Cleanode.Crypto.Sign.KESSign
-import Cleanode.Crypto.VRF.ECVRF
-import Cleanode.Network.Cbor
-import Cleanode.Network.Crypto
+import Dion.Consensus.Praos.ConsensusState
+import Dion.Consensus.Praos.LeaderElection
+import Dion.Consensus.Praos.TxSelection
+import Dion.Crypto.Sign.KES
+import Dion.Crypto.Sign.KESSign
+import Dion.Crypto.VRF.ECVRF
+import Dion.Network.Cbor
+import Dion.Network.Crypto
 
 /-!
 # Block Forging
@@ -30,13 +30,13 @@ The header body is a 10-element CBOR array:
 - Shelley CDDL specification
 -/
 
-namespace Cleanode.Consensus.Praos.BlockForge
+namespace Dion.Consensus.Praos.BlockForge
 
-open Cleanode.Consensus.Praos.ConsensusState
-open Cleanode.Consensus.Praos.LeaderElection
-open Cleanode.Consensus.Praos.TxSelection
-open Cleanode.Crypto.Sign.KES
-open Cleanode.Crypto.VRF.ECVRF
+open Dion.Consensus.Praos.ConsensusState
+open Dion.Consensus.Praos.LeaderElection
+open Dion.Consensus.Praos.TxSelection
+open Dion.Crypto.Sign.KES
+open Dion.Crypto.VRF.ECVRF
 
 -- ====================
 -- = Forge Parameters =
@@ -83,7 +83,7 @@ structure ForgedBlock where
 /-- Encode the full block as a 5-element CBOR array for BlockFetch serving:
     [header, tx_bodies, witness_sets, aux_data, invalid_txs] -/
 def ForgedBlock.encodeFullBlock (block : ForgedBlock) : ByteArray :=
-  open Cleanode.Network.Cbor in
+  open Dion.Network.Cbor in
   encodeArrayHeader 5
     ++ block.headerBytes
     ++ block.bodyComponents.txBodies
@@ -95,13 +95,13 @@ def ForgedBlock.encodeFullBlock (block : ForgedBlock) : ByteArray :=
 -- = Header CBOR Encoding   =
 -- ==========================
 
-open Cleanode.Network.Cbor in
+open Dion.Network.Cbor in
 /-- Encode VRF result as CBOR array [output, proof].
     output: 64-byte VRF output as byte string
     proof: 80-byte VRF proof as byte string -/
 private def encodeVrfResult (proof : VRFProof) (output : List UInt8) : ByteArray :=
   let outputBytes := ByteArray.mk output.toArray
-  let proofGamma := Cleanode.Crypto.Sign.Ed25519.Point.EdPoint.compress proof.gamma
+  let proofGamma := Dion.Crypto.Sign.Ed25519.Point.EdPoint.compress proof.gamma
   -- VRF proof encoding: [gamma (32B) || challenge (16B) || response (32B)] = 80 bytes
   let challengeBytes := (List.range 16).map fun i =>
     ((proof.challenge >>> (i * 8)) % 256).toUInt8
@@ -110,7 +110,7 @@ private def encodeVrfResult (proof : VRFProof) (output : List UInt8) : ByteArray
   let proofBytes := ByteArray.mk (proofGamma ++ challengeBytes ++ responseBytes).toArray
   encodeArrayHeader 2 ++ encodeBytes outputBytes ++ encodeBytes proofBytes
 
-open Cleanode.Network.Cbor in
+open Dion.Network.Cbor in
 /-- Encode operational certificate as CBOR array [hotVKey, seqNum, kesPeriod, coldSig] -/
 private def encodeOpCert (cert : OperationalCert) : ByteArray :=
   encodeArrayHeader 4
@@ -119,12 +119,12 @@ private def encodeOpCert (cert : OperationalCert) : ByteArray :=
     ++ encodeUInt cert.kesPeriod
     ++ encodeBytes cert.coldKeySignature
 
-open Cleanode.Network.Cbor in
+open Dion.Network.Cbor in
 /-- Encode protocol version as CBOR array [major, minor] -/
 private def encodeProtocolVersion (major minor : Nat) : ByteArray :=
   encodeArrayHeader 2 ++ encodeUInt major ++ encodeUInt minor
 
-open Cleanode.Network.Cbor in
+open Dion.Network.Cbor in
 /-- Encode the 10-element header body as CBOR.
     Fields:
     0. blockNumber
@@ -153,14 +153,14 @@ def encodeHeaderBody (blockNumber slot : Nat) (prevHash issuerVKeyHash vrfVKey :
     ++ encodeOpCert opCert
     ++ encodeProtocolVersion protocolMajor protocolMinor
 
-open Cleanode.Network.Cbor in
+open Dion.Network.Cbor in
 /-- Wrap header body in a full block header: [headerBody, kesSig]
     Wrapped in CBOR tag 24 (encoded CBOR) for on-wire format. -/
 def encodeBlockHeader (headerBodyBytes kesSig : ByteArray) : ByteArray :=
   let innerArray := encodeArrayHeader 2 ++ headerBodyBytes ++ encodeBytes kesSig
   encodeTagged 24 innerArray
 
-open Cleanode.Network.Cbor in
+open Dion.Network.Cbor in
 /-- Encode the block body as 4 independently-encoded CBOR components:
     tx_bodies[], witness_sets[], {idx: aux_data}, invalid_txs[]
 
@@ -232,7 +232,7 @@ def tryForgeBlock (params : ForgeParams) (consensusState : ConsensusState)
     3. Build and sign the block -/
 def forgeBlock (params : ForgeParams) (consensusState : ConsensusState)
     (blockNumber : Nat) (slot : Nat) (prevHash : ByteArray)
-    (mempool : Cleanode.Network.Mempool.Mempool) (maxBlockSize : Nat)
+    (mempool : Dion.Network.Mempool.Mempool) (maxBlockSize : Nat)
     : Option ForgedBlock :=
   -- Select transactions
   let blockBody := selectTransactions mempool maxBlockSize
@@ -243,8 +243,8 @@ def forgeBlock (params : ForgeParams) (consensusState : ConsensusState)
 -- = IO Forge (Production)  =
 -- ==========================
 
-open Cleanode.Network.Crypto in
-open Cleanode.Crypto.Sign.KESSign in
+open Dion.Network.Crypto in
+open Dion.Crypto.Sign.KESSign in
 /-- Production block forging with real Blake2b body hash and KES signing.
     Returns none if not elected leader, or an error string on failure. -/
 def tryForgeBlockIO (params : ForgeParams) (consensusState : ConsensusState)
@@ -276,9 +276,12 @@ def tryForgeBlockIO (params : ForgeParams) (consensusState : ConsensusState)
       params.poolId vrfVKey vrfProof vrfOutput
       bodySerialized.size bodyHash
       params.operationalCert params.protocolMajor params.protocolMinor
-    -- Sign header body with KES
+    -- Sign header body with KES using RELATIVE period (evolutions since opcert start)
+    -- The KES key is freshly generated at evolution 0; it must be evolved
+    -- (kesPeriod - opcert.kesPeriod) times from its starting state.
     let kesKey := ByteArray.mk params.kesSigningKey.toArray
-    let kesSigResult ← kesSign kesKey (UInt32.ofNat kesPeriod) headerBodyBytes
+    let relativeKesPeriod := kesPeriod - opcertKesPeriod
+    let kesSigResult ← kesSign kesKey (UInt32.ofNat relativeKesPeriod) headerBodyBytes
     match kesSigResult with
     | .error e => return .error s!"KES signing failed: {e}"
     | .ok kesSig =>
@@ -294,15 +297,15 @@ def tryForgeBlockIO (params : ForgeParams) (consensusState : ConsensusState)
         selectedTxs := blockBody
       })
 
-open Cleanode.Network.Crypto in
-open Cleanode.Crypto.Sign.KESSign in
+open Dion.Network.Crypto in
+open Dion.Crypto.Sign.KESSign in
 /-- Production forge pipeline with IO: leader check → tx selection → sign -/
 def forgeBlockIO (params : ForgeParams) (consensusState : ConsensusState)
     (blockNumber : Nat) (slot : Nat) (prevHash : ByteArray)
-    (mempool : Cleanode.Network.Mempool.Mempool) (maxBlockSize : Nat)
+    (mempool : Dion.Network.Mempool.Mempool) (maxBlockSize : Nat)
     (kesPeriod : Nat)
     : IO (Except String (Option ForgedBlock)) := do
   let blockBody := selectTransactions mempool maxBlockSize
   tryForgeBlockIO params consensusState blockNumber slot prevHash blockBody kesPeriod
 
-end Cleanode.Consensus.Praos.BlockForge
+end Dion.Consensus.Praos.BlockForge

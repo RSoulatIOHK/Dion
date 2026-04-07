@@ -1,5 +1,5 @@
-import Cleanode.Network.ChainSync
-import Cleanode.Network.Crypto
+import Dion.Network.ChainSync
+import Dion.Network.Crypto
 
 /-!
 # Cardano ImmutableDB Reader
@@ -31,9 +31,9 @@ Note: There is NO blockSize field. Size must be computed from consecutive offset
 - ouroboros-consensus: Ouroboros.Consensus.Storage.ImmutableDB.Impl.Index.Secondary
 -/
 
-namespace Cleanode.Mithril.ImmutableDB
+namespace Dion.Mithril.ImmutableDB
 
-open Cleanode.Network.ChainSync
+open Dion.Network.ChainSync
 
 -- ====================
 -- = Binary Helpers   =
@@ -184,35 +184,41 @@ def readImmutableTip (dbDir : String) : IO (Option ImmutableTip) := do
     IO.eprintln s!"[mithril] ImmutableDB directory not found: {immutableDir}"
     return none
 
-  -- Find the last chunk
-  match ← findLastChunkNumber immutableDir with
+  -- Find the last chunk with a valid secondary index.
+  -- The highest-numbered chunk may be incomplete (Cardano writes chunks
+  -- progressively), so fall back to the previous chunk if needed.
+  let maxChunk ← findLastChunkNumber immutableDir
+  match maxChunk with
   | none =>
     IO.eprintln "[mithril] No chunk files found in ImmutableDB"
     return none
-  | some chunkNum =>
-    let secondaryPath := s!"{immutableDir}/{formatChunkNumber chunkNum}.secondary"
-    let secExists ← pathExists secondaryPath
-    if !secExists then
-      IO.eprintln s!"[mithril] Secondary index not found: {secondaryPath}"
-      return none
-
-    match ← readLastSecondaryEntry secondaryPath with
-    | none =>
-      IO.eprintln s!"[mithril] Failed to read secondary index: {secondaryPath}"
-      return none
-    | some entry =>
-      -- Read the secondary file to count entries
-      let contents ← IO.FS.readBinFile secondaryPath
-      let entryCount := contents.size / secondaryEntrySize
-      return some {
-        slot := entry.slot.toNat
-        headerHash := entry.headerHash
-        chunkNumber := chunkNum
-        entryCount := entryCount
-      }
+  | some maxChunkNum =>
+    -- Try maxChunkNum, then maxChunkNum-1 as fallback
+    let candidates := if maxChunkNum > 0 then [maxChunkNum, maxChunkNum - 1] else [maxChunkNum]
+    let mut result : Option ImmutableTip := none
+    for chunkNum in candidates do
+      if result.isSome then break
+      let secondaryPath := s!"{immutableDir}/{formatChunkNumber chunkNum}.secondary"
+      let secExists ← pathExists secondaryPath
+      if !secExists then
+        IO.eprintln s!"[mithril] Secondary index not found for chunk {chunkNum}, trying previous..."
+      else
+        match ← readLastSecondaryEntry secondaryPath with
+        | none =>
+          IO.eprintln s!"[mithril] Failed to read secondary index for chunk {chunkNum}, trying previous..."
+        | some entry =>
+          let contents ← IO.FS.readBinFile secondaryPath
+          let entryCount := contents.size / secondaryEntrySize
+          result := some {
+            slot := entry.slot.toNat
+            headerHash := entry.headerHash
+            chunkNumber := chunkNum
+            entryCount := entryCount
+          }
+    return result
 
 /-- Convert an ImmutableTip to a ChainSync Point -/
 def ImmutableTip.toPoint (tip : ImmutableTip) : Point :=
   { slot := UInt64.ofNat tip.slot, hash := tip.headerHash }
 
-end Cleanode.Mithril.ImmutableDB
+end Dion.Mithril.ImmutableDB

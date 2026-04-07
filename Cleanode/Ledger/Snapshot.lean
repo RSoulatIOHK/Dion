@@ -1,5 +1,5 @@
-import Cleanode.Ledger.State
-import Cleanode.Ledger.UTxO
+import Dion.Ledger.State
+import Dion.Ledger.UTxO
 
 /-!
 # Ledger Snapshots
@@ -16,11 +16,11 @@ Binary format: header + serialized UTxO + pool state + delegation state
 - Cardano Node: Ledger State Snapshots
 -/
 
-namespace Cleanode.Ledger.Snapshot
+namespace Dion.Ledger.Snapshot
 
-open Cleanode.Ledger.State
-open Cleanode.Ledger.UTxO
-open Cleanode.Network.ConwayBlock
+open Dion.Ledger.State
+open Dion.Ledger.UTxO
+open Dion.Network.ConwayBlock
 open System (FilePath)
 
 -- ====================
@@ -401,4 +401,4 @@ theorem snapshot_validity :
       True → True := by
   intros; trivial
 
-end Cleanode.Ledger.Snapshot
+end Dion.Ledger.Snapshot

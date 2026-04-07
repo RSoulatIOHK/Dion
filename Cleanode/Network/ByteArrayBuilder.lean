@@ -11,7 +11,7 @@ Usage:
   b.toByteArray  -- single O(n) concatenation
 -/
 
-namespace Cleanode.Network.ByteArrayBuilder
+namespace Dion.Network.ByteArrayBuilder
 
 /-- A builder that collects ByteArray chunks for efficient concatenation. -/
 structure Builder where
@@ -39,4 +39,4 @@ def Builder.foldAppend {α : Type} (items : List α) (encode : α → ByteArray)
 def foldEncode {α : Type} (items : List α) (encode : α → ByteArray) : ByteArray :=
   (Builder.foldAppend items encode).toByteArray
 
-end Cleanode.Network.ByteArrayBuilder
+end Dion.Network.ByteArrayBuilder

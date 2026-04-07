@@ -1,7 +1,7 @@
-import Cleanode.Network.Cbor
-import Cleanode.Network.ByteArrayBuilder
-import Cleanode.Network.Multiplexer
-import Cleanode.Network.Socket
+import Dion.Network.Cbor
+import Dion.Network.ByteArrayBuilder
+import Dion.Network.Multiplexer
+import Dion.Network.Socket
 
 /-!
 # TxSubmission2 Mini-Protocol
@@ -30,11 +30,11 @@ provides full transactions on request from the responder (server).
 - Protocol number: 4 (node-to-node)
 -/
 
-namespace Cleanode.Network.TxSubmission2
+namespace Dion.Network.TxSubmission2
 
-open Cleanode.Network.Cbor
-open Cleanode.Network.Multiplexer
-open Cleanode.Network.Socket
+open Dion.Network.Cbor
+open Dion.Network.Multiplexer
+open Dion.Network.Socket
 
 -- ==============
 -- = Core Types =
@@ -312,4 +312,4 @@ def emptyTxIds : TxSubmission2Message := .MsgReplyTxIds []
 /-- Create a reply with no transactions -/
 def emptyTxs : TxSubmission2Message := .MsgReplyTxs []
 
-end Cleanode.Network.TxSubmission2
+end Dion.Network.TxSubmission2

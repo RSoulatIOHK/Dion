@@ -1,5 +1,5 @@
-import Cleanode.Network.Crypto
-import Cleanode.Crypto.Sign.Ed25519.Signature
+import Dion.Network.Crypto
+import Dion.Crypto.Sign.Ed25519.Signature
 
 /-!
 # Cryptographic Primitives Interfaces
@@ -27,9 +27,9 @@ allow forging past blocks.
 - MMM Signature Scheme (Key Evolving Signatures)
 -/
 
-namespace Cleanode.Network.CryptoSpec
+namespace Dion.Network.CryptoSpec
 
-open Cleanode.Network.Crypto
+open Dion.Network.Crypto
 
 -- ====================
 -- = Blake2b          =
@@ -203,4 +203,4 @@ theorem kes_forward_security :
   intros; trivial
   -- Full proof requires KES security model: sorry
 
-end Cleanode.Network.CryptoSpec
+end Dion.Network.CryptoSpec

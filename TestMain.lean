@@ -1,17 +1,17 @@
-import Cleanode.Test.TestHarness
-import Cleanode.Test.Blake2bTest
-import Cleanode.Test.Ed25519Test
-import Cleanode.Test.VRFTest
-import Cleanode.Test.CborTest
-import Cleanode.Test.KESTest
-import Cleanode.Test.BlockRoundTripTest
-import Cleanode.Test.PlutusConformanceTest
-import Cleanode.Test.IntegrationTest
-import Cleanode.Test.BLS12_381Test
-import Cleanode.Test.Benchmark
+import Dion.Test.TestHarness
+import Dion.Test.Blake2bTest
+import Dion.Test.Ed25519Test
+import Dion.Test.VRFTest
+import Dion.Test.CborTest
+import Dion.Test.KESTest
+import Dion.Test.BlockRoundTripTest
+import Dion.Test.PlutusConformanceTest
+import Dion.Test.IntegrationTest
+import Dion.Test.BLS12_381Test
+import Dion.Test.Benchmark
 
 /-!
-# Cleanode Test Runner
+# Dion Test Runner
 
 Runs all conformance test suites and optionally benchmarks.
 
@@ -21,21 +21,21 @@ lake build test && .lake/build/bin/test --bench    # Run tests + benchmarks
 ```
 -/
 
-open Cleanode.Test.TestHarness
-open Cleanode.Test.Blake2bTest
-open Cleanode.Test.Ed25519Test
-open Cleanode.Test.VRFTest
-open Cleanode.Test.CborTest
-open Cleanode.Test.KESTest
-open Cleanode.Test.BlockRoundTripTest
-open Cleanode.Test.PlutusConformanceTest
-open Cleanode.Test.IntegrationTest
-open Cleanode.Test.BLS12_381Test
-open Cleanode.Test.Benchmark
+open Dion.Test.TestHarness
+open Dion.Test.Blake2bTest
+open Dion.Test.Ed25519Test
+open Dion.Test.VRFTest
+open Dion.Test.CborTest
+open Dion.Test.KESTest
+open Dion.Test.BlockRoundTripTest
+open Dion.Test.PlutusConformanceTest
+open Dion.Test.IntegrationTest
+open Dion.Test.BLS12_381Test
+open Dion.Test.Benchmark
 
 def main (args : List String) : IO UInt32 := do
   IO.println "╔══════════════════════════════════════════╗"
-  IO.println "║  Cleanode Conformance Test Suite         ║"
+  IO.println "║  Dion Conformance Test Suite         ║"
   IO.println "╚══════════════════════════════════════════╝"
   IO.println ""
 

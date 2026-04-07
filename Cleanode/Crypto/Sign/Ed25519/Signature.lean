@@ -1,13 +1,13 @@
-import Cleanode.Crypto.Sign.Ed25519.Point
-import Cleanode.Crypto.Hash.Sha512
+import Dion.Crypto.Sign.Ed25519.Point
+import Dion.Crypto.Hash.Sha512
 
-namespace Cleanode.Crypto.Sign.Ed25519.Signature
+namespace Dion.Crypto.Sign.Ed25519.Signature
 
 /-! ## Ed25519 Signature Verification-/
 
-open Cleanode.Crypto.Sign.Ed25519.Point
-open Cleanode.Crypto.Sign.Ed25519.Field
-open Cleanode.Crypto.Hash.Sha512
+open Dion.Crypto.Sign.Ed25519.Point
+open Dion.Crypto.Sign.Ed25519.Field
+open Dion.Crypto.Hash.Sha512
 
 -- Curve order (number of points on the curve)
 -- L = 2^252 + 27742317777372353535851937790883648493
@@ -50,7 +50,7 @@ def verify (publicKey : List UInt8) (message : List UInt8) (signature : List UIn
           -- Compute hash: h = SHA-512(R || A || M)
           let hashInput := rBytes ++ publicKey ++ message
           let hashOutput := Internal.hashMessage hashInput
-          let hashBytes := hashOutput.flatMap Cleanode.Crypto.Integer.UInt64.toUInt8BE
+          let hashBytes := hashOutput.flatMap Dion.Crypto.Integer.UInt64.toUInt8BE
 
           -- Reduce hash modulo L
           let h := reduceModL hashBytes
@@ -68,4 +68,4 @@ def verify (publicKey : List UInt8) (message : List UInt8) (signature : List UIn
 
           lx == rx && ly == ry
 
-end Cleanode.Crypto.Sign.Ed25519.Signature
+end Dion.Crypto.Sign.Ed25519.Signature

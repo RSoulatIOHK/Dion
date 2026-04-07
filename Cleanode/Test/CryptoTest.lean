@@ -1,6 +1,6 @@
-import Cleanode.Network.Crypto
-import Cleanode.Network.CryptoSpec
-import Cleanode.Network.ChainSync
+import Dion.Network.Crypto
+import Dion.Network.CryptoSpec
+import Dion.Network.ChainSync
 
 /-!
 # Cryptographic Primitives Test Vectors
@@ -16,11 +16,11 @@ Property-based tests and known-answer tests for cryptographic functions.
 - RFC 8032: Edwards-Curve Digital Signature Algorithm (Ed25519 and Ed448)
 -/
 
-namespace Cleanode.Test.CryptoTest
+namespace Dion.Test.CryptoTest
 
-open Cleanode.Network.Crypto
-open Cleanode.Network.CryptoSpec
-open Cleanode.Network.ChainSync (hexToBytes)
+open Dion.Network.Crypto
+open Dion.Network.CryptoSpec
+open Dion.Network.ChainSync (hexToBytes)
 
 -- ====================
 -- = Blake2b Tests    =
@@ -204,4 +204,4 @@ def runAllCryptoTests : IO UInt32 := do
 
   return if failures == 0 then 0 else 1
 
-end Cleanode.Test.CryptoTest
+end Dion.Test.CryptoTest

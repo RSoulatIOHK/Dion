@@ -1,5 +1,5 @@
-import Cleanode.Network.ChainSync
-import Cleanode.Network.Byron
+import Dion.Network.ChainSync
+import Dion.Network.Byron
 
 /-!
 # Block Storage
@@ -20,10 +20,10 @@ Stores block headers and tracks our current position on the chain.
 - Add pruning/compaction
 -/
 
-namespace Cleanode.Storage.BlockStore
+namespace Dion.Storage.BlockStore
 
-open Cleanode.Network.ChainSync
-open Cleanode.Network.Byron
+open Dion.Network.ChainSync
+open Dion.Network.Byron
 open System (FilePath)
 
 /-- Current sync state -/
@@ -172,4 +172,4 @@ def countSyncedBlocks : IO Nat := do
   | none => return 0
   | some state => return state.lastBlockNo.toNat
 
-end Cleanode.Storage.BlockStore
+end Dion.Storage.BlockStore

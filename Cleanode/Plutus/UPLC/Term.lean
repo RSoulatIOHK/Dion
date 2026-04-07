@@ -1,4 +1,4 @@
-import Cleanode.Plutus.ScriptContext
+import Dion.Plutus.ScriptContext
 
 /-!
 # Untyped Plutus Lambda Calculus (UPLC) AST
@@ -23,9 +23,9 @@ This is what gets serialized in the Flat format and evaluated by the CEK machine
 - CIP-0085: Plutus Core v1.1.0
 -/
 
-namespace Cleanode.Plutus.UPLC
+namespace Dion.Plutus.UPLC
 
-open Cleanode.Plutus.ScriptContext
+open Dion.Plutus.ScriptContext
 
 -- ====================
 -- = Builtin Enum     =
@@ -326,4 +326,4 @@ structure Program where
 instance : Repr Program where
   reprPrec p _ := s!"(program {p.versionMajor}.{p.versionMinor}.{p.versionPatch} {p.term.repr})"
 
-end Cleanode.Plutus.UPLC
+end Dion.Plutus.UPLC

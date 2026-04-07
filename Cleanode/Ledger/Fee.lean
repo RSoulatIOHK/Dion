@@ -1,5 +1,5 @@
-import Cleanode.Network.ConwayBlock
-import Cleanode.Network.EraTx
+import Dion.Network.ConwayBlock
+import Dion.Network.EraTx
 
 /-!
 # Fee Calculation
@@ -17,10 +17,10 @@ For Alonzo+ eras with Plutus scripts, execution costs are added:
 - CIP-0040: Babbage fee changes
 -/
 
-namespace Cleanode.Ledger.Fee
+namespace Dion.Ledger.Fee
 
-open Cleanode.Network.ConwayBlock
-open Cleanode.Network.EraTx
+open Dion.Network.ConwayBlock
+open Dion.Network.EraTx
 
 -- ====================
 -- = Protocol Params  =
@@ -117,4 +117,4 @@ theorem total_fee_components :
       totalMinFee params s rs = minFee params s + totalScriptFee params rs := by
   intros; rfl
 
-end Cleanode.Ledger.Fee
+end Dion.Ledger.Fee

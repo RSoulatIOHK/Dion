@@ -1,5 +1,5 @@
-import Cleanode.Crypto.VRF.ECVRF
-import Cleanode.Config.Genesis
+import Dion.Crypto.VRF.ECVRF
+import Dion.Config.Genesis
 
 /-!
 # Ouroboros Praos Leader Election
@@ -27,10 +27,10 @@ using integer arithmetic with sufficient precision.
 - Cardano Ledger Spec: Leader Election
 -/
 
-namespace Cleanode.Consensus.Praos.LeaderElection
+namespace Dion.Consensus.Praos.LeaderElection
 
-open Cleanode.Crypto.VRF.ECVRF
-open Cleanode.Config.Genesis
+open Dion.Crypto.VRF.ECVRF
+open Dion.Config.Genesis
 
 -- ====================
 -- = Types            =
@@ -116,9 +116,9 @@ def checkLeader (vrfSecretKey : List UInt8) (epochNonce : ByteArray)
     -- Compute VRF input
     let input := vrfInput epochNonce slot
     -- Generate VRF proof
-    let proof := Cleanode.Crypto.VRF.ECVRF.prove vrfSecretKey input
+    let proof := Dion.Crypto.VRF.ECVRF.prove vrfSecretKey input
     -- Get VRF output
-    let output := Cleanode.Crypto.VRF.ECVRF.proofToHash proof
+    let output := Dion.Crypto.VRF.ECVRF.proofToHash proof
     -- Convert to number and compare against threshold
     let y := vrfOutputToNat output
     let threshold := computeThreshold activeSlotsCoeff poolStake totalStake
@@ -134,10 +134,10 @@ def verifyLeaderProof (vrfPublicKey : List UInt8) (epochNonce : ByteArray)
     (poolStake totalStake : Nat) (proof : VRFProof) : Bool :=
   -- Verify the VRF proof
   let input := vrfInput epochNonce slot
-  if !Cleanode.Crypto.VRF.ECVRF.verify vrfPublicKey input proof then false
+  if !Dion.Crypto.VRF.ECVRF.verify vrfPublicKey input proof then false
   else
     -- Check the output is below threshold
-    let output := Cleanode.Crypto.VRF.ECVRF.proofToHash proof
+    let output := Dion.Crypto.VRF.ECVRF.proofToHash proof
     let y := vrfOutputToNat output
     let threshold := computeThreshold activeSlotsCoeff poolStake totalStake
     y < threshold
@@ -279,4 +279,4 @@ def computeThresholdAccurate (activeSlotsCoeff : Rational) (poolStake totalStake
     let phi := if s > oneMinusFsigma then s - oneMinusFsigma else 0
     certNatMax * phi / s
 
-end Cleanode.Consensus.Praos.LeaderElection
+end Dion.Consensus.Praos.LeaderElection

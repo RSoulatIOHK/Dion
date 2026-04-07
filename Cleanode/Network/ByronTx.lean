@@ -1,4 +1,4 @@
-import Cleanode.Network.Cbor
+import Dion.Network.Cbor
 
 /-!
 # Byron Era Transaction Structure
@@ -31,9 +31,9 @@ byron_block_body = [
 - cardano-ledger Byron CDDL spec
 -/
 
-namespace Cleanode.Network.ByronTx
+namespace Dion.Network.ByronTx
 
-open Cleanode.Network.Cbor
+open Dion.Network.Cbor
 
 -- ====================
 -- = Byron Tx Types   =
@@ -307,4 +307,4 @@ partial def parseByronBlockBody (bs : ByteArray) : Option ByronBlockBody := do
     updatePayload := updatePayload
   }
 
-end Cleanode.Network.ByronTx
+end Dion.Network.ByronTx

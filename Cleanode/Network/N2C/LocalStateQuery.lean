@@ -1,11 +1,11 @@
-import Cleanode.Network.Cbor
-import Cleanode.Network.N2C.Mux
-import Cleanode.Network.N2C.StateQueryCodec
-import Cleanode.Network.N2C.PParamsCodec
-import Cleanode.Network.N2C.UTxOCodec
-import Cleanode.Ledger.State
+import Dion.Network.Cbor
+import Dion.Network.N2C.Mux
+import Dion.Network.N2C.StateQueryCodec
+import Dion.Network.N2C.PParamsCodec
+import Dion.Network.N2C.UTxOCodec
+import Dion.Ledger.State
 import Std.Sync
-import Cleanode.Storage.ChainDB
+import Dion.Storage.ChainDB
 
 /-!
 # LocalStateQuery Mini-Protocol (N2C Protocol 7)
@@ -30,18 +30,18 @@ StIdle → StAcquiring → StAcquired ⇄ StQuerying → StIdle → StDone
 - Ouroboros Network Spec Section 3.13
 -/
 
-namespace Cleanode.Network.N2C.LocalStateQuery
+namespace Dion.Network.N2C.LocalStateQuery
 
-open Cleanode.Network.Cbor
-open Cleanode.Network.N2C.Mux
-open Cleanode.Network.N2C.MiniProtocolId
-open Cleanode.Network.N2C.StateQueryCodec
-open Cleanode.Network.N2C.PParamsCodec
-open Cleanode.Network.N2C.UTxOCodec
-open Cleanode.Network.Multiplexer (Mode)
-open Cleanode.Network.Socket
-open Cleanode.Ledger.State
-open Cleanode.Ledger.UTxO
+open Dion.Network.Cbor
+open Dion.Network.N2C.Mux
+open Dion.Network.N2C.MiniProtocolId
+open Dion.Network.N2C.StateQueryCodec
+open Dion.Network.N2C.PParamsCodec
+open Dion.Network.N2C.UTxOCodec
+open Dion.Network.Multiplexer (Mode)
+open Dion.Network.Socket
+open Dion.Ledger.State
+open Dion.Ledger.UTxO
 
 -- ====================
 -- = Messages         =
@@ -297,4 +297,4 @@ def handleStateQueryFrame (sock : Socket) (payload : ByteArray)
     | .error _ => return (false, .Idle)
     | .ok () => return (true, .Acquired)
 
-end Cleanode.Network.N2C.LocalStateQuery
+end Dion.Network.N2C.LocalStateQuery

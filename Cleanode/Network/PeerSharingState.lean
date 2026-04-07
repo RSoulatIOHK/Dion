@@ -1,4 +1,4 @@
-import Cleanode.Network.PeerSharing
+import Dion.Network.PeerSharing
 
 /-!
 # PeerSharing Protocol State Machine
@@ -23,9 +23,9 @@ typed states and transition rules.
 - Ouroboros Network Spec (Peer Sharing)
 -/
 
-namespace Cleanode.Network.PeerSharingState
+namespace Dion.Network.PeerSharingState
 
-open Cleanode.Network.PeerSharing
+open Dion.Network.PeerSharing
 
 -- ====================
 -- = State Type       =
@@ -79,16 +79,16 @@ def isTerminal : PeerSharingState → Bool
 
 /-- A typed PeerSharing handle that tracks protocol state -/
 structure TypedPeerSharing where
-  sock : Cleanode.Network.Socket.Socket
+  sock : Dion.Network.Socket.Socket
   state : PeerSharingState
 
 /-- Create a new PeerSharing session (starts in StIdle) -/
-def TypedPeerSharing.new (sock : Cleanode.Network.Socket.Socket) : TypedPeerSharing :=
+def TypedPeerSharing.new (sock : Dion.Network.Socket.Socket) : TypedPeerSharing :=
   { sock := sock, state := .StIdle }
 
 /-- Send a message and transition state -/
 def TypedPeerSharing.send (ps : TypedPeerSharing) (msg : PeerSharingMessage)
-    : IO (Except Cleanode.Network.Socket.SocketError (Option TypedPeerSharing)) := do
+    : IO (Except Dion.Network.Socket.SocketError (Option TypedPeerSharing)) := do
   match nextState ps.state msg with
   | none => return .ok none
   | some newState => do
@@ -98,7 +98,7 @@ def TypedPeerSharing.send (ps : TypedPeerSharing) (msg : PeerSharingMessage)
 
 /-- Receive a message and transition state -/
 def TypedPeerSharing.recv (ps : TypedPeerSharing)
-    : IO (Except Cleanode.Network.Socket.SocketError (Option (PeerSharingMessage × TypedPeerSharing))) := do
+    : IO (Except Dion.Network.Socket.SocketError (Option (PeerSharingMessage × TypedPeerSharing))) := do
   match ← receivePeerSharing ps.sock with
   | .error e => return .error e
   | .ok none => return .ok none
@@ -126,4 +126,4 @@ theorem peersharing_no_deadlock (s : PeerSharingState) :
   | StBusy => exact ⟨.MsgSharePeers [], .StIdle, rfl⟩
   | StDone => exact absurd rfl h
 
-end Cleanode.Network.PeerSharingState
+end Dion.Network.PeerSharingState

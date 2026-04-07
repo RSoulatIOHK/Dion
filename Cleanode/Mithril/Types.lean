@@ -13,7 +13,7 @@ Core data types for the Mithril protocol integration:
 - Mithril Aggregator REST API
 -/
 
-namespace Cleanode.Mithril.Types
+namespace Dion.Mithril.Types
 
 open Lean (Json)
 
@@ -251,4 +251,4 @@ def parseSnapshots (j : Json) : Option (List MithrilSnapshot) := do
     | none => pure ()
   some result
 
-end Cleanode.Mithril.Types
+end Dion.Mithril.Types

@@ -5,7 +5,7 @@ Central state structure written by network threads and read by the TUI renderer.
 All updates go through `IO.Ref TUIState` using pure `modify` functions.
 -/
 
-namespace Cleanode.TUI.State
+namespace Dion.TUI.State
 
 /-- A block summary for TUI display (compact, not full block data) -/
 structure BlockSummary where
@@ -26,6 +26,7 @@ structure BlockSummary where
   kesOk     : Bool := false  -- KES signature verified
   opCertOk  : Bool := false  -- Operational cert verified
   headerValidated : Bool := false  -- Header validation was attempted
+  isOurs    : Bool := false  -- Block was forged by this node
   deriving Repr
 
 /-- A peer summary for TUI display -/
@@ -50,6 +51,15 @@ structure ConsensusInfo where
   lastIssuerVKey   : String     -- Last block issuer VKey hash (hex, truncated)
   epochNonceHex    : String     -- Current epoch nonce (hex, truncated)
   evolvingNonceHex : String     -- Evolving nonce (hex, truncated)
+  -- Block production
+  lastElectedSlot  : Option Nat := none  -- Last slot we won leadership
+  lastElectedMs    : Nat := 0            -- Wall-clock ms when we were elected
+  lastForgedSlot   : Option Nat := none  -- Last slot we successfully forged
+  timesElected     : Nat := 0            -- Total leadership wins this session
+  blocksForged     : Nat := 0            -- Total blocks forged this session
+  -- Leadership schedule
+  leaderSlots      : Array Nat := #[]    -- Precomputed slots we lead this epoch
+  scheduleEpoch    : Nat := 0            -- Epoch the schedule was computed for
   deriving Repr
 
 /-- How the node started syncing -/
@@ -241,4 +251,4 @@ def tuiLog (tuiRef : Option (IO.Ref TUIState)) (msg : String) : IO Unit :=
   | some ref => ref.modify (·.addLog msg)
   | none => IO.println msg
 
-end Cleanode.TUI.State
+end Dion.TUI.State

@@ -1,5 +1,5 @@
-import Cleanode.Ledger.State
-import Cleanode.Network.EraTx
+import Dion.Ledger.State
+import Dion.Network.EraTx
 
 /-!
 # Protocol Parameter Update Validation
@@ -24,10 +24,10 @@ txFeePerByte, txFeeFixed, utxoCostPerByte, govActionDeposit
 - CIP-1694: parameter groups
 -/
 
-namespace Cleanode.Ledger.ProtocolParamValidation
+namespace Dion.Ledger.ProtocolParamValidation
 
-open Cleanode.Ledger.State
-open Cleanode.Network.EraTx
+open Dion.Ledger.State
+open Dion.Network.EraTx
 
 -- ====================
 -- = PPUpdate Errors  =
@@ -127,4 +127,4 @@ def validateParamBounds (paramName : String) (value : Nat)
       throw (.ParameterOutOfBounds paramName value)
   | _ => pure ()
 
-end Cleanode.Ledger.ProtocolParamValidation
+end Dion.Ledger.ProtocolParamValidation

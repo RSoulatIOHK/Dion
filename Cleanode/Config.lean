@@ -4,7 +4,7 @@ import Lean
 # Network Configuration
 
 This module defines the NetworkConfig structure that matches cardano-node's
-config.json format. It allows Cleanode to read standard Cardano configuration
+config.json format. It allows Dion to read standard Cardano configuration
 files instead of hardcoding network parameters.
 
 ## Configuration Files
@@ -22,7 +22,7 @@ A complete node configuration requires:
 - [Cardano Configurations Repository](https://github.com/input-output-hk/cardano-configurations)
 -/
 
-namespace Cleanode.Config
+namespace Dion.Config
 
 open Lean (Json)
 
@@ -379,6 +379,6 @@ theorem config_valid_implies_supported_protocol :
       True → True := by
   intros; trivial
 
-end Cleanode.Config
+end Dion.Config
 
 

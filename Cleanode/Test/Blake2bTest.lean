@@ -1,5 +1,5 @@
-import Cleanode.Network.Crypto
-import Cleanode.Test.TestHarness
+import Dion.Network.Crypto
+import Dion.Test.TestHarness
 
 /-!
 # Blake2b-256 Conformance Tests
@@ -10,10 +10,10 @@ Test vectors from:
 - Empty, short, and long inputs
 -/
 
-namespace Cleanode.Test.Blake2bTest
+namespace Dion.Test.Blake2bTest
 
-open Cleanode.Network.Crypto
-open Cleanode.Test.TestHarness
+open Dion.Network.Crypto
+open Dion.Test.TestHarness
 
 /-- Known-answer test: verify hash matches expected hex -/
 private def katTest (inputHex : String) (expectedHex : String) : IO Bool := do
@@ -100,4 +100,4 @@ def runBlake2b256Tests : IO (Array TestResult) := do
 
   return results
 
-end Cleanode.Test.Blake2bTest
+end Dion.Test.Blake2bTest

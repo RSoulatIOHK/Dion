@@ -18,7 +18,7 @@ db.close
 ```
 -/
 
-namespace Cleanode.Storage.Database
+namespace Dion.Storage.Database
 
 -- ====================
 -- = Opaque DB Handle =
@@ -53,58 +53,58 @@ instance : Repr BlockRow where
 -- ====================
 
 /-- Open or create a database at the given path -/
-@[extern "cleanode_db_open"]
+@[extern "dion_db_open"]
 opaque dbOpen (path : @& String) : IO Database
 
 /-- Close the database -/
-@[extern "cleanode_db_close"]
+@[extern "dion_db_close"]
 opaque dbClose (db : @& Database) : IO Unit
 
 /-- Store a block -/
-@[extern "cleanode_db_put_block"]
+@[extern "dion_db_put_block"]
 opaque dbPutBlock (db : @& Database) (blockNo : @& Nat) (slot : @& Nat) (era : @& Nat)
     (hash : @& ByteArray) (prevHash : @& ByteArray) (header : @& ByteArray)
     (immutable : Bool) : IO Unit
 
 /-- Store block body data -/
-@[extern "cleanode_db_put_block_body"]
+@[extern "dion_db_put_block_body"]
 opaque dbPutBlockBody (db : @& Database) (blockNo : @& Nat) (body : @& ByteArray) : IO Unit
 
 /-- Retrieve a block by block number -/
-@[extern "cleanode_db_get_block"]
+@[extern "dion_db_get_block"]
 opaque dbGetBlockRaw (db : @& Database) (blockNo : @& Nat) : IO (Option BlockRow)
 
 /-- Retrieve a block by hash -/
-@[extern "cleanode_db_get_block_by_hash"]
+@[extern "dion_db_get_block_by_hash"]
 opaque dbGetBlockByHashRaw (db : @& Database) (hash : @& ByteArray) : IO (Option BlockRow)
 
 /-- Get the tip (highest block number) -/
-@[extern "cleanode_db_get_tip"]
+@[extern "dion_db_get_tip"]
 opaque dbGetTip (db : @& Database) : IO (Option Nat)
 
 /-- Mark blocks up to a given number as immutable -/
-@[extern "cleanode_db_mark_immutable"]
+@[extern "dion_db_mark_immutable"]
 opaque dbMarkImmutable (db : @& Database) (upTo : @& Nat) : IO Unit
 
 /-- Rollback: delete volatile blocks above a given block number. Returns count deleted. -/
-@[extern "cleanode_db_rollback"]
+@[extern "dion_db_rollback"]
 opaque dbRollback (db : @& Database) (keepUpTo : @& Nat) : IO Nat
 
 /-- Count total blocks -/
-@[extern "cleanode_db_count_blocks"]
+@[extern "dion_db_count_blocks"]
 opaque dbCountBlocks (db : @& Database) : IO Nat
 
 /-- Save sync state -/
-@[extern "cleanode_db_save_sync_state"]
+@[extern "dion_db_save_sync_state"]
 opaque dbSaveSyncState (db : @& Database) (lastSlot : @& Nat) (lastBlock : @& Nat)
     (lastHash : @& ByteArray) : IO Unit
 
 /-- Load sync state -/
-@[extern "cleanode_db_load_sync_state"]
+@[extern "dion_db_load_sync_state"]
 opaque dbLoadSyncStateRaw (db : @& Database) : IO (Option (Nat × Nat × ByteArray))
 
 /-- Get block numbers in a slot range -/
-@[extern "cleanode_db_get_blocks_in_range"]
+@[extern "dion_db_get_blocks_in_range"]
 opaque dbGetBlocksInRange (db : @& Database) (fromSlot : @& Nat) (toSlot : @& Nat) : IO (Array Nat)
 
 -- ====================
@@ -179,4 +179,4 @@ def getBlocksInSlotRange (db : Database) (fromSlot toSlot : Nat) : IO (Array Nat
 
 end Database
 
-end Cleanode.Storage.Database
+end Dion.Storage.Database

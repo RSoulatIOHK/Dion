@@ -1,6 +1,6 @@
-import Cleanode.Ledger.Value
-import Cleanode.Network.ConwayBlock
-import Cleanode.Network.Crypto
+import Dion.Ledger.Value
+import Dion.Network.ConwayBlock
+import Dion.Network.Crypto
 import Std.Data.HashMap
 
 /-!
@@ -24,11 +24,11 @@ Uses `Std.HashMap` for O(1) lookup/insert/remove instead of List.
 - CIP-0002: Shelley UTxO model
 -/
 
-namespace Cleanode.Ledger.UTxO
+namespace Dion.Ledger.UTxO
 
-open Cleanode.Ledger.Value
-open Cleanode.Network.ConwayBlock
-open Cleanode.Network.Crypto
+open Dion.Ledger.Value
+open Dion.Network.ConwayBlock
+open Dion.Network.Crypto
 
 -- ====================
 -- = UTxO Types       =
@@ -224,4 +224,4 @@ theorem utxo_balance_preservation :
       True → True := by
   intros; trivial
 
-end Cleanode.Ledger.UTxO
+end Dion.Ledger.UTxO

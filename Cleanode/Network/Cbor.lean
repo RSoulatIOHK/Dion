@@ -10,7 +10,7 @@ the Ouroboros network protocol. It works with ByteArray for efficiency.
 - Adapted from PlutusCore.Cbor
 -/
 
-namespace Cleanode.Network.Cbor
+namespace Dion.Network.Cbor
 
 /-- CBOR major types (3-bit value in initial byte) -/
 inductive MajorType where
@@ -370,4 +370,4 @@ mutual
       | none => none
 end
 
-end Cleanode.Network.Cbor
+end Dion.Network.Cbor

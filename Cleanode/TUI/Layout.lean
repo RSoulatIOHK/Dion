@@ -1,6 +1,6 @@
-import Cleanode.TUI.Ansi
-import Cleanode.TUI.State
-import Cleanode.TUI.Art
+import Dion.TUI.Ansi
+import Dion.TUI.State
+import Dion.TUI.Art
 
 /-!
 # TUI Layout
@@ -10,11 +10,11 @@ All rendering is pure — no IO, no Pigment monad. ANSI codes are inlined
 directly into the strings for color.
 -/
 
-namespace Cleanode.TUI.Layout
+namespace Dion.TUI.Layout
 
-open Cleanode.TUI.Ansi
-open Cleanode.TUI.State
-open Cleanode.TUI.Art
+open Dion.TUI.Ansi
+open Dion.TUI.State
+open Dion.TUI.Art
 
 -- ========================
 -- = Box Drawing Helpers  =
@@ -141,7 +141,21 @@ def renderHeader (state : TUIState) (width : Nat) (nowMs : Nat) : List String :=
       s!"{Ansi.dim}){Ansi.reset}" ++
       s!"{Ansi.dim}  |  {Ansi.reset}{Ansi.white}Peers: {Ansi.brightGreen}{state.peers.length}{Ansi.reset}" ++
       s!"{Ansi.dim}  |  {Ansi.reset}{Ansi.white}Rollbacks: {Ansi.yellow}{state.rollbacks}{Ansi.reset}",
-    s!"{Ansi.white}  {syncOriginLabel}"
+    -- Leadership schedule: show next scheduled slot and last forged
+    let c := state.consensus
+    let leaderInfo :=
+      if c.leaderSlots.isEmpty && c.lastForgedSlot.isNone then ""
+      else
+        let nextSlot := c.leaderSlots.find? (· > state.tipSlot)
+        let nextStr := match nextSlot with
+          | some s => s!"{Ansi.brightYellow}{Ansi.bold}next: slot {formatNum s}{Ansi.reset}"
+          | none   => if c.leaderSlots.isEmpty then "" else s!"{Ansi.dim}next: (none this epoch){Ansi.reset}"
+        let lastStr := match c.lastForgedSlot with
+          | some s => s!"{Ansi.dim}  (last: {formatNum s}){Ansi.reset}"
+          | none   => ""
+        if nextStr.isEmpty then lastStr
+        else s!"  {Ansi.dim}★{Ansi.reset}  {nextStr}{lastStr}"
+    s!"{Ansi.white}  {syncOriginLabel}{leaderInfo}"
   ]
   -- Interleave logo and info: logo on left, info on right
   let headerLines := List.range 5 |>.map fun i =>
@@ -178,15 +192,18 @@ def renderBlockRow (b : BlockSummary) (rowWidth : Nat) (selected : Bool := false
     else if b.skippedTxs > 0 then s!"{Ansi.dim}~{Ansi.reset}"
     else if b.headerValidated || b.validTxs > 0 then s!"{Ansi.green}V{Ansi.reset}"
     else s!"{Ansi.dim}.{Ansi.reset}"
-  let cursor := if selected then s!"{Ansi.brightCyan}>{Ansi.reset}" else " "
-  let content := s!" {cursor}{valIndicator}" ++
-    s!" {Ansi.brightYellow}#{formatNum b.blockNo}{Ansi.reset}" ++
-    s!"  slot {Ansi.cyan}{formatNum b.slot}{Ansi.reset}" ++
+  -- Our forged blocks get a gold star prefix, others get the selection cursor
+  let ourStar := if b.isOurs then s!"{Ansi.brightYellow}{Ansi.bold}★{Ansi.reset}" else if selected then s!"{Ansi.brightCyan}>{Ansi.reset}" else s!" "
+  let content := s!" {ourStar}{valIndicator}" ++
+    s!" {if b.isOurs then Ansi.brightYellow else Ansi.brightYellow}#{formatNum b.blockNo}{Ansi.reset}" ++
+    s!"  slot {if b.isOurs then Ansi.brightYellow else Ansi.cyan}{formatNum b.slot}{Ansi.reset}" ++
     s!"  {b.txCount} {txLabel}" ++
     s!"  {Ansi.green}{feesAda} A{Ansi.reset}" ++
-    s!"{Ansi.dim}  {hashShort}..{Ansi.reset}"
+    (if b.isOurs then s!"{Ansi.brightYellow}{Ansi.bold}  ◄ OUR BLOCK{Ansi.reset}" else s!"{Ansi.dim}  {hashShort}..{Ansi.reset}")
   if selected then
     padRight (s!"{csi}7m" ++ content ++ s!"{csi}27m") rowWidth  -- reverse video
+  else if b.isOurs then
+    padRight (s!"{Ansi.brightYellow}" ++ content ++ s!"{Ansi.reset}") rowWidth
   else
     padRight content rowWidth
 
@@ -212,7 +229,7 @@ def renderBlockPanel (blocks : List BlockSummary) (width : Nat) (height : Nat)
 -- ========================
 
 /-- Render the mempool + consensus panel (right side) -/
-def renderMempoolPanel (state : TUIState) (width : Nat) (height : Nat) : List String :=
+def renderMempoolPanel (state : TUIState) (width : Nat) (height : Nat) (nowMs : Nat := 0) : List String :=
   let title := s!"{Ansi.brightCyan}{Ansi.bold}  MEMPOOL{Ansi.reset}"
   let divider := s!"{Ansi.dim}  {hline '─' (width - 6)}{Ansi.reset}"
   let maxMB := 64
@@ -249,6 +266,31 @@ def renderMempoolPanel (state : TUIState) (width : Nat) (height : Nat) : List St
     s!"{Ansi.dim}  Nonce: {Ansi.reset}{Ansi.cyan}{c.epochNonceHex}..{Ansi.reset}" ++
     (if c.evolvingNonceHex.length > 0 then s!"{Ansi.dim}  evolving: {Ansi.reset}{Ansi.cyan}{c.evolvingNonceHex}..{Ansi.reset}" else "")
   else ""
+  -- Block production banner (shown when we forged or were elected recently)
+  let forgeLines : List String :=
+    if c.blocksForged == 0 && c.lastElectedSlot.isNone then []
+    else
+      let msSince := if c.lastElectedMs > 0 && nowMs > c.lastElectedMs then nowMs - c.lastElectedMs else 0
+      let isHot := msSince < 10000  -- within 10 seconds
+      let isFresh := msSince < 60000  -- within 1 minute
+      let slotStr := match c.lastForgedSlot with
+        | some s => toString s
+        | none   => "?"
+      let banner := if isHot then
+        -- Flashing gold banner right after forging
+        s!"  {Ansi.brightYellow}{Ansi.bold}╔{hline '═' (width - 8)}╗{Ansi.reset}"
+      else
+        s!"  {Ansi.yellow}{Ansi.dim}╔{hline '─' (width - 8)}╗{Ansi.reset}"
+      let label := if isHot then
+        s!"{Ansi.brightYellow}{Ansi.bold}  ★  BLOCK FORGED  slot {slotStr}  ★{Ansi.reset}"
+      else
+        s!"{Ansi.yellow}  ★ forged slot {slotStr}{Ansi.reset}"
+      let footer := if isHot then
+        s!"  {Ansi.brightYellow}{Ansi.bold}╚{hline '═' (width - 8)}╝{Ansi.reset}"
+      else
+        s!"  {Ansi.yellow}{Ansi.dim}╚{hline '─' (width - 8)}╝{Ansi.reset}"
+      let statsStr := s!"{Ansi.dim}  elected {c.timesElected}× · forged {c.blocksForged} block(s){if isFresh then s!"  ·  {msSince / 1000}s ago" else ""}{Ansi.reset}"
+      [banner, padRight label (width - 2), footer, statsStr]
   -- Ledger validation section
   let valTitle := s!"{Ansi.brightCyan}{Ansi.bold}  LEDGER VALIDATION{Ansi.reset}"
   let valDivider := s!"{Ansi.dim}  {hline '─' (width - 6)}{Ansi.reset}"
@@ -262,8 +304,10 @@ def renderMempoolPanel (state : TUIState) (width : Nat) (height : Nat) : List St
     s!"{Ansi.dim}  Pass rate: {Ansi.reset}{if pct >= 99 then Ansi.brightGreen else if pct >= 90 then Ansi.yellow else Ansi.red}{pct}%{Ansi.reset}"
   else s!"{Ansi.dim}  (no txs validated yet){Ansi.reset}"
   let lines := [title, divider, statsLine, bar, emptyMsg, "",
-                consTitle, consDivider, epochLine, vrfLine, opCertLine, kesLine, issuerLine, nonceLine, "",
-                valTitle, valDivider, valBlocks, valTxs, valRate]
+                consTitle, consDivider, epochLine, vrfLine, opCertLine, kesLine, issuerLine, nonceLine, ""]
+              ++ forgeLines
+              ++ (if forgeLines.isEmpty then [] else [""])
+              ++ [valTitle, valDivider, valBlocks, valTxs, valRate]
   -- Pad to fill height
   lines ++ List.replicate (max 0 (height - lines.length)) ""
 
@@ -563,9 +607,21 @@ def renderConsensusDetail (state : TUIState) (width : Nat) (height : Nat) : List
   let issuer := if c.lastIssuerVKey.length > 0 then
     s!"{Ansi.dim}  Last issuer: {c.lastIssuerVKey}...{Ansi.reset}"
   else ""
+  -- Block production section
+  let sec5 := s!"{Ansi.brightYellow}{Ansi.bold}  BLOCK PRODUCTION{Ansi.reset}"
+  let electedLine := s!"{Ansi.white}  Times elected: {Ansi.brightYellow}{c.timesElected}{Ansi.reset}"
+  let forgedLine  := s!"{Ansi.white}  Blocks forged: {Ansi.brightGreen}{c.blocksForged}{Ansi.reset}"
+  let lastSlotLine := match c.lastForgedSlot with
+    | some s => s!"{Ansi.white}  Last forged:   {Ansi.brightYellow}slot {s}{Ansi.reset}"
+    | none   => s!"{Ansi.dim}  Last forged:   (none yet){Ansi.reset}"
+  let prodLines := if c.timesElected > 0 || c.blocksForged > 0 then
+    ["", sec5, electedLine, forgedLine, lastSlotLine]
+  else
+    ["", sec5, s!"{Ansi.dim}  No slots won yet{Ansi.reset}"]
   let lines := [title, divider, epochLine, kesLine, headersLine, "",
                 sec1, vrfLine, "", sec2, opLine, "", sec3, kesValLine, "",
                 sec4, epochNonce, evolvNonce, "", issuer]
+              ++ prodLines
   lines ++ List.replicate (max 0 (height - lines.length)) ""
 
 -- ========================
@@ -603,7 +659,7 @@ def renderFrame (state : TUIState) (nowMs : Nat) (width : Nat := 160) (_height :
         state.selectedBlockIdx state.paused
     let midLines := match state.detailView with
       | .consensusFull => renderConsensusDetail state rightWidth panelHeight
-      | _ => renderMempoolPanel state rightWidth panelHeight
+      | _ => renderMempoolPanel state rightWidth panelHeight nowMs
     let rightLines := match state.selectedBlock with
       | some block => renderBlockInfoPanel block col3w fullHeight
       | none => List.replicate fullHeight ""
@@ -637,7 +693,7 @@ def renderFrame (state : TUIState) (nowMs : Nat) (width : Nat := 160) (_height :
         state.selectedBlockIdx state.paused
     let rightLines := match state.detailView with
       | .consensusFull => renderConsensusDetail state rightWidth panelHeight
-      | _ => renderMempoolPanel state rightWidth panelHeight
+      | _ => renderMempoolPanel state rightWidth panelHeight nowMs
     let panelRows := List.range panelHeight |>.map fun i =>
       let left := (blockLines[i]?).getD ""
       let right := (rightLines[i]?).getD ""
@@ -657,4 +713,4 @@ def renderFrame (state : TUIState) (nowMs : Nat) (width : Nat := 160) (_height :
   -- Join all lines, each followed by clearLine to erase leftover chars
   String.intercalate "\n" (allLines.map fun l => l ++ Ansi.clearLine)
 
-end Cleanode.TUI.Layout
+end Dion.TUI.Layout

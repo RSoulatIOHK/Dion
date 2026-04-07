@@ -1,9 +1,9 @@
-import Cleanode.Network.ConwayBlock
-import Cleanode.Network.TxSubmission2
-import Cleanode.Network.Crypto
-import Cleanode.Ledger.Validation
-import Cleanode.Ledger.State
-import Cleanode.Network.EraTx
+import Dion.Network.ConwayBlock
+import Dion.Network.TxSubmission2
+import Dion.Network.Crypto
+import Dion.Ledger.Validation
+import Dion.Ledger.State
+import Dion.Network.EraTx
 
 /-!
 # Transaction Mempool
@@ -22,13 +22,13 @@ confirmed in blocks or expire.
 - Cardano node mempool: capped at 2x max block size by default
 -/
 
-namespace Cleanode.Network.Mempool
+namespace Dion.Network.Mempool
 
-open Cleanode.Network.ConwayBlock
-open Cleanode.Network.TxSubmission2
-open Cleanode.Network.Crypto
-open Cleanode.Ledger.Validation
-open Cleanode.Ledger.State
+open Dion.Network.ConwayBlock
+open Dion.Network.TxSubmission2
+open Dion.Network.Crypto
+open Dion.Ledger.Validation
+open Dion.Ledger.State
 
 -- ====================
 -- = Mempool Entry    =
@@ -119,7 +119,7 @@ def Mempool.addTx (pool : Mempool) (state : LedgerState)
   if pool.contains txHash then
     return .ok pool  -- Already have it, no-op
   -- Validate against ledger state
-  let era := Cleanode.Network.EraTx.CardanoEra.Conway  -- Default to current era
+  let era := Dion.Network.EraTx.CardanoEra.Conway  -- Default to current era
   let errs ← validateTransaction state tx.body tx.witnesses era
   match errs with
   | e :: _ => return .error e
@@ -146,6 +146,16 @@ def Mempool.addTx (pool : Mempool) (state : LedgerState)
 def Mempool.removeConfirmed (pool : Mempool) (confirmedHashes : List ByteArray) : Mempool :=
   let remaining := pool.entries.filter fun e =>
     !confirmedHashes.any (· == e.txHash)
+  let newBytes := remaining.foldl (fun acc e => acc + e.size) 0
+  { pool with entries := remaining, totalBytes := newBytes }
+
+/-- Remove mempool txs whose inputs were spent by confirmed transactions.
+    This evicts stale txs that can never land because their UTxOs are gone. -/
+def Mempool.removeStaleInputs (pool : Mempool) (spentInputs : List (ByteArray × Nat)) : Mempool :=
+  let remaining := pool.entries.filter fun e =>
+    -- Keep entry only if none of its inputs are in the spent set
+    !e.transaction.body.inputs.any fun inp =>
+      spentInputs.any fun (txId, idx) => inp.txId == txId && inp.outputIndex == idx
   let newBytes := remaining.foldl (fun acc e => acc + e.size) 0
   { pool with entries := remaining, totalBytes := newBytes }
 
@@ -211,7 +221,7 @@ def Mempool.addTxRaw (pool : Mempool) (rawBytes : ByteArray) (nowMs : Nat)
 /-- Add a transaction to the mempool after full ledger validation.
     Parses the raw CBOR, runs validateTransaction, rejects if invalid. -/
 def Mempool.addTxValidated (pool : Mempool) (rawBytes : ByteArray) (nowMs : Nat)
-    (ledger : Cleanode.Ledger.State.LedgerState) (slot : Nat)
+    (ledger : Dion.Ledger.State.LedgerState) (slot : Nat)
     : IO (Except String Mempool) := do
   -- Capacity checks first (cheap)
   if pool.totalBytes + rawBytes.size > pool.config.maxBytes then
@@ -219,19 +229,19 @@ def Mempool.addTxValidated (pool : Mempool) (rawBytes : ByteArray) (nowMs : Nat)
   if pool.entries.length >= pool.config.maxSize then
     return .error "mempool full"
   -- Parse the standalone transaction
-  match Cleanode.Network.ConwayBlock.parseStandaloneTx rawBytes with
+  match Dion.Network.ConwayBlock.parseStandaloneTx rawBytes with
   | none => return .error "tx parse failed"
   | some (body, witnesses, _rawBody) =>
     -- Dedup check
-    let txHash ← Cleanode.Network.Crypto.blake2b_256 rawBytes
+    let txHash ← Dion.Network.Crypto.blake2b_256 rawBytes
     if pool.contains txHash then return .ok pool
     -- Full ledger validation (same logic as block validation)
     let allInputsKnown := body.inputs.all fun inp =>
-      let id : Cleanode.Ledger.UTxO.UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
+      let id : Dion.Ledger.UTxO.UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
       ledger.utxo.contains id
     if !allInputsKnown then
       return .error "unknown inputs (UTxO not synced yet)"
-    let valErrs ← Cleanode.Ledger.Validation.validateTransaction
+    let valErrs ← Dion.Ledger.Validation.validateTransaction
         ledger body witnesses .Conway slot rawBytes.size
     if !valErrs.isEmpty then
       return .error s!"validation failed: {String.intercalate ", " (valErrs.map fun e => s!"{repr e}")}"
@@ -267,4 +277,4 @@ def Mempool.getNewTxIds (pool : Mempool) (announced : List ByteArray) (count : N
   (fresh.take count).map fun e =>
     { hash := e.txHash, size := UInt32.ofNat e.size }
 
-end Cleanode.Network.Mempool
+end Dion.Network.Mempool

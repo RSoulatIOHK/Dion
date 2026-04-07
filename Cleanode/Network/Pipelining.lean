@@ -1,6 +1,6 @@
-import Cleanode.Network.BlockFetch
-import Cleanode.Network.BlockFetchState
-import Cleanode.Network.ChainSync
+import Dion.Network.BlockFetch
+import Dion.Network.BlockFetchState
+import Dion.Network.ChainSync
 
 /-!
 # Block Fetch Pipelining
@@ -17,12 +17,12 @@ responses, increasing throughput during initial sync.
 - Ouroboros Network: BlockFetch Pipelining
 -/
 
-namespace Cleanode.Network.Pipelining
+namespace Dion.Network.Pipelining
 
-open Cleanode.Network.BlockFetch
-open Cleanode.Network.BlockFetchState
-open Cleanode.Network.ChainSync
-open Cleanode.Network.Socket
+open Dion.Network.BlockFetch
+open Dion.Network.BlockFetchState
+open Dion.Network.ChainSync
+open Dion.Network.Socket
 
 -- ====================
 -- = Configuration    =
@@ -142,4 +142,4 @@ def splitRange (fp tp : Point) (_batchSize : Nat) : List (Point × Point) :=
   -- In production, would split by slot range
   [(fp, tp)]
 
-end Cleanode.Network.Pipelining
+end Dion.Network.Pipelining

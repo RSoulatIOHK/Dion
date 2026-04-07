@@ -1,8 +1,8 @@
-import Cleanode.Consensus.Praos.LeaderElection
-import Cleanode.Consensus.Praos.ConsensusState
-import Cleanode.Consensus.Praos.TxSelection
-import Cleanode.Ledger.Certificate
-import Cleanode.Ledger.Rewards
+import Dion.Consensus.Praos.LeaderElection
+import Dion.Consensus.Praos.ConsensusState
+import Dion.Consensus.Praos.TxSelection
+import Dion.Ledger.Certificate
+import Dion.Ledger.Rewards
 
 /-!
 # Phase 4 Formal Proofs
@@ -19,15 +19,15 @@ block forging validity, and rewards correctness.
 - Certificate processing preserves ledger invariants
 -/
 
-namespace Cleanode.Proofs.Phase4Proofs
+namespace Dion.Proofs.Phase4Proofs
 
-open Cleanode.Consensus.Praos.LeaderElection
-open Cleanode.Consensus.Praos.ConsensusState
-open Cleanode.Consensus.Praos.TxSelection
-open Cleanode.Ledger.Certificate
-open Cleanode.Ledger.Rewards
-open Cleanode.Ledger.State
-open Cleanode.Config.Genesis
+open Dion.Consensus.Praos.LeaderElection
+open Dion.Consensus.Praos.ConsensusState
+open Dion.Consensus.Praos.TxSelection
+open Dion.Ledger.Certificate
+open Dion.Ledger.Rewards
+open Dion.Ledger.State
+open Dion.Config.Genesis
 
 -- ====================
 -- = Leader Election  =
@@ -91,7 +91,7 @@ theorem pool_reg_idempotent :
 /-- Total distributed rewards never exceed the rewards pot -/
 theorem rewards_sum_preservation :
     ∀ (params : RewardParams) (pools : PoolState)
-      (deleg : DelegationState) (utxo : Cleanode.Ledger.UTxO.UTxOSet),
+      (deleg : DelegationState) (utxo : Dion.Ledger.UTxO.UTxOSet),
       totalDistributed (computeEpochRewards params pools deleg utxo) ≤
       params.totalRewardsPot := by
   sorry  -- Requires bounds on computePoolReward
@@ -118,7 +118,7 @@ theorem reward_nonneg :
 
 /-- Selected transactions fit within the block size limit -/
 theorem tx_selection_fits :
-    ∀ (mempool : Cleanode.Network.Mempool.Mempool) (maxSize : Nat),
+    ∀ (mempool : Dion.Network.Mempool.Mempool) (maxSize : Nat),
       (selectTransactions mempool maxSize).totalSize ≤ maxSize := by
   sorry  -- Requires analysis of the greedy selection loop invariant
 
@@ -221,4 +221,4 @@ theorem accurate_threshold_zero_total :
   intros f poolStake
   simp [computeThresholdAccurate]
 
-end Cleanode.Proofs.Phase4Proofs
+end Dion.Proofs.Phase4Proofs

@@ -1,4 +1,4 @@
-namespace Cleanode.Crypto.Integer
+namespace Dion.Crypto.Integer
 
 namespace Internal
 
@@ -30,4 +30,4 @@ export Internal
     shr
   )
 
-end Cleanode.Crypto.Integer
+end Dion.Crypto.Integer

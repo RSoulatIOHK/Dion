@@ -1,5 +1,5 @@
-import Cleanode.Plutus.UPLC.Term
-import Cleanode.Plutus.ScriptContext
+import Dion.Plutus.UPLC.Term
+import Dion.Plutus.ScriptContext
 
 /-!
 # Flat Binary Deserializer for UPLC
@@ -14,10 +14,10 @@ Adapted from the formal specification at:
 And from the sc-fvt reference implementation in PlutusCore/UPLC/FlatEncoding/Basic.lean.
 -/
 
-namespace Cleanode.Plutus.UPLC.Flat
+namespace Dion.Plutus.UPLC.Flat
 
-open Cleanode.Plutus.UPLC
-open Cleanode.Plutus.ScriptContext
+open Dion.Plutus.UPLC
+open Dion.Plutus.ScriptContext
 
 -- ====================
 -- = Bit Reader       =
@@ -401,4 +401,4 @@ def decodePlutusScript (cborBytes : ByteArray) : Option Program :=
   | .ok p => some p
   | .error _ => none
 
-end Cleanode.Plutus.UPLC.Flat
+end Dion.Plutus.UPLC.Flat

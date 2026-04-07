@@ -30,7 +30,7 @@ The `cborHex` field contains CBOR-wrapped key material.
 - https://github.com/IntersectMBO/cardano-node/wiki/Key-types
 -/
 
-namespace Cleanode.Crypto.TextEnvelope
+namespace Dion.Crypto.TextEnvelope
 
 open Lean (Json)
 
@@ -42,6 +42,8 @@ open Lean (Json)
 inductive KeyType where
   | paymentSigningKey
   | paymentVerificationKey
+  | stakeSigningKey
+  | stakeVerificationKey
   | stakePoolSigningKey
   | stakePoolVerificationKey
   | vrfSigningKey
@@ -56,6 +58,8 @@ instance : ToString KeyType where
   toString
     | .paymentSigningKey => "PaymentSigningKeyShelley_ed25519"
     | .paymentVerificationKey => "PaymentVerificationKeyShelley_ed25519"
+    | .stakeSigningKey => "StakeSigningKeyShelley_ed25519"
+    | .stakeVerificationKey => "StakeVerificationKeyShelley_ed25519"
     | .stakePoolSigningKey => "StakePoolSigningKey_ed25519"
     | .stakePoolVerificationKey => "StakePoolVerificationKey_ed25519"
     | .vrfSigningKey => "VrfSigningKey_PraosVRF"
@@ -69,6 +73,8 @@ instance : ToString KeyType where
 def KeyType.fromString (s : String) : KeyType :=
   if s == "PaymentSigningKeyShelley_ed25519" then .paymentSigningKey
   else if s == "PaymentVerificationKeyShelley_ed25519" then .paymentVerificationKey
+  else if s == "StakeSigningKeyShelley_ed25519" then .stakeSigningKey
+  else if s == "StakeVerificationKeyShelley_ed25519" then .stakeVerificationKey
   else if s == "StakePoolSigningKey_ed25519" then .stakePoolSigningKey
   else if s == "StakePoolVerificationKey_ed25519" then .stakePoolVerificationKey
   else if s == "VrfSigningKey_PraosVRF" then .vrfSigningKey
@@ -341,4 +347,78 @@ def loadOperationalCert (path : String) : IO (Except String (ByteArray × Nat ×
       | some cert => return .ok cert
       | none => return .error s!"Failed to parse operational certificate CBOR (size: {te.rawBytes.size})"
 
-end Cleanode.Crypto.TextEnvelope
+-- ====================
+-- = Writing          =
+-- ====================
+
+/-- Encode bytes as lowercase hex string -/
+def encodeHex (bytes : ByteArray) : String :=
+  let toHex := fun (b : UInt8) =>
+    let hi := b.toNat / 16
+    let lo := b.toNat % 16
+    let hexDigit n := if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
+    String.mk [hexDigit hi, hexDigit lo]
+  String.join (bytes.toList.map toHex)
+
+/-- CBOR-wrap raw bytes as a byte string.
+    Produces: 0x58 <len> <bytes> for 24≤len≤255,
+              0x59 <hi> <lo> <bytes> for 256≤len≤65535,
+              0x40+len <bytes> for len≤23. -/
+def cborWrapBytes (bytes : ByteArray) : ByteArray :=
+  let n := bytes.size
+  let header : ByteArray :=
+    if n <= 23 then ByteArray.mk #[(0x40 + n).toUInt8]
+    else if n <= 255 then ByteArray.mk #[0x58, n.toUInt8]
+    else ByteArray.mk #[0x59, (n / 256).toUInt8, (n % 256).toUInt8]
+  header ++ bytes
+
+/-- Build a TextEnvelope JSON string -/
+def makeTextEnvelope (keyType : KeyType) (description : String) (rawKeyBytes : ByteArray) : String :=
+  let cborWrapped := cborWrapBytes rawKeyBytes
+  let hex := encodeHex cborWrapped
+  let typeName := toString keyType
+  s!"\{\n    \"type\": \"{typeName}\",\n    \"description\": \"{description}\",\n    \"cborHex\": \"{hex}\"\n}\n"
+
+/-- Write a TextEnvelope key file -/
+def writeTextEnvelope (path : String) (keyType : KeyType) (description : String) (rawKeyBytes : ByteArray) : IO Unit := do
+  let content := makeTextEnvelope keyType description rawKeyBytes
+  IO.FS.writeFile path content
+
+/-- Build and write an operational certificate TextEnvelope.
+    OpCert CBOR format: [[hotVKey(58), seqNum(uint), kesPeriod(uint), coldSig(58)], coldVKey(58)]
+    (2-element outer array wrapping the 4-element cert array + cold VK) -/
+def writeOperationalCert (path : String)
+    (hotVKey : ByteArray) (seqNum : Nat) (kesPeriod : Nat) (coldSig : ByteArray)
+    (coldVKey : ByteArray) : IO Unit := do
+  -- Encode the cert as CBOR: [[hotVKey, seqNum, kesPeriod, coldSig], coldVKey]
+  let encUInt (n : Nat) : ByteArray :=
+    if n <= 23 then ByteArray.mk #[n.toUInt8]
+    else if n <= 255 then ByteArray.mk #[0x18, n.toUInt8]
+    else ByteArray.mk #[0x19, (n / 256).toUInt8, (n % 256).toUInt8]
+  let inner :=
+    ByteArray.mk #[0x84]  -- 4-element array
+    ++ cborWrapBytes hotVKey
+    ++ encUInt seqNum
+    ++ encUInt kesPeriod
+    ++ cborWrapBytes coldSig
+  let outer :=
+    ByteArray.mk #[0x82]  -- 2-element array
+    ++ inner
+    ++ cborWrapBytes coldVKey
+  let hex := encodeHex outer
+  let content := s!"\{\n    \"type\": \"NodeOperationalCertificate\",\n    \"description\": \"Operational Certificate\",\n    \"cborHex\": \"{hex}\"\n}\n"
+  IO.FS.writeFile path content
+
+/-- Write the OpCert issue counter file -/
+def writeOpCertCounter (path : String) (seqNum : Nat) (coldVKey : ByteArray) : IO Unit := do
+  -- Counter format: [seqNum, coldVKey]
+  let encUInt (n : Nat) : ByteArray :=
+    if n <= 23 then ByteArray.mk #[n.toUInt8]
+    else if n <= 255 then ByteArray.mk #[0x18, n.toUInt8]
+    else ByteArray.mk #[0x19, (n / 256).toUInt8, (n % 256).toUInt8]
+  let cbor := ByteArray.mk #[0x82] ++ encUInt seqNum ++ cborWrapBytes coldVKey
+  let hex := encodeHex cbor
+  let content := s!"\{\n    \"type\": \"NodeOpCertCounterFile\",\n    \"description\": \"Next Certificate Issue Number: {seqNum}\",\n    \"cborHex\": \"{hex}\"\n}\n"
+  IO.FS.writeFile path content
+
+end Dion.Crypto.TextEnvelope

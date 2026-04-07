@@ -1,4 +1,4 @@
-import Cleanode.Network.Handshake
+import Dion.Network.Handshake
 
 /-!
 # Handshake Server Implementation
@@ -16,12 +16,12 @@ and responds with AcceptVersion or Refuse.
 - Ouroboros Network Spec Section 4.1 (Handshake)
 -/
 
-namespace Cleanode.Network.HandshakeServer
+namespace Dion.Network.HandshakeServer
 
-open Cleanode.Network.Handshake
-open Cleanode.Network.Cbor
-open Cleanode.Network.Multiplexer
-open Cleanode.Network.Socket
+open Dion.Network.Handshake
+open Dion.Network.Cbor
+open Dion.Network.Multiplexer
+open Dion.Network.Socket
 
 -- ====================
 -- = Version Selection =
@@ -36,7 +36,7 @@ def findBestVersion (proposals : List (VersionNumber × VersionData))
   let sorted := compatible.toArray.qsort (fun a b => a.1.value > b.1.value)
   sorted[0]?
 
-/-- Default supported versions for a Cleanode server -/
+/-- Default supported versions for a Dion server -/
 def defaultSupportedVersions : List Nat := [14, 15]
 
 -- ====================
@@ -130,4 +130,4 @@ theorem handshake_version_valid :
       proposals.any (fun p => p.1 == vn) := by
   sorry
 
-end Cleanode.Network.HandshakeServer
+end Dion.Network.HandshakeServer

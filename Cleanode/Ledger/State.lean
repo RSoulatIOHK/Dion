@@ -1,7 +1,7 @@
-import Cleanode.Ledger.UTxO
-import Cleanode.Ledger.Fee
-import Cleanode.Ledger.Governance
-import Cleanode.Network.EraTx
+import Dion.Ledger.UTxO
+import Dion.Ledger.Fee
+import Dion.Ledger.Governance
+import Dion.Network.EraTx
 import Std.Data.HashMap
 
 /-!
@@ -20,13 +20,13 @@ transactions. This includes:
 - Shelley Formal Specification
 -/
 
-namespace Cleanode.Ledger.State
+namespace Dion.Ledger.State
 
-open Cleanode.Ledger.UTxO
-open Cleanode.Ledger.Fee
-open Cleanode.Ledger.Governance
-open Cleanode.Network.ConwayBlock
-open Cleanode.Network.EraTx
+open Dion.Ledger.UTxO
+open Dion.Ledger.Fee
+open Dion.Ledger.Governance
+open Dion.Network.ConwayBlock
+open Dion.Network.EraTx
 
 -- ====================
 -- = Stake Pools      =
@@ -533,6 +533,43 @@ def epochForSlot (state : LedgerState) (slot : Nat) : Nat :=
   slot / state.protocolParams.epochLength
 
 -- ====================
+-- = Checkpoint Ring  =
+-- ====================
+
+/-- A ledger state checkpoint at a specific block.
+    Used to roll back on MsgRollBackward. -/
+structure LedgerCheckpoint where
+  slot    : Nat
+  blockNo : Nat
+  hash    : ByteArray
+  ledger  : LedgerState
+
+/-- Ring buffer of recent LedgerCheckpoints (capped at maxCheckpoints).
+    Newest checkpoint is last. -/
+structure CheckpointRing where
+  checkpoints : Array LedgerCheckpoint
+  maxSize     : Nat := 20
+
+def CheckpointRing.empty : CheckpointRing := { checkpoints := #[] }
+
+def CheckpointRing.push (ring : CheckpointRing) (cp : LedgerCheckpoint) : CheckpointRing :=
+  let arr := ring.checkpoints.push cp
+  if arr.size > ring.maxSize then
+    { ring with checkpoints := arr.extract 1 arr.size }
+  else
+    { ring with checkpoints := arr }
+
+/-- Find the latest checkpoint at or before the given slot. -/
+def CheckpointRing.findRollbackTarget (ring : CheckpointRing) (slot : Nat)
+    : Option LedgerCheckpoint :=
+  ring.checkpoints.foldl (fun best cp =>
+    if cp.slot <= slot then
+      match best with
+      | none => some cp
+      | some b => if cp.slot > b.slot then some cp else best
+    else best) none
+
+-- ====================
 -- = Proof Scaffolds  =
 -- ====================
 
@@ -548,4 +585,4 @@ theorem state_invariants_preserved :
       True → True := by
   intros; trivial
 
-end Cleanode.Ledger.State
+end Dion.Ledger.State

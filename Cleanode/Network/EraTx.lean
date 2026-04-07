@@ -1,5 +1,5 @@
-import Cleanode.Network.Cbor
-import Cleanode.Network.ConwayBlock
+import Dion.Network.Cbor
+import Dion.Network.ConwayBlock
 
 /-!
 # Era-Specific Transaction Structures
@@ -22,10 +22,10 @@ era-specific metadata and type aliases.
 - CIP-1694: Conway governance
 -/
 
-namespace Cleanode.Network.EraTx
+namespace Dion.Network.EraTx
 
-open Cleanode.Network.Cbor
-open Cleanode.Network.ConwayBlock
+open Dion.Network.Cbor
+open Dion.Network.ConwayBlock
 
 -- ====================
 -- = Multi-Asset (Mary) =
@@ -210,4 +210,4 @@ def eraHasGovernance : CardanoEra → Bool
   | .Conway => true
   | _ => false
 
-end Cleanode.Network.EraTx
+end Dion.Network.EraTx

@@ -17,7 +17,7 @@ Only the fields needed by the node for protocol operation are extracted.
 - https://github.com/IntersectMBO/cardano-node/tree/master/configuration
 -/
 
-namespace Cleanode.Config.Genesis
+namespace Dion.Config.Genesis
 
 open Lean (Json)
 
@@ -301,4 +301,4 @@ def loadAlonzoGenesis (path : System.FilePath) : IO (Except String AlonzoGenesis
 def loadConwayGenesis (path : System.FilePath) : IO (Except String ConwayGenesis) :=
   loadGenesisFile path parseConwayGenesis
 
-end Cleanode.Config.Genesis
+end Dion.Config.Genesis

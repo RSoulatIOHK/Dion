@@ -1,6 +1,6 @@
-import Cleanode.Network.TxSubmission2State
-import Cleanode.Network.PeerSharingState
-import Cleanode.Network.Mempool
+import Dion.Network.TxSubmission2State
+import Dion.Network.PeerSharingState
+import Dion.Network.Mempool
 
 /-!
 # Phase 3 Proof Scaffolds
@@ -12,54 +12,54 @@ Most proofs use `sorry` as they involve IO or complex list properties.
 Trivially provable structural theorems are fully proved.
 -/
 
-namespace Cleanode.Proofs.Phase3Proofs
+namespace Dion.Proofs.Phase3Proofs
 
-open Cleanode.Network.Mempool
+open Dion.Network.Mempool
 
 -- ============================
 -- = TxSubmission2 Properties =
 -- ============================
 
 /-- The protocol starts in StInit -/
-theorem txsubmission_starts_init (sock : Cleanode.Network.Socket.Socket) :
-    (Cleanode.Network.TxSubmission2State.TypedTxSubmission2.new sock).state =
-      Cleanode.Network.TxSubmission2State.TxSubmission2State.StInit := by
+theorem txsubmission_starts_init (sock : Dion.Network.Socket.Socket) :
+    (Dion.Network.TxSubmission2State.TypedTxSubmission2.new sock).state =
+      Dion.Network.TxSubmission2State.TxSubmission2State.StInit := by
   rfl
 
 /-- Agency is always well-defined: every state is either client, server, or terminal -/
-theorem txsubmission_agency_complete (s : Cleanode.Network.TxSubmission2State.TxSubmission2State) :
-    Cleanode.Network.TxSubmission2State.isClientAgency s = true ∨
-    Cleanode.Network.TxSubmission2State.isServerAgency s = true ∨
-    Cleanode.Network.TxSubmission2State.isTerminal s = true := by
-  cases s <;> simp [Cleanode.Network.TxSubmission2State.isClientAgency,
-    Cleanode.Network.TxSubmission2State.isServerAgency,
-    Cleanode.Network.TxSubmission2State.isTerminal]
+theorem txsubmission_agency_complete (s : Dion.Network.TxSubmission2State.TxSubmission2State) :
+    Dion.Network.TxSubmission2State.isClientAgency s = true ∨
+    Dion.Network.TxSubmission2State.isServerAgency s = true ∨
+    Dion.Network.TxSubmission2State.isTerminal s = true := by
+  cases s <;> simp [Dion.Network.TxSubmission2State.isClientAgency,
+    Dion.Network.TxSubmission2State.isServerAgency,
+    Dion.Network.TxSubmission2State.isTerminal]
 
 /-- Client and server agency are mutually exclusive -/
-theorem txsubmission_agency_exclusive (s : Cleanode.Network.TxSubmission2State.TxSubmission2State) :
-    ¬(Cleanode.Network.TxSubmission2State.isClientAgency s = true ∧
-      Cleanode.Network.TxSubmission2State.isServerAgency s = true) := by
-  cases s <;> simp [Cleanode.Network.TxSubmission2State.isClientAgency,
-    Cleanode.Network.TxSubmission2State.isServerAgency]
+theorem txsubmission_agency_exclusive (s : Dion.Network.TxSubmission2State.TxSubmission2State) :
+    ¬(Dion.Network.TxSubmission2State.isClientAgency s = true ∧
+      Dion.Network.TxSubmission2State.isServerAgency s = true) := by
+  cases s <;> simp [Dion.Network.TxSubmission2State.isClientAgency,
+    Dion.Network.TxSubmission2State.isServerAgency]
 
 -- ============================
 -- = PeerSharing Properties   =
 -- ============================
 
 /-- The protocol starts in StIdle -/
-theorem peersharing_starts_idle (sock : Cleanode.Network.Socket.Socket) :
-    (Cleanode.Network.PeerSharingState.TypedPeerSharing.new sock).state =
-      Cleanode.Network.PeerSharingState.PeerSharingState.StIdle := by
+theorem peersharing_starts_idle (sock : Dion.Network.Socket.Socket) :
+    (Dion.Network.PeerSharingState.TypedPeerSharing.new sock).state =
+      Dion.Network.PeerSharingState.PeerSharingState.StIdle := by
   rfl
 
 /-- Agency is always well-defined -/
-theorem peersharing_agency_complete (s : Cleanode.Network.PeerSharingState.PeerSharingState) :
-    Cleanode.Network.PeerSharingState.isClientAgency s = true ∨
-    Cleanode.Network.PeerSharingState.isServerAgency s = true ∨
-    Cleanode.Network.PeerSharingState.isTerminal s = true := by
-  cases s <;> simp [Cleanode.Network.PeerSharingState.isClientAgency,
-    Cleanode.Network.PeerSharingState.isServerAgency,
-    Cleanode.Network.PeerSharingState.isTerminal]
+theorem peersharing_agency_complete (s : Dion.Network.PeerSharingState.PeerSharingState) :
+    Dion.Network.PeerSharingState.isClientAgency s = true ∨
+    Dion.Network.PeerSharingState.isServerAgency s = true ∨
+    Dion.Network.PeerSharingState.isTerminal s = true := by
+  cases s <;> simp [Dion.Network.PeerSharingState.isClientAgency,
+    Dion.Network.PeerSharingState.isServerAgency,
+    Dion.Network.PeerSharingState.isTerminal]
 
 -- ============================
 -- = Mempool Properties       =
@@ -95,4 +95,4 @@ theorem mempool_getTxIds_bounded (pool : Mempool) (count : Nat) :
     (pool.getTxIds count).length ≤ count := by
   sorry
 
-end Cleanode.Proofs.Phase3Proofs
+end Dion.Proofs.Phase3Proofs

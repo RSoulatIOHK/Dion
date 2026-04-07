@@ -1,4 +1,4 @@
-import Cleanode.Network.Multiplexer
+import Dion.Network.Multiplexer
 
 /-!
 # Multiplexer Correctness Proofs
@@ -16,9 +16,9 @@ is pure and may be fully provable; properties involving IO use sorry.
 - Ouroboros Network Spec Section 3 (Multiplexing)
 -/
 
-namespace Cleanode.Proofs.MuxProofs
+namespace Dion.Proofs.MuxProofs
 
-open Cleanode.Network.Multiplexer
+open Dion.Network.Multiplexer
 
 -- ====================
 -- = Frame Round-trip =
@@ -73,4 +73,4 @@ theorem segment_size_bounded (payload : ByteArray) (maxSize : Nat) :
     ∀ seg ∈ segmentPayload payload maxSize, seg.size ≤ maxSize := by
   sorry
 
-end Cleanode.Proofs.MuxProofs
+end Dion.Proofs.MuxProofs

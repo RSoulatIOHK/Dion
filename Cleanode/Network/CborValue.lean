@@ -1,5 +1,5 @@
-import Cleanode.Network.Cbor
-import Cleanode.Network.ByteArrayBuilder
+import Dion.Network.Cbor
+import Dion.Network.ByteArrayBuilder
 
 /-!
 # CBOR Value Type and Generic Codec
@@ -10,16 +10,16 @@ any CBOR data item, along with generic encode/decode functions.
 ## Specification Propositions
 
 Formal specifications for CBOR encoding/decoding correctness are defined
-as propositions, to be proved in `Cleanode.Proofs.CborProofs`.
+as propositions, to be proved in `Dion.Proofs.CborProofs`.
 
 ## References
 - RFC 8949: Concise Binary Object Representation (CBOR)
 - Ouroboros Network Spec Section 3.1 (CBOR framing)
 -/
 
-namespace Cleanode.Network.CborValue
+namespace Dion.Network.CborValue
 
-open Cleanode.Network.Cbor
+open Dion.Network.Cbor
 
 -- ====================
 -- = CBOR Value Type  =
@@ -252,4 +252,4 @@ def CborDecodes (bs : ByteArray) (v : CborValue) : Prop :=
   ∃ r : DecodeResult CborValue,
     decodeCborValue bs = some r ∧ r.value = v
 
-end Cleanode.Network.CborValue
+end Dion.Network.CborValue

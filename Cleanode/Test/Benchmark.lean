@@ -1,7 +1,7 @@
-import Cleanode.Network.Crypto
-import Cleanode.Network.CryptoSpec
-import Cleanode.Test.TestHarness
-import Cleanode.Consensus.Praos.ForgeLoop
+import Dion.Network.Crypto
+import Dion.Network.CryptoSpec
+import Dion.Test.TestHarness
+import Dion.Consensus.Praos.ForgeLoop
 
 /-!
 # Benchmark Timing Harness
@@ -19,12 +19,12 @@ mean/min/max per operation. Used for performance regression tracking.
 Machine-readable lines: `bench:<name>:<iterations>:<total_ms>:<mean_us>`
 -/
 
-namespace Cleanode.Test.Benchmark
+namespace Dion.Test.Benchmark
 
-open Cleanode.Network.Crypto
-open Cleanode.Network.CryptoSpec
-open Cleanode.Test.TestHarness
-open Cleanode.Consensus.Praos.ForgeLoop (getUnixTimeMs)
+open Dion.Network.Crypto
+open Dion.Network.CryptoSpec
+open Dion.Test.TestHarness
+open Dion.Consensus.Praos.ForgeLoop (getUnixTimeMs)
 
 /-- Benchmark result for a single operation -/
 structure BenchResult where
@@ -112,4 +112,4 @@ def runBenchmarks : IO Unit := do
   IO.println ""
   IO.println "=== Benchmarks complete ==="
 
-end Cleanode.Test.Benchmark
+end Dion.Test.Benchmark

@@ -1,5 +1,5 @@
-import Cleanode.TUI.State
-import Cleanode.Monitoring.Metrics
+import Dion.TUI.State
+import Dion.Monitoring.Metrics
 
 /-!
 # Metrics HTTP Server
@@ -8,21 +8,21 @@ Starts a background HTTP server serving Prometheus metrics on a configurable por
 Uses C FFI for the POSIX socket server, with a Lean callback to generate metrics text.
 -/
 
-namespace Cleanode.Monitoring.Server
+namespace Dion.Monitoring.Server
 
-open Cleanode.TUI.State
-open Cleanode.Monitoring.Metrics
+open Dion.TUI.State
+open Dion.Monitoring.Metrics
 
 -- ====================
 -- = FFI Bindings     =
 -- ====================
 
 /-- Register the metrics callback (called before starting the server) -/
-@[extern "cleanode_metrics_set_callback"]
+@[extern "dion_metrics_set_callback"]
 opaque metricsSetCallback (callback : Unit → IO String) : IO Unit
 
 /-- Start the HTTP server on the given port (blocks forever — run in a Task) -/
-@[extern "cleanode_metrics_server_start"]
+@[extern "dion_metrics_server_start"]
 opaque metricsServerStart (port : UInt16) : IO (Except String Unit)
 
 -- ====================
@@ -48,4 +48,4 @@ def startMetricsServer (port : UInt16) (tuiRef : IO.Ref TUIState) : IO (Task (Ex
     | .error msg => IO.eprintln s!"[metrics] Server error: {msg}"
   return task
 
-end Cleanode.Monitoring.Server
+end Dion.Monitoring.Server

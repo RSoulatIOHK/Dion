@@ -1,10 +1,10 @@
-import Cleanode.Mithril.Types
-import Cleanode.Mithril.Certificate
-import Cleanode.Mithril.Zstd
-import Cleanode.Mithril.Tar
-import Cleanode.Mithril.ImmutableDB
-import Cleanode.Network.Http
-import Cleanode.Network.ChainSync
+import Dion.Mithril.Types
+import Dion.Mithril.Certificate
+import Dion.Mithril.Zstd
+import Dion.Mithril.Tar
+import Dion.Mithril.ImmutableDB
+import Dion.Network.Http
+import Dion.Network.ChainSync
 
 /-!
 # Mithril Client
@@ -19,22 +19,22 @@ High-level client for Mithril fast-sync:
 
 ## Usage
 ```
-cleanode run --mithril-sync --preprod
+dion run --mithril-sync --preprod
 ```
 
 ## References
 - https://mithril.network/doc/manual/getting-started/bootstrap-cardano-node
 -/
 
-namespace Cleanode.Mithril.Client
+namespace Dion.Mithril.Client
 
-open Cleanode.Mithril.Types
-open Cleanode.Mithril.Certificate
-open Cleanode.Mithril.Zstd
-open Cleanode.Mithril.Tar
-open Cleanode.Mithril.ImmutableDB
-open Cleanode.Network.Http
-open Cleanode.Network.ChainSync
+open Dion.Mithril.Types
+open Dion.Mithril.Certificate
+open Dion.Mithril.Zstd
+open Dion.Mithril.Tar
+open Dion.Mithril.ImmutableDB
+open Dion.Network.Http
+open Dion.Network.ChainSync
 
 -- ====================
 -- = Client Errors    =
@@ -157,16 +157,22 @@ def downloadSnapshot (snapshot : MithrilSnapshot) (downloadDir : String)
       return .ok compressedPath
 
 /-- Decompress a downloaded snapshot.
-    Returns the path to the decompressed tar file. -/
+    The output name is derived from the compressed path so different snapshots
+    don't share a cached tar file. -/
 def decompressSnapshot (compressedPath : String) (outputDir : String)
     (report : SyncStage → IO Unit := defaultProgressReporter)
     : IO (Except MithrilError String) := do
   report .decompressing
   IO.FS.createDirAll outputDir
 
-  let decompressedPath := s!"{outputDir}/snapshot.tar"
+  -- Derive tar name from the .zst filename (strip .zst suffix)
+  let baseName := if compressedPath.endsWith ".zst"
+    then compressedPath.dropRight 4
+    else compressedPath
+  let tarName := (baseName.splitOn "/").getLast? |>.getD "snapshot"
+  let decompressedPath := s!"{outputDir}/{tarName}.tar"
 
-  -- Check if already decompressed
+  -- Check if already decompressed (same snapshot)
   let cached ← System.FilePath.pathExists decompressedPath
   if cached then
     IO.println s!"[mithril] Using cached decompressed file: {decompressedPath}"
@@ -186,13 +192,9 @@ def extractSnapshot (tarPath : String) (dbDir : String)
     : IO (Except MithrilError String) := do
   report .extracting
 
-  -- Check if already extracted (immutable directory exists)
-  let immutableDir := s!"{dbDir}/immutable"
-  let extracted ← System.FilePath.pathExists immutableDir
-  if extracted then
-    IO.println s!"[mithril] Using cached extraction: {dbDir}"
-    return .ok dbDir
-
+  -- Always re-extract: never trust a stale immutable/ directory from a previous
+  -- (potentially different-network) snapshot. Downloads are cached by snapshot
+  -- filename, so only the disk I/O happens here.
   let result ← extractTar tarPath dbDir
   match result with
   | .error msg => return .error (.extractError msg)
@@ -201,11 +203,61 @@ def extractSnapshot (tarPath : String) (dbDir : String)
     return .ok dbDir
 
 /-- Full Mithril sync pipeline: discover → verify → download → decompress → extract → read tip.
+    If the existing ImmutableDB on disk is recent (within `staleLagThreshold` immutable files of
+    the latest snapshot), skip the download entirely and reuse the cached DB.
     Returns the sync result with the chain tip for peer sync resumption. -/
 def mithrilSync (config : AggregatorConfig) (dataDir : String)
     (report : SyncStage → IO Unit := defaultProgressReporter)
+    (staleLagThreshold : Nat := 20)  -- re-download only if >20 immutable files behind
     : IO (Except MithrilError MithrilSyncResult) := do
-  -- Discover and verify
+  let dbDir := s!"{dataDir}/mithril/db"
+
+  -- Fast path: if the ImmutableDB already exists, read its tip and check staleness
+  -- before hitting the network
+  let existingTip ← readImmutableTip dbDir
+  match existingTip with
+  | some tip =>
+    -- Fetch latest snapshot metadata (cheap — just JSON, no download)
+    let snapResult ← fetchLatestSnapshot config.aggregatorUrl
+    match snapResult with
+    | .error _ =>
+      -- Network unavailable — use existing DB
+      IO.println s!"[mithril] Network unavailable, using cached ImmutableDB (tip: slot={tip.slot})"
+      let dummySnapshot : MithrilSnapshot := {
+        beacon := { epoch := 0, immutableFileNumber := tip.chunkNumber },
+        size := 0, ancillarySize := 0, compressionAlgorithm := "", certificateHash := "",
+        digest := "", locations := [], ancillaryLocations := [], network := "",
+        createdAt := "", cardanoNodeVersion := "" }
+      let dummyChain : Dion.Mithril.Certificate.CertificateChain :=
+        { certificates := [], genesisHash := "", depth := 0 }
+      return .ok { snapshot := dummySnapshot, chain := dummyChain,
+                   dbPath := dbDir, tipPoint := tip.toPoint, tipSlot := tip.slot }
+    | .ok snapshot =>
+      -- Compare using the saved Mithril immutable file number (written after extraction),
+      -- not the local chunk index which uses a different numbering.
+      let markerFile := s!"{dbDir}/.mithril_immutable_no"
+      let savedImmNo ← do
+        let exists' ← System.FilePath.pathExists markerFile
+        if exists' then
+          let s ← IO.FS.readFile markerFile
+          pure (s.trim.toNat?.getD 0)
+        else pure 0
+      let lag := if snapshot.beacon.immutableFileNumber >= savedImmNo && savedImmNo > 0
+                 then snapshot.beacon.immutableFileNumber - savedImmNo
+                 else staleLagThreshold + 1  -- force re-download if no marker
+      if lag <= staleLagThreshold then
+        IO.println s!"[mithril] Cached ImmutableDB is fresh (immutable={savedImmNo}, latest={snapshot.beacon.immutableFileNumber}, lag={lag}) — skipping download"
+        report (.complete snapshot.beacon.epoch snapshot.beacon.immutableFileNumber tip.slot)
+        let dummyChain : Dion.Mithril.Certificate.CertificateChain :=
+          { certificates := [], genesisHash := "", depth := 0 }
+        return .ok { snapshot, chain := dummyChain,
+                     dbPath := dbDir, tipPoint := tip.toPoint, tipSlot := tip.slot }
+      else
+        IO.println s!"[mithril] Cached ImmutableDB is stale (saved={savedImmNo}, latest={snapshot.beacon.immutableFileNumber}, lag={lag}) — downloading new snapshot"
+  | none =>
+    IO.println s!"[mithril] No existing ImmutableDB found — downloading snapshot"
+
+  -- Slow path: full download pipeline
   let verifyResult ← discoverAndVerify config report
   match verifyResult with
   | .error e => return .error e
@@ -226,7 +278,6 @@ def mithrilSync (config : AggregatorConfig) (dataDir : String)
       | .ok tarPath =>
 
         -- Extract (.tar → db/)
-        let dbDir := s!"{dataDir}/mithril/db"
         let extractResult ← extractSnapshot tarPath dbDir report
         match extractResult with
         | .error e => return .error e
@@ -239,6 +290,9 @@ def mithrilSync (config : AggregatorConfig) (dataDir : String)
           | some tip =>
             let tipPoint := tip.toPoint
             IO.println s!"[mithril] Chain tip: slot={tip.slot}, hash={tip.headerHash.size}B, chunk={tip.chunkNumber}, entries={tip.entryCount}"
+            -- Write marker so next run knows which Mithril immutable number we have
+            let markerFile := s!"{extractedDir}/.mithril_immutable_no"
+            IO.FS.writeFile markerFile (toString snapshot.beacon.immutableFileNumber)
             report (.complete snapshot.beacon.epoch snapshot.beacon.immutableFileNumber tip.slot)
             return .ok {
               snapshot
@@ -248,4 +302,4 @@ def mithrilSync (config : AggregatorConfig) (dataDir : String)
               tipSlot := tip.slot
             }
 
-end Cleanode.Mithril.Client
+end Dion.Mithril.Client

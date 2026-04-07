@@ -1,5 +1,5 @@
-import Cleanode.Network.Cbor
-import Cleanode.Ledger.UTxO
+import Dion.Network.Cbor
+import Dion.Ledger.UTxO
 
 /-!
 # UTxO Query Result CBOR Encoding
@@ -27,11 +27,11 @@ For simplicity (ADA-only outputs without scripts):
 - Babbage CDDL: post_alonzo_transaction_output
 -/
 
-namespace Cleanode.Network.N2C.UTxOCodec
+namespace Dion.Network.N2C.UTxOCodec
 
-open Cleanode.Network.Cbor
-open Cleanode.Network.ConwayBlock (TxOutput)
-open Cleanode.Ledger.UTxO
+open Dion.Network.Cbor
+open Dion.Network.ConwayBlock (TxOutput)
+open Dion.Ledger.UTxO
 
 -- ====================
 -- = Encoding         =
@@ -69,4 +69,4 @@ def filterByTxIns (utxo : UTxOSet) (txIns : List (ByteArray × Nat)) : List UTxO
     let id : UTxOId := { txHash, outputIndex := idx }
     (utxo.lookup id).map fun output => { id, output }
 
-end Cleanode.Network.N2C.UTxOCodec
+end Dion.Network.N2C.UTxOCodec

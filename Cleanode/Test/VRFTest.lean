@@ -1,5 +1,5 @@
-import Cleanode.Network.Crypto
-import Cleanode.Test.TestHarness
+import Dion.Network.Crypto
+import Dion.Test.TestHarness
 
 /-!
 # VRF Tests
@@ -21,10 +21,10 @@ are marked as `skip` until verified.
 - cardano-base/cardano-crypto-praos
 -/
 
-namespace Cleanode.Test.VRFTest
+namespace Dion.Test.VRFTest
 
-open Cleanode.Network.Crypto
-open Cleanode.Test.TestHarness
+open Dion.Network.Crypto
+open Dion.Test.TestHarness
 
 -- ====================
 -- = Structural Tests =
@@ -89,4 +89,4 @@ def runVRFTests : IO (Array TestResult) := do
 
   return results
 
-end Cleanode.Test.VRFTest
+end Dion.Test.VRFTest

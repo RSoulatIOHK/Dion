@@ -1,6 +1,6 @@
-import Cleanode.Network.Cbor
-import Cleanode.Network.Handshake
-import Cleanode.Network.N2C.Mux
+import Dion.Network.Cbor
+import Dion.Network.Handshake
+import Dion.Network.N2C.Mux
 
 /-!
 # Node-to-Client Handshake
@@ -11,20 +11,20 @@ The N2C handshake uses the same CBOR message format as N2N but:
 
 ## Protocol Flow
 1. `cardano-cli` sends ProposeVersions with N2C versions {16, 17, 18}
-2. Cleanode responds with AcceptVersion (highest mutual version)
+2. Dion responds with AcceptVersion (highest mutual version)
 
 ## References
 - Ouroboros Network Spec Section 4.1
 -/
 
-namespace Cleanode.Network.N2C.Handshake
+namespace Dion.Network.N2C.Handshake
 
-open Cleanode.Network.Cbor
-open Cleanode.Network.Handshake (NetworkMagic VersionNumber)
-open Cleanode.Network.N2C.Mux
-open Cleanode.Network.N2C.MiniProtocolId
-open Cleanode.Network.Multiplexer (Mode)
-open Cleanode.Network.Socket
+open Dion.Network.Cbor
+open Dion.Network.Handshake (NetworkMagic VersionNumber)
+open Dion.Network.N2C.Mux
+open Dion.Network.N2C.MiniProtocolId
+open Dion.Network.Multiplexer (Mode)
+open Dion.Network.Socket
 
 -- ====================
 -- = Types            =
@@ -165,4 +165,4 @@ def receiveAndRespondN2CHandshake (sock : Socket)
         | .error e => return .error e
         | .ok () => return .ok (some version)
 
-end Cleanode.Network.N2C.Handshake
+end Dion.Network.N2C.Handshake

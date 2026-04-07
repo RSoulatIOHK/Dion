@@ -1,9 +1,9 @@
-import Cleanode.Plutus.UPLC.Term
-import Cleanode.Plutus.UPLC.Flat
-import Cleanode.Plutus.ScriptContext
-import Cleanode.Network.ConwayBlock
-import Cleanode.Network.Crypto
-import Cleanode.Ledger.UTxO
+import Dion.Plutus.UPLC.Term
+import Dion.Plutus.UPLC.Flat
+import Dion.Plutus.ScriptContext
+import Dion.Network.ConwayBlock
+import Dion.Network.Crypto
+import Dion.Ledger.UTxO
 
 /-!
 # Plutus Script Evaluation Pipeline
@@ -25,14 +25,14 @@ End-to-end pipeline for evaluating Plutus scripts:
 - CIP-0069: PlutusV3 script interface
 -/
 
-namespace Cleanode.Plutus.Evaluate
+namespace Dion.Plutus.Evaluate
 
-open Cleanode.Plutus.UPLC
-open Cleanode.Plutus.UPLC.Flat
-open Cleanode.Plutus.ScriptContext
-open Cleanode.Network.ConwayBlock
-open Cleanode.Network.Crypto
-open Cleanode.Ledger.UTxO
+open Dion.Plutus.UPLC
+open Dion.Plutus.UPLC.Flat
+open Dion.Plutus.ScriptContext
+open Dion.Network.ConwayBlock
+open Dion.Network.Crypto
+open Dion.Ledger.UTxO
 
 -- ====================
 -- = Script Version   =
@@ -315,34 +315,34 @@ where
   go : PlutusData → ByteArray
   | .Integer n =>
     if n >= 0 then
-      Cleanode.Network.Cbor.encodeUInt n.toNat
+      Dion.Network.Cbor.encodeUInt n.toNat
     else
       -- Negative integer: CBOR major type 1, value = -1 - n
       let absVal := (-1 - n).toNat
-      Cleanode.Network.Cbor.encodeNegInt absVal
+      Dion.Network.Cbor.encodeNegInt absVal
   | .ByteString bs =>
-    Cleanode.Network.Cbor.encodeBytes bs
+    Dion.Network.Cbor.encodeBytes bs
   | .List items =>
     let body := items.foldl (fun acc item => acc ++ go item) ByteArray.empty
-    Cleanode.Network.Cbor.encodeArrayHeader items.length ++ body
+    Dion.Network.Cbor.encodeArrayHeader items.length ++ body
   | .Map entries =>
     let body := entries.foldl (fun acc (k, v) => acc ++ go k ++ go v) ByteArray.empty
-    Cleanode.Network.Cbor.encodeMapHeader entries.length ++ body
+    Dion.Network.Cbor.encodeMapHeader entries.length ++ body
   | .Constr tag fields =>
     -- Plutus CBOR encoding for constructors:
     -- tag 0-6: CBOR tag (121 + tag) wrapping array of fields
     -- tag 7-127: CBOR tag (1280 + tag - 7) wrapping array of fields
     -- tag > 127: CBOR tag 102 wrapping [tag, fields]
     let fieldsBytes := fields.foldl (fun acc f => acc ++ go f) ByteArray.empty
-    let fieldsArr := Cleanode.Network.Cbor.encodeArrayHeader fields.length ++ fieldsBytes
+    let fieldsArr := Dion.Network.Cbor.encodeArrayHeader fields.length ++ fieldsBytes
     if tag <= 6 then
-      Cleanode.Network.Cbor.encodeTagged (121 + tag) fieldsArr
+      Dion.Network.Cbor.encodeTagged (121 + tag) fieldsArr
     else if tag <= 127 then
-      Cleanode.Network.Cbor.encodeTagged (1280 + tag - 7) fieldsArr
+      Dion.Network.Cbor.encodeTagged (1280 + tag - 7) fieldsArr
     else
-      Cleanode.Network.Cbor.encodeTagged 102
-        (Cleanode.Network.Cbor.encodeArrayHeader 2 ++
-         Cleanode.Network.Cbor.encodeUInt tag ++ fieldsArr)
+      Dion.Network.Cbor.encodeTagged 102
+        (Dion.Network.Cbor.encodeArrayHeader 2 ++
+         Dion.Network.Cbor.encodeUInt tag ++ fieldsArr)
 
 /-- Extract the script credential hash from a certificate, if it requires a script witness. -/
 private def certScriptHash (cert : RawCertificate) : Option ByteArray :=
@@ -466,4 +466,4 @@ def evaluateTransactionScripts
   let _ := body; let _ := witnesses; let _ := utxo; let _ := txHash
   .ok ()
 
-end Cleanode.Plutus.Evaluate
+end Dion.Plutus.Evaluate

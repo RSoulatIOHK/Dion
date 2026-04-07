@@ -1,4 +1,4 @@
-import Cleanode.Network.Cbor
+import Dion.Network.Cbor
 
 /-!
 # Query Encoding/Decoding for LocalStateQuery
@@ -30,9 +30,9 @@ Conway is era 6 (Byron=0 .. Conway=6), so 6 levels of `[1, ...]`.
 - Ouroboros Network Spec Section 3.13
 -/
 
-namespace Cleanode.Network.N2C.StateQueryCodec
+namespace Dion.Network.N2C.StateQueryCodec
 
-open Cleanode.Network.Cbor
+open Dion.Network.Cbor
 
 -- ====================
 -- = Top-level Query  =
@@ -350,4 +350,4 @@ partial def decodeTxInSet (bs : ByteArray) : Option (List (ByteArray × Nat)) :=
     remaining := r4.remaining
   some txIns.reverse
 
-end Cleanode.Network.N2C.StateQueryCodec
+end Dion.Network.N2C.StateQueryCodec

@@ -1,83 +1,83 @@
-import Cleanode.Network.Basic
-import Cleanode.Network.Socket
-import Cleanode.Network.Handshake
-import Cleanode.Network.Multiplexer
-import Cleanode.Network.ChainSync
-import Cleanode.Network.Byron
-import Cleanode.Network.Shelley
-import Cleanode.Network.BlockFetch
-import Cleanode.Network.BlockFetchClient
-import Cleanode.Network.ConwayBlock
-import Cleanode.Network.Crypto
-import Cleanode.Network.Bech32
-import Cleanode.Network.TxSubmission2
-import Cleanode.Network.Mempool
-import Cleanode.Network.PeerSharing
-import Cleanode.Network.PeerDb
-import Cleanode.Network.PeerConnection
-import Cleanode.Network.ConnectionManager
-import Cleanode.Network.MuxDispatcher
-import Cleanode.Network.HandshakeServer
-import Cleanode.Config.Topology
-import Cleanode.Config.Genesis
-import Cleanode.Storage.BlockStore
-import Cleanode.Storage.ChainDB
-import Cleanode.Storage.Database
-import Cleanode.Consensus.Praos.LeaderElection
-import Cleanode.Consensus.Praos.ConsensusState
-import Cleanode.Crypto.VRF.ECVRF
-import Cleanode.Crypto.Sign.Ed25519.Signature
+import Dion.Network.Basic
+import Dion.Network.Socket
+import Dion.Network.Handshake
+import Dion.Network.Multiplexer
+import Dion.Network.ChainSync
+import Dion.Network.Byron
+import Dion.Network.Shelley
+import Dion.Network.BlockFetch
+import Dion.Network.BlockFetchClient
+import Dion.Network.ConwayBlock
+import Dion.Network.Crypto
+import Dion.Network.Bech32
+import Dion.Network.TxSubmission2
+import Dion.Network.Mempool
+import Dion.Network.PeerSharing
+import Dion.Network.PeerDb
+import Dion.Network.PeerConnection
+import Dion.Network.ConnectionManager
+import Dion.Network.MuxDispatcher
+import Dion.Network.HandshakeServer
+import Dion.Config.Topology
+import Dion.Config.Genesis
+import Dion.Storage.BlockStore
+import Dion.Storage.ChainDB
+import Dion.Storage.Database
+import Dion.Consensus.Praos.LeaderElection
+import Dion.Consensus.Praos.ConsensusState
+import Dion.Crypto.VRF.ECVRF
+import Dion.Crypto.Sign.Ed25519.Signature
 import Std.Sync
 import Pigment
-import Cleanode.TUI.State
-import Cleanode.TUI.Render
-import Cleanode.Mithril.Types
-import Cleanode.Mithril.Client
-import Cleanode.Mithril.Replay
-import Cleanode.CLI.Args
-import Cleanode.CLI.Query
-import Cleanode.Monitoring.Server
-import Cleanode.Consensus.Praos.SPOKeys
-import Cleanode.Consensus.Praos.ForgeLoop
-import Cleanode.Consensus.Praos.BlockAnnounce
-import Cleanode.Network.N2C.Server
-import Cleanode.Ledger.State
-import Cleanode.Ledger.Certificate
-import Cleanode.Ledger.Snapshot
-import Cleanode.Consensus.Praos.StakeDistribution
+import Dion.TUI.State
+import Dion.TUI.Render
+import Dion.Mithril.Types
+import Dion.Mithril.Client
+import Dion.Mithril.Replay
+import Dion.CLI.Args
+import Dion.CLI.Query
+import Dion.Monitoring.Server
+import Dion.Consensus.Praos.SPOKeys
+import Dion.Consensus.Praos.ForgeLoop
+import Dion.Consensus.Praos.BlockAnnounce
+import Dion.Network.N2C.Server
+import Dion.Ledger.State
+import Dion.Ledger.Certificate
+import Dion.Ledger.Snapshot
+import Dion.Consensus.Praos.StakeDistribution
 
-open Cleanode.Network
-open Cleanode.Network.Socket
-open Cleanode.Network.Handshake
-open Cleanode.Network.Multiplexer
-open Cleanode.Network.ChainSync
-open Cleanode.Network.Byron
-open Cleanode.Network.Shelley
-open Cleanode.Network.BlockFetch
-open Cleanode.Network.Crypto
-open Cleanode.Network.Bech32
-open Cleanode.Network.BlockFetchClient
-open Cleanode.Network.ConwayBlock
-open Cleanode.Network.TxSubmission2
-open Cleanode.Network.Mempool
-open Cleanode.Network.PeerDb
-open Cleanode.Network.PeerConnection
-open Cleanode.Network.ConnectionManager
-open Cleanode.Network.MuxDispatcher
-open Cleanode.Network.PeerSharing
-open Cleanode.Network.HandshakeServer
-open Cleanode.Config.Topology
-open Cleanode.Config.Genesis
-open Cleanode.Storage.BlockStore
-open Cleanode.Storage.ChainDB
-open Cleanode.Storage.Database
-open Cleanode.Consensus.Praos.LeaderElection
-open Cleanode.Consensus.Praos.ConsensusState
+open Dion.Network
+open Dion.Network.Socket
+open Dion.Network.Handshake
+open Dion.Network.Multiplexer
+open Dion.Network.ChainSync
+open Dion.Network.Byron
+open Dion.Network.Shelley
+open Dion.Network.BlockFetch
+open Dion.Network.Crypto
+open Dion.Network.Bech32
+open Dion.Network.BlockFetchClient
+open Dion.Network.ConwayBlock
+open Dion.Network.TxSubmission2
+open Dion.Network.Mempool
+open Dion.Network.PeerDb
+open Dion.Network.PeerConnection
+open Dion.Network.ConnectionManager
+open Dion.Network.MuxDispatcher
+open Dion.Network.PeerSharing
+open Dion.Network.HandshakeServer
+open Dion.Config.Topology
+open Dion.Config.Genesis
+open Dion.Storage.BlockStore
+open Dion.Storage.ChainDB
+open Dion.Storage.Database
+open Dion.Consensus.Praos.LeaderElection
+open Dion.Consensus.Praos.ConsensusState
 open Pigment
-open Cleanode.TUI.State
-open Cleanode.TUI.Render
+open Dion.TUI.State
+open Dion.TUI.Render
 
-namespace Cleanode.Node
+namespace Dion.Node
 
 /-- Encode a Nat as 8 big-endian bytes -/
 def natToBE8 (n : Nat) : ByteArray :=
@@ -106,7 +106,10 @@ def validateBlockHeader (shelleyInfo : ShelleyBlockHeader)
   let mut vrfPassed := false
   let mut kesPassed := false
   let mut opCertPassed := false
-  let epochLength := 432000
+  -- Use epoch length from consensus state if available, fall back to mainnet default
+  let epochLength ← match consensusRef with
+    | some csRef => pure (← csRef.get).epochLength
+    | none => pure 432000
   let slotsPerKESPeriod := 129600
   let epoch := shelleyInfo.slot / epochLength
   let kesPeriod := shelleyInfo.slot / slotsPerKESPeriod
@@ -193,4 +196,4 @@ def validateBlockHeader (shelleyInfo : ShelleyBlockHeader)
       ref.modify (·.updateConsensus fun c => { c with kesInvalid := c.kesInvalid + 1 })
   return { vrfOk := vrfPassed, kesOk := kesPassed, opCertOk := opCertPassed }
 
-end Cleanode.Node
+end Dion.Node

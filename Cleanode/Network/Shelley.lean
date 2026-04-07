@@ -1,4 +1,4 @@
-import Cleanode.Network.Cbor
+import Dion.Network.Cbor
 
 /-!
 # Shelley+ Era Block Header Parser
@@ -45,9 +45,9 @@ The header body array contains:
 - ouroboros-consensus Shelley codec
 -/
 
-namespace Cleanode.Network.Shelley
+namespace Dion.Network.Shelley
 
-open Cleanode.Network.Cbor
+open Dion.Network.Cbor
 
 -- ====================
 -- = Types            =
@@ -274,4 +274,4 @@ theorem shelley_header_roundtrip :
       True → True := by
   intros; trivial
 
-end Cleanode.Network.Shelley
+end Dion.Network.Shelley

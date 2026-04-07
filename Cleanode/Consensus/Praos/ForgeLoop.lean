@@ -1,12 +1,13 @@
-import Cleanode.Consensus.Praos.BlockForge
-import Cleanode.Consensus.Praos.ConsensusState
-import Cleanode.Consensus.Praos.StakeDistribution
-import Cleanode.Ledger.State
-import Cleanode.Ledger.Validation
-import Cleanode.Network.CborCursor
-import Cleanode.Network.ConwayBlock
-import Cleanode.Network.Crypto
-import Cleanode.Network.Mempool
+import Dion.Consensus.Praos.BlockForge
+import Dion.Consensus.Praos.ConsensusState
+import Dion.Consensus.Praos.StakeDistribution
+import Dion.Ledger.State
+import Dion.Ledger.Validation
+import Dion.Network.CborCursor
+import Dion.Network.ConwayBlock
+import Dion.Network.Crypto
+import Dion.Network.Mempool
+import Dion.TUI.State
 import Std.Sync
 
 /-!
@@ -35,22 +36,22 @@ Current slot = (now - systemStart) / slotLength
 - Cardano Node: ForgeLoop module
 -/
 
-namespace Cleanode.Consensus.Praos.ForgeLoop
+namespace Dion.Consensus.Praos.ForgeLoop
 
-open Cleanode.Consensus.Praos.BlockForge
-open Cleanode.Consensus.Praos.ConsensusState
-open Cleanode.Consensus.Praos.StakeDistribution
+open Dion.Consensus.Praos.BlockForge
+open Dion.Consensus.Praos.ConsensusState
+open Dion.Consensus.Praos.StakeDistribution
 
 -- ====================
 -- = Time FFI         =
 -- ====================
 
 /-- Get current Unix timestamp in seconds -/
-@[extern "cleanode_get_unix_time"]
+@[extern "dion_get_unix_time"]
 opaque getUnixTime : IO UInt64
 
 /-- Get current Unix timestamp in milliseconds -/
-@[extern "cleanode_get_unix_time_ms"]
+@[extern "dion_get_unix_time_ms"]
 opaque getUnixTimeMs : IO UInt64
 
 -- ====================
@@ -89,7 +90,7 @@ def SlotClock.preprod : SlotClock :=
 /-- Create a slot clock for preview -/
 def SlotClock.preview : SlotClock :=
   { systemStart := previewSystemStart, slotLength := 1,
-    epochLength := 432000, slotsPerKESPeriod := 129600 }
+    epochLength := 86400, slotsPerKESPeriod := 129600 }
 
 /-- Get the current slot number from wall-clock time -/
 def SlotClock.currentSlot (clock : SlotClock) : IO Nat := do
@@ -142,6 +143,10 @@ structure ForgeState where
   leaderChecks : Nat
   /-- Total times elected leader -/
   timesElected : Nat
+  /-- Precomputed leadership schedule for current epoch (sorted ascending) -/
+  leaderSlots : Array Nat := #[]
+  /-- Epoch for which leaderSlots was computed -/
+  scheduleEpoch : Nat := 0
 
 /-- Create initial forge state -/
 def ForgeState.initial (params : ForgeParams) (clock : SlotClock)
@@ -154,6 +159,22 @@ def ForgeState.initial (params : ForgeParams) (clock : SlotClock)
     blocksForged := 0,
     leaderChecks := 0,
     timesElected := 0 }
+
+/-- Precompute all slots in `epoch` where this pool is the slot leader.
+    Runs the VRF check for every slot in the epoch — pure computation, no IO. -/
+def computeLeaderSchedule (params : ForgeParams) (cs : ConsensusState)
+    (epoch : Nat) (epochLength : Nat) : Array Nat :=
+  if cs.stakeSnapshot.totalStake == 0 then #[]
+  else
+    let epochFirstSlot := epoch * epochLength
+    let poolStake := lookupPoolStake cs.stakeSnapshot params.poolId
+    let totalStake := cs.stakeSnapshot.totalStake
+    (Array.range epochLength).foldl (fun acc i =>
+      let slot := epochFirstSlot + i
+      match Dion.Consensus.Praos.LeaderElection.checkLeader
+          params.vrfSecretKey cs.epochNonce slot cs.activeSlotsCoeff poolStake totalStake with
+      | .isLeader _ _ => acc.push slot
+      | _ => acc) #[]
 
 -- ====================
 -- = Forge Step       =
@@ -171,9 +192,9 @@ inductive ForgeStepResult where
     Returns the updated state and the step result.
     Reads live consensus state from `consensusRef` (updated by sync loop). -/
 def forgeStep (stateRef : IO.Ref ForgeState)
-    (mempoolRef : IO.Ref Cleanode.Network.Mempool.Mempool)
+    (mempoolRef : IO.Ref Dion.Network.Mempool.Mempool)
     (consensusRef : IO.Ref ConsensusState)
-    (ledgerStateRef : Std.Mutex Cleanode.Ledger.State.LedgerState)
+    (ledgerStateRef : Std.Mutex Dion.Ledger.State.LedgerState)
     (prevHash : ByteArray) (blockNumber : Nat)
     : IO ForgeStepResult := do
   let state ← stateRef.get
@@ -192,6 +213,10 @@ def forgeStep (stateRef : IO.Ref ForgeState)
   let currentEpoch := state.clock.slotEpoch currentSlot
   if currentEpoch > cs.currentEpoch then
     IO.println s!"[forge] Epoch transition detected: {cs.currentEpoch} → {currentEpoch}"
+    -- Update consensus epoch so we don't re-trigger on every subsequent slot
+    consensusRef.modify fun c => { c with
+      currentEpoch := currentEpoch,
+      epochFirstSlot := currentEpoch * c.epochLength }
     return .epochTransition currentEpoch
 
   -- Compute KES period and warn if approaching expiry
@@ -211,8 +236,12 @@ def forgeStep (stateRef : IO.Ref ForgeState)
   let nowMs ← getUnixTimeMs
   mempoolRef.modify (·.prune nowMs.toNat)
   let mempool ← mempoolRef.get
-  let maxBlockBodySize := (← ledgerStateRef.atomically (fun ref => ref.get)).protocolParams.maxBlockSize
-  let blockBody := Cleanode.Consensus.Praos.TxSelection.selectTransactions mempool maxBlockBodySize currentSlot
+  -- Use protocol param from consensus state (updated by block apply, no mutex needed)
+  -- Falls back to 90112 (Conway standard) if not yet set
+  let maxBlockBodySize :=
+    let p := cs.protocolMaxBlockSize
+    if p > 0 then p else 90112
+  let blockBody := Dion.Consensus.Praos.TxSelection.selectTransactions mempool maxBlockBodySize currentSlot
 
   stateRef.modify fun s => { s with leaderChecks := s.leaderChecks + 1 }
 
@@ -238,13 +267,13 @@ def forgeStep (stateRef : IO.Ref ForgeState)
 /-- Self-validate a forged block before announcing it to peers.
     Parses the block CBOR back and runs all ledger validation rules on each tx.
     Returns a list of validation errors (empty = all good). -/
-def validateForgedBlock (block : ForgedBlock) (ledgerState : Cleanode.Ledger.State.LedgerState)
+def validateForgedBlock (block : ForgedBlock) (ledgerState : Dion.Ledger.State.LedgerState)
     : IO (List String) := do
   let mut errors : List String := []
 
   -- 1. Encode the full block and parse it back
   let fullBlockCbor := block.encodeFullBlock
-  let parsed ← Cleanode.Network.ConwayBlock.parseConwayBlockBodyIO fullBlockCbor
+  let parsed ← Dion.Network.ConwayBlock.parseConwayBlockBodyIO fullBlockCbor
   match parsed with
   | none =>
     return ["CBOR round-trip FAILED: could not parse forged block back"]
@@ -256,14 +285,14 @@ def validateForgedBlock (block : ForgedBlock) (ledgerState : Cleanode.Ledger.Sta
 
   -- 3. Validate each parsed transaction against ledger rules
   for (idx, tx) in (List.range body.transactions.length).zip body.transactions do
-    let valErrs ← Cleanode.Ledger.Validation.validateTransaction
+    let valErrs ← Dion.Ledger.Validation.validateTransaction
       ledgerState tx.body tx.witnesses .Conway block.slot
     for e in valErrs do
       errors := s!"Tx {idx} validation FAILED: {repr e}" :: errors
 
   -- 4. Check header structure: body hash matches
-  let bodyHash ← Cleanode.Network.Crypto.blake2b_256 block.bodyComponents.serialize
-  let headerHash ← Cleanode.Network.Crypto.blake2b_256 block.headerBytes
+  let bodyHash ← Dion.Network.Crypto.blake2b_256 block.bodyComponents.serialize
+  let headerHash ← Dion.Network.Crypto.blake2b_256 block.headerBytes
   if bodyHash.size != 32 then
     errors := "Body hash is not 32 bytes" :: errors
   if headerHash.size != 32 then
@@ -286,12 +315,13 @@ def validateForgedBlock (block : ForgedBlock) (ledgerState : Cleanode.Ledger.Sta
     The loop sleeps until the next slot boundary, then runs forgeStep.
     Forged blocks are pushed to `forgedBlocksRef` for the announcement layer. -/
 partial def runForgeLoop (stateRef : IO.Ref ForgeState)
-    (mempoolRef : IO.Ref Cleanode.Network.Mempool.Mempool)
+    (mempoolRef : IO.Ref Dion.Network.Mempool.Mempool)
     (consensusRef : IO.Ref ConsensusState)
-    (ledgerStateRef : Std.Mutex Cleanode.Ledger.State.LedgerState)
+    (ledgerStateRef : Std.Mutex Dion.Ledger.State.LedgerState)
     (prevHashRef : IO.Ref ByteArray)
     (blockNoRef : IO.Ref Nat)
     (forgedBlocksRef : IO.Ref (Array ForgedBlock))
+    (tuiRef : Option (IO.Ref Dion.TUI.State.TUIState) := none)
     : IO Unit := do
   IO.println "[forge] Block production loop started"
   let state ← stateRef.get
@@ -300,22 +330,38 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
   IO.println "[forge] Waiting for chain sync to provide stake snapshot..."
 
   let mut snapshotReady := false
+  let mut loopCount := 0
   while true do
+    loopCount := loopCount + 1
+    IO.println s!"[forge] DBG loop iter {loopCount}"
     -- Sleep until next slot
     let state ← stateRef.get
     let msToWait ← state.clock.msUntilNextSlot
+    IO.println s!"[forge] DBG msToWait={msToWait}"
     if msToWait > 0 then
       IO.sleep (UInt32.ofNat msToWait)
-
-    -- Check if consensus state has real stake data
+    IO.println s!"[forge] DBG after sleep"
+    IO.println "[forge] DBG before consensusRef.get"
     let cs ← consensusRef.get
+    IO.println "[forge] DBG after consensusRef.get, before snapshotReady check"
     if cs.stakeSnapshot.totalStake == 0 then
-      IO.sleep 5000  -- no stake yet, wait for sync to catch up
+      -- Print status every 60s so the operator knows we're waiting
+      let nowMs ← getUnixTimeMs
+      if nowMs % 60000 < 5100 then
+        let slot ← state.clock.currentSlot
+        IO.println s!"[forge] Waiting for stake snapshot (epoch={cs.currentEpoch}, slot={slot}, delegation takes effect after 2 epoch boundaries)"
+      IO.sleep 5000
       continue
     if !snapshotReady then
       IO.println s!"[forge] Stake snapshot ready: {cs.stakeSnapshot.poolStakes.length} pools, total stake {cs.stakeSnapshot.totalStake}"
       IO.println s!"[forge] Epoch nonce: {cs.epochNonce.size} bytes, epoch {cs.currentEpoch}"
       snapshotReady := true
+      -- Compute leadership schedule for the current epoch immediately at startup
+      let curState ← stateRef.get
+      let poolStakeForLog := lookupPoolStake cs.stakeSnapshot curState.forgeParams.poolId
+      let poolIdHex := Dion.Network.Crypto.bytesToHex curState.forgeParams.poolId
+      IO.println s!"[forge] Pool stake: {poolStakeForLog} / {cs.stakeSnapshot.totalStake} (pool={poolIdHex.take 16}...)"
+      IO.println s!"[forge] Real-time per-slot VRF check active — will forge if elected"
 
     let prevHash ← prevHashRef.get
     let blockNo ← blockNoRef.get
@@ -323,10 +369,27 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
     let result ← forgeStep stateRef mempoolRef consensusRef ledgerStateRef prevHash blockNo
     match result with
     | .notYet _ => pure ()
-    | .notLeader _slot =>
-      -- Silent — too noisy to log every non-leader slot
+    | .notLeader slot =>
+      -- Log every ~10 slots so we can see activity
+      if slot % 10 == 0 then
+        let cs ← consensusRef.get
+        IO.println s!"[forge] slot={slot} epoch={cs.currentEpoch} checking leadership (not elected)"
       pure ()
     | .forged block => do
+      -- Notify TUI: block forged
+      if let some tRef := tuiRef then
+        let nowMs := (← IO.monoNanosNow) / 1000000
+        tRef.modify fun s =>
+          let c := s.consensus
+          let c' := { c with
+              lastElectedSlot := some block.slot
+              lastElectedMs   := nowMs
+              lastForgedSlot  := some block.slot
+              timesElected    := c.timesElected + 1
+              blocksForged    := c.blocksForged + 1 }
+          let blocks' := s.recentBlocks.map fun b =>
+            if b.slot == block.slot then { b with isOurs := true } else b
+          { s with consensus := c', recentBlocks := blocks' }
       IO.println s!"[forge] BLOCK FORGED at slot {block.slot}, block #{block.blockNumber}"
       IO.println s!"[forge]   header: {block.headerBytes.size} bytes, body: {block.bodyComponents.serialize.size} bytes"
       IO.println s!"[forge]   txs: {block.selectedTxs.transactions.length}"
@@ -340,12 +403,12 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
         for err in validationErrors do
           IO.eprintln s!"[forge]     - {err}"
       -- Apply forged block to ledger state (UTxO + fees)
-      let blockHash ← Cleanode.Network.Crypto.blake2b_256 block.headerBytes
+      let blockHash ← Dion.Network.Crypto.blake2b_256 block.headerBytes
       ledgerStateRef.atomically fun lsRef => do
         let mut s ← lsRef.get
         for tx in block.selectedTxs.transactions do
-          let cur := Cleanode.Network.CborCursor.Cursor.mk' tx.bodyRawBytes
-          match Cleanode.Network.ConwayBlock.parseTransactionBodyMapC cur with
+          let cur := Dion.Network.CborCursor.Cursor.mk' tx.bodyRawBytes
+          match Dion.Network.ConwayBlock.parseTransactionBodyMapC cur with
           | some bodyResult =>
             let body := bodyResult.value
             s := { s with utxo := s.utxo.applyTx tx.txHash body,
@@ -369,14 +432,15 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
     | .forgeError slot err =>
       IO.eprintln s!"[forge] Error at slot {slot}: {err}"
     | .epochTransition epoch =>
-      IO.println s!"[forge] Now in epoch {epoch}"
+      IO.println s!"[forge] Now in epoch {epoch} — real-time VRF check continues"
 
 /-- Start the forge loop as a background IO task. -/
 def startForgeLoop (forgeParams : ForgeParams) (clock : SlotClock)
     (consensusRef : IO.Ref ConsensusState)
-    (mempoolRef : IO.Ref Cleanode.Network.Mempool.Mempool)
-    (ledgerStateRef : Std.Mutex Cleanode.Ledger.State.LedgerState)
+    (mempoolRef : IO.Ref Dion.Network.Mempool.Mempool)
+    (ledgerStateRef : Std.Mutex Dion.Ledger.State.LedgerState)
     (prevHashRef : IO.Ref ByteArray) (blockNoRef : IO.Ref Nat)
+    (tuiRef : Option (IO.Ref Dion.TUI.State.TUIState) := none)
     : IO (Task (Except IO.Error Unit) × IO.Ref ForgeState × IO.Ref (Array ForgedBlock)) := do
   let cs ← consensusRef.get
   let forgeState := ForgeState.initial forgeParams clock cs
@@ -384,7 +448,7 @@ def startForgeLoop (forgeParams : ForgeParams) (clock : SlotClock)
   let forgedBlocksRef ← IO.mkRef (#[] : Array ForgedBlock)
 
   let task ← IO.asTask (prio := .dedicated) do
-    runForgeLoop stateRef mempoolRef consensusRef ledgerStateRef prevHashRef blockNoRef forgedBlocksRef
+    runForgeLoop stateRef mempoolRef consensusRef ledgerStateRef prevHashRef blockNoRef forgedBlocksRef tuiRef
 
   return (task, stateRef, forgedBlocksRef)
 
@@ -402,4 +466,4 @@ def printForgeStats (stateRef : IO.Ref ForgeState) : IO Unit := do
   IO.println s!"  Last checked slot: {state.lastCheckedSlot}"
   IO.println s!"  Current epoch: {state.consensusState.currentEpoch}"
 
-end Cleanode.Consensus.Praos.ForgeLoop
+end Dion.Consensus.Praos.ForgeLoop

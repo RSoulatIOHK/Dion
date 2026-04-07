@@ -1,4 +1,4 @@
-import Cleanode.Network.Cbor
+import Dion.Network.Cbor
 
 /-!
 # Byron Era Block Header Parser
@@ -22,9 +22,9 @@ The actual header (CBOR array) contains:
 - ouroboros-consensus Byron codec
 -/
 
-namespace Cleanode.Network.Byron
+namespace Dion.Network.Byron
 
-open Cleanode.Network.Cbor
+open Dion.Network.Cbor
 
 /-- Byron block header full details -/
 structure ByronBlockHeader where
@@ -167,4 +167,4 @@ def parseByronHeader (bs : ByteArray) : Option ByronHeaderInfo := do
 def extractByronInfo (eraHeaderBytes : ByteArray) : Option ByronHeaderInfo :=
   parseByronHeader eraHeaderBytes
 
-end Cleanode.Network.Byron
+end Dion.Network.Byron

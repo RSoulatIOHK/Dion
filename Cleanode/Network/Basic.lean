@@ -1,7 +1,7 @@
 /-!
 # Network Module
 
-This module implements the Ouroboros network layer for Cleanode.
+This module implements the Ouroboros network layer for Dion.
 
 ## Responsibilities
 - TCP socket management
@@ -23,7 +23,7 @@ It provides a typed interface for communicating with Cardano peers.
 - [Cardano Blueprint Network](https://cardano-scaling.github.io/cardano-blueprint/network/)
 -/
 
-namespace Cleanode.Network
+namespace Dion.Network
 
 /-- Known Cardano mainnet bootstrap peers (backbone infrastructure) -/
 def mainnetBootstrapPeers : List (String × UInt16) := [
@@ -71,4 +71,4 @@ def sanchonetBootstrapPeers : List (String × UInt16) := [
 /-- Default to mainnet peers for backward compatibility -/
 def bootstrapPeers : List (String × UInt16) := mainnetBootstrapPeers
 
-end Cleanode.Network
+end Dion.Network

@@ -144,13 +144,13 @@ def announceToSubscriber (sub : ChainSyncSubscriber) (block : ForgedBlock)
 
 /-- Announce a forged block to all subscribed peers.
     Returns the number of peers successfully notified. -/
-def announceBlock (registryRef : IO.Ref PeerRegistry) (block : ForgedBlock)
+def announceBlock (registryRef : Std.Mutex PeerRegistry) (block : ForgedBlock)
     : IO Nat := do
   let tip ← forgedBlockToTip block
-  let registry ← registryRef.get
+  let registry ← registryRef.atomically (fun r => r.get)
 
   -- Store the block for future BlockFetch requests
-  registryRef.modify (·.storeBlock block)
+  registryRef.atomically fun r => r.modify (·.storeBlock block)
 
   let mut successCount := 0
   let mut failedPeers : Array String := #[]
@@ -164,7 +164,7 @@ def announceBlock (registryRef : IO.Ref PeerRegistry) (block : ForgedBlock)
 
   -- Remove failed peers
   for peerId in failedPeers do
-    registryRef.modify (·.removeSubscriber peerId)
+    registryRef.atomically fun r => r.modify (·.removeSubscriber peerId)
 
   if successCount > 0 then
     IO.println s!"[announce] Block {block.blockNumber} (slot {block.slot}) sent to {successCount} peers"
@@ -189,7 +189,7 @@ def handleFindIntersect (sock : Socket) (points : List Point)
 /-- Handle a ChainSync MsgRequestNext from an inbound peer.
     If we have a new block, send MsgRollForward. Otherwise, send MsgAwaitReply
     and register the peer as waiting. -/
-def handleRequestNext (registryRef : IO.Ref PeerRegistry)
+def handleRequestNext (registryRef : Std.Mutex PeerRegistry)
     (sock : Socket) (peerId : String)
     (pendingBlocks : IO.Ref (Array ForgedBlock))
     : IO Unit := do
@@ -206,7 +206,7 @@ def handleRequestNext (registryRef : IO.Ref PeerRegistry)
     -- No blocks available — tell peer to wait
     let _ ← sendChainSyncResponder sock .MsgAwaitReply
     -- Mark this peer as waiting in the registry
-    registryRef.modify fun reg =>
+    registryRef.atomically fun r => r.modify fun reg =>
       { reg with subscribers := reg.subscribers.map fun sub =>
         if sub.peerId == peerId then { sub with isWaiting := true }
         else sub }
@@ -332,7 +332,7 @@ def pushBlockToOutboundPeers (peerAddrs : List (String × UInt16))
 
 /-- Background loop that watches the forged blocks queue and announces
     new blocks to all subscribed peers (inbound) and pushes to outbound peers. -/
-partial def announcementLoop (registryRef : IO.Ref PeerRegistry)
+partial def announcementLoop (registryRef : Std.Mutex PeerRegistry)
     (forgedBlocksRef : IO.Ref (Array ForgedBlock))
     (outboundPeers : List (String × UInt16) := [])
     (proposal : Option HandshakeMessage := none)
@@ -352,7 +352,7 @@ partial def announcementLoop (registryRef : IO.Ref PeerRegistry)
             pushBlockToOutboundPeers outboundPeers prop block
 
 /-- Start the announcement loop as a background task. -/
-def startAnnouncementLoop (registryRef : IO.Ref PeerRegistry)
+def startAnnouncementLoop (registryRef : Std.Mutex PeerRegistry)
     (forgedBlocksRef : IO.Ref (Array ForgedBlock))
     (outboundPeers : List (String × UInt16) := [])
     (proposal : Option HandshakeMessage := none)
@@ -382,9 +382,9 @@ def PeerRegistry.findBlocksInRange (reg : PeerRegistry) (fromSlot toSlot : Nat)
 
 /-- Handle a BlockFetch MsgRequestRange from an inbound peer.
     Looks up the requested blocks and serves them. -/
-def handleBlockFetchRequest (registryRef : IO.Ref PeerRegistry)
+def handleBlockFetchRequest (registryRef : Std.Mutex PeerRegistry)
     (sock : Socket) (fromPoint toPoint : Point) : IO Unit := do
-  let reg ← registryRef.get
+  let reg ← registryRef.atomically (fun r => r.get)
   let blocks := reg.findBlocksInRange fromPoint.slot.toNat toPoint.slot.toNat
   if blocks.isEmpty then
     let _ ← sendBlockFetchResponder sock .MsgNoBlocks
@@ -401,8 +401,8 @@ def handleBlockFetchRequest (registryRef : IO.Ref PeerRegistry)
 -- ====================
 
 /-- Print announcement system status -/
-def printAnnouncementStatus (registryRef : IO.Ref PeerRegistry) : IO Unit := do
-  let reg ← registryRef.get
+def printAnnouncementStatus (registryRef : Std.Mutex PeerRegistry) : IO Unit := do
+  let reg ← registryRef.atomically (fun r => r.get)
   IO.println s!"[announce] Status:"
   IO.println s!"  Subscribers: {reg.subscribers.size}"
   IO.println s!"  Stored blocks: {reg.forgedBlocks.size}"

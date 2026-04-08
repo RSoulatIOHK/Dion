@@ -296,7 +296,7 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
     | "SanchoNet" => .SanchoNet
     | _           => .Mainnet
   -- Shared peer registry for ChainSync/BlockFetch server + announcement loop
-  let registryRef ← IO.mkRef Dion.Consensus.Praos.BlockAnnounce.PeerRegistry.empty
+  let registryRef ← Std.Mutex.new Dion.Consensus.Praos.BlockAnnounce.PeerRegistry.empty
 
   let mut tasks : List (Task (Except IO.Error Unit)) := []
   IO.eprintln s!"[Listen] Creating listener task for port {listenPort}..."

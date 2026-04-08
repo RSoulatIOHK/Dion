@@ -87,7 +87,7 @@ open Dion.Consensus.Praos.BlockAnnounce in
     TxSubmission2 (server mode), and KeepAlive. -/
 partial def inboundPeerLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
     (tuiRef : Option (IO.Ref TUIState))
-    (registryRef : IO.Ref PeerRegistry)
+    (registryRef : Std.Mutex PeerRegistry)
     (peerId : String)
     (pendingBlocks : IO.Ref (Array Dion.Consensus.Praos.BlockForge.ForgedBlock))
     (ledgerStateRef : Option (Std.Mutex Dion.Ledger.State.LedgerState) := none)
@@ -95,18 +95,18 @@ partial def inboundPeerLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
   -- Read mux header (8 bytes)
   match ← socket_receive_exact sock 8 with
   | .error _ =>
-      registryRef.modify (·.removeSubscriber peerId)
+      registryRef.atomically fun r => r.modify (·.removeSubscriber peerId)
       let _ ← socket_close sock; return
   | .ok headerBytes =>
       match decodeMuxHeader headerBytes with
       | none =>
-          registryRef.modify (·.removeSubscriber peerId)
+          registryRef.atomically fun r => r.modify (·.removeSubscriber peerId)
           let _ ← socket_close sock; return
       | some header => do
           -- Read payload
           match ← socket_receive_exact sock header.payloadLength.toNat.toUInt32 with
           | .error _ =>
-              registryRef.modify (·.removeSubscriber peerId)
+              registryRef.atomically fun r => r.modify (·.removeSubscriber peerId)
               let _ ← socket_close sock; return
           | .ok payload => do
               -- Route by protocol
@@ -120,7 +120,7 @@ partial def inboundPeerLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
                 match decodeChainSyncMessage payload with
                 | some (.MsgFindIntersect points) =>
                     -- Peer wants to find intersection — register as subscriber
-                    let reg ← registryRef.get
+                    let reg ← registryRef.atomically (fun r => r.get)
                     let tip ← match reg.forgedBlocks.back? with
                       | some block => forgedBlockToTip block
                       | none => pure { point := Point.genesis, blockNo := 0 }
@@ -132,14 +132,14 @@ partial def inboundPeerLoop (sock : Socket) (mempoolRef : IO.Ref Mempool)
                       isWaiting := false
                       lastSentSlot := 0
                     }
-                    registryRef.modify (·.addSubscriber sub)
+                    registryRef.atomically fun r => r.modify (·.addSubscriber sub)
                     tuiLog tuiRef s!"Inbound peer {peerId} subscribed to ChainSync"
                     inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef ackedSoFar
                 | some .MsgRequestNext =>
                     handleRequestNext registryRef sock peerId pendingBlocks
                     inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef ackedSoFar
                 | some .MsgDone =>
-                    registryRef.modify (·.removeSubscriber peerId)
+                    registryRef.atomically fun r => r.modify (·.removeSubscriber peerId)
                     inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef ackedSoFar
                 | _ =>
                     inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef ackedSoFar
@@ -215,7 +215,7 @@ open Dion.Consensus.Praos.BlockAnnounce in
 /-- Handle a single inbound peer: handshake then enter mux loop -/
 partial def handleInboundPeer (sock : Socket) (mempoolRef : IO.Ref Mempool)
     (tuiRef : Option (IO.Ref TUIState))
-    (registryRef : IO.Ref PeerRegistry)
+    (registryRef : Std.Mutex PeerRegistry)
     (network : NetworkMagic := .Mainnet)
     (ledgerStateRef : Option (Std.Mutex Dion.Ledger.State.LedgerState) := none) : IO Unit := do
   IO.eprintln "[Inbound] New connection, starting handshake..."
@@ -231,7 +231,7 @@ partial def handleInboundPeer (sock : Socket) (mempoolRef : IO.Ref Mempool)
       tuiLog tuiRef "Inbound peer connected (handshake OK)"
       if let some ref := tuiRef then ref.modify (·.addInbound)
       -- Generate a peer ID from the connection
-      let reg ← registryRef.get
+      let reg ← registryRef.atomically (fun r => r.get)
       let peerId := s!"inbound-{reg.subscribers.size}"
       let pendingBlocks ← IO.mkRef (#[] : Array Dion.Consensus.Praos.BlockForge.ForgedBlock)
       inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef
@@ -243,7 +243,7 @@ open Dion.Consensus.Praos.BlockAnnounce in
     Lean external-object capture across task boundaries, which segfaults. -/
 partial def acceptLoop (listenSock : Socket) (mempoolRef : IO.Ref Mempool)
     (tuiRef : Option (IO.Ref TUIState))
-    (registryRef : IO.Ref PeerRegistry)
+    (registryRef : Std.Mutex PeerRegistry)
     (network : NetworkMagic := .Mainnet)
     (ledgerStateRef : Option (Std.Mutex Dion.Ledger.State.LedgerState) := none) : IO Unit := do
   match ← socket_accept listenSock with

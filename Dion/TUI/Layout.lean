@@ -141,29 +141,32 @@ def renderHeader (state : TUIState) (width : Nat) (nowMs : Nat) : List String :=
       s!"{Ansi.dim}){Ansi.reset}" ++
       s!"{Ansi.dim}  |  {Ansi.reset}{Ansi.white}Peers: {Ansi.brightGreen}{state.peers.length}{Ansi.reset}" ++
       s!"{Ansi.dim}  |  {Ansi.reset}{Ansi.white}Rollbacks: {Ansi.yellow}{state.rollbacks}{Ansi.reset}",
-    -- Leadership schedule: show next scheduled slot and last forged
+    s!"{Ansi.white}  {syncOriginLabel}",
+    -- Line 5: leadership schedule (own line, below sync origin)
     let c := state.consensus
-    let leaderInfo :=
-      if !c.spoActive then ""
-      else if c.scheduleEpoch != c.currentEpoch then
-        -- Schedule not yet computed for this epoch
-        s!"  {Ansi.dim}★ computing schedule...{Ansi.reset}"
-      else if c.leaderSlots.isEmpty then
-        -- Computed but no slots (pool not elected this epoch)
-        let lastStr := match c.lastForgedSlot with
-          | some s => s!"  {Ansi.dim}(last: {formatNum s}){Ansi.reset}"
-          | none   => ""
-        s!"  {Ansi.dim}★ 0 slots this epoch{Ansi.reset}{lastStr}"
-      else
-        let nextSlot := c.leaderSlots.find? (· > state.tipSlot)
-        let nextStr := match nextSlot with
-          | some s => s!"{Ansi.brightYellow}{Ansi.bold}next: slot {formatNum s}{Ansi.reset}"
-          | none   => s!"{Ansi.dim}next: (none remaining){Ansi.reset}"
-        let lastStr := match c.lastForgedSlot with
-          | some s => s!"{Ansi.dim}  (last: {formatNum s}){Ansi.reset}"
-          | none   => ""
-        s!"  {Ansi.dim}★{Ansi.reset}  {nextStr}{lastStr}"
-    s!"{Ansi.white}  {syncOriginLabel}{leaderInfo}"
+    if !c.spoActive then ""
+    else
+      let nextSlot := match c.leaderSlots.find? (· > state.tipSlot) with
+        | some s => some s
+        | none   => c.leaderSlots[0]?
+      let lastStr := match c.lastForgedSlot with
+        | some s => s!"  {Ansi.dim}(last: {formatNum s}){Ansi.reset}"
+        | none   => ""
+      match c.scheduleProgress with
+      | some pct =>
+        match nextSlot with
+        | none   => s!"  {Ansi.dim}★ computing schedule {pct}%...{Ansi.reset}"
+        | some s => s!"  {Ansi.dim}★{Ansi.reset}  {Ansi.brightYellow}{Ansi.bold}Next @{formatNum s}{Ansi.reset}{Ansi.dim},  computing rest {pct}%{Ansi.reset}{lastStr}"
+      | none =>
+        if c.scheduleEpoch != c.currentEpoch then
+          s!"  {Ansi.dim}★ computing schedule...{Ansi.reset}"
+        else if c.leaderSlots.isEmpty then
+          s!"  {Ansi.dim}★ 0 slots this epoch{Ansi.reset}{lastStr}"
+        else
+          let doneNext := match c.leaderSlots.find? (· > state.tipSlot) with
+            | some s => s!"{Ansi.brightYellow}{Ansi.bold}Next @{formatNum s}{Ansi.reset}"
+            | none   => s!"{Ansi.dim}(none remaining){Ansi.reset}"
+          s!"  {Ansi.dim}★{Ansi.reset}  {doneNext}{lastStr}"
   ]
   -- Interleave logo and info: logo on left, info on right
   let headerLines := List.range 5 |>.map fun i =>

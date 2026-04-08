@@ -61,6 +61,7 @@ structure ConsensusInfo where
   leaderSlots      : Array Nat := #[]    -- Precomputed slots we lead this epoch
   scheduleEpoch    : Nat := 0            -- Epoch the schedule was computed for (in TUI state)
   spoActive        : Bool := false       -- Forge loop is running (SPO mode)
+  scheduleProgress : Option Nat := none  -- 0-100 while computing, none = idle/done
   deriving Repr
 
 /-- How the node started syncing -/

@@ -363,22 +363,37 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
       let csCapture   := cs
       let fwdParams   := curState.forgeParams
       let _ ← IO.asTask do
-        let epochStart  := csCapture.epochFirstSlot
-        let epochEnd    := epochStart + csCapture.epochLength
-        let poolStake   := lookupPoolStake csCapture.stakeSnapshot fwdParams.poolId
-        let totalStake  := csCapture.stakeSnapshot.totalStake
-        let mut schedule : Array Nat := #[]
-        let mut slot := epochStart
+        let epochStart    := csCapture.epochFirstSlot
+        let epochEnd      := epochStart + csCapture.epochLength
+        let epochLen      := csCapture.epochLength
+        let poolStake     := lookupPoolStake csCapture.stakeSnapshot fwdParams.poolId
+        let totalStake    := csCapture.stakeSnapshot.totalStake
+        -- Report progress every 1% (or every slot if epoch is tiny)
+        let progressStep  := max 1 (epochLen / 100)
+        let mut schedule  : Array Nat := #[]
+        let mut slot      := epochStart
+        let mut lastPct   : Nat := 0
+        -- Mark computation started
+        if let some tRef := tuiRef then
+          tRef.modify fun s => { s with consensus := { s.consensus with scheduleProgress := some 0 } }
         while slot < epochEnd do
           if let .isLeader _ _ := Dion.Consensus.Praos.LeaderElection.checkLeader
               fwdParams.vrfSecretKey csCapture.epochNonce
               slot csCapture.activeSlotsCoeff poolStake totalStake then
             schedule := schedule.push slot
           slot := slot + 1
+          -- Update TUI progress and partial schedule every ~1%
+          let pct := (slot - epochStart) * 100 / epochLen
+          if pct > lastPct then
+            lastPct := pct
+            if let some tRef := tuiRef then
+              tRef.modify fun s => { s with consensus := { s.consensus with
+                leaderSlots := schedule, scheduleProgress := some pct } }
         stateRef.modify fun s => { s with leaderSlots := schedule }
         if let some tRef := tuiRef then
           tRef.modify fun s => { s with consensus := { s.consensus with
-            leaderSlots := schedule, scheduleEpoch := csCapture.currentEpoch } }
+            leaderSlots := schedule, scheduleEpoch := csCapture.currentEpoch,
+            scheduleProgress := none } }
         log s!"[forge] Schedule epoch {csCapture.currentEpoch}: {schedule.size} assigned slots"
 
     let prevHash ← prevHashRef.get

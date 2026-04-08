@@ -208,9 +208,9 @@ native/            # C FFI: blake2b, ed25519, VRF, KES, Plutus CEK evaluator
 │  │ PeerSync │  │ ForgeLoop│  │  N2C Server        │ │
 │  │ (N2N)    │  │ (Praos)  │  │  (cardano-cli)     │ │
 │  └────┬─────┘  └────┬─────┘  └────────────────────┘ │
-│       │              │                              │
-│  ┌────▼──────────────▼──────────────────────────┐   │
-│  │          Ledger State (Mutex-protected)       │  │
+│       │             │                               │
+│  ┌────▼─────────────▼───────────────────────────┐   │
+│  │          Ledger State (Mutex-protected)      │   │
 │  │  UTxO · ProtocolParams · EpochFees · Certs   │   │
 │  └──────────────────────────────────────────────┘   │
 │                                                     │

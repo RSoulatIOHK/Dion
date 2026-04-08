@@ -345,12 +345,38 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
       log s!"[forge] Stake snapshot ready: {cs.stakeSnapshot.poolStakes.length} pools, total stake {cs.stakeSnapshot.totalStake}"
       log s!"[forge] Epoch nonce: {cs.epochNonce.size} bytes, epoch {cs.currentEpoch}"
       snapshotReady := true
-      -- Compute leadership schedule for the current epoch immediately at startup
       let curState ← stateRef.get
       let poolStakeForLog := lookupPoolStake cs.stakeSnapshot curState.forgeParams.poolId
       let poolIdHex := Dion.Network.Crypto.bytesToHex curState.forgeParams.poolId
       log s!"[forge] Pool stake: {poolStakeForLog} / {cs.stakeSnapshot.totalStake} (pool={poolIdHex.take 16}...)"
       log s!"[forge] Real-time per-slot VRF check active — will forge if elected"
+
+    -- (Re)compute leadership schedule when epoch changes or on first boot.
+    -- Runs in a background task: ~86400 VRF evaluations, takes 1-3s.
+    let curState ← stateRef.get
+    if cs.stakeSnapshot.totalStake > 0 && curState.scheduleEpoch != cs.currentEpoch then
+      -- Claim the epoch immediately so we don't spawn duplicate tasks
+      stateRef.modify fun s => { s with scheduleEpoch := cs.currentEpoch }
+      let csCapture   := cs
+      let fwdParams   := curState.forgeParams
+      let _ ← IO.asTask do
+        let epochStart  := csCapture.epochFirstSlot
+        let epochEnd    := epochStart + csCapture.epochLength
+        let poolStake   := lookupPoolStake csCapture.stakeSnapshot fwdParams.poolId
+        let totalStake  := csCapture.stakeSnapshot.totalStake
+        let mut schedule : Array Nat := #[]
+        let mut slot := epochStart
+        while slot < epochEnd do
+          if let .isLeader _ _ := Dion.Consensus.Praos.LeaderElection.checkLeader
+              fwdParams.vrfSecretKey csCapture.epochNonce
+              slot csCapture.activeSlotsCoeff poolStake totalStake then
+            schedule := schedule.push slot
+          slot := slot + 1
+        stateRef.modify fun s => { s with leaderSlots := schedule }
+        if let some tRef := tuiRef then
+          tRef.modify fun s => { s with consensus := { s.consensus with
+            leaderSlots := schedule, scheduleEpoch := csCapture.currentEpoch } }
+        log s!"[forge] Schedule epoch {csCapture.currentEpoch}: {schedule.size} assigned slots"
 
     let prevHash ← prevHashRef.get
     let blockNo ← blockNoRef.get

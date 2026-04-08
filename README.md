@@ -4,7 +4,6 @@
 [![Cardano](https://img.shields.io/badge/Cardano-Conway-0033AD?logo=cardano&logoColor=white)](https://cardano.org/)
 [![Networks](https://img.shields.io/badge/networks-Mainnet%20%7C%20Preprod%20%7C%20Preview-green)](https://docs.cardano.org/cardano-testnets/environments/)
 [![Mithril](https://img.shields.io/badge/Mithril-bootstrap-blueviolet)](https://mithril.network/)
-[![Formally Verified](https://img.shields.io/badge/formally%20verified-Lean%204%20proofs-orange)](Dion/Proofs/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 A Cardano node written in Lean 4, with formal proofs of critical protocol components.

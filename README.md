@@ -16,6 +16,8 @@ Dion runs on Mainnet, Preprod, Preview, and SanchoNet. It can operate as a relay
 >
 > Dion is a research and educational project. It has not been audited, is not battle-tested, and makes no guarantees of correctness, safety, or availability. Running it on Mainnet with real funds or as a live stake pool is done entirely at your own risk.
 >
+> ALMOST EVERYTHING WAS VIBE CODED WITH LITTLE TO NO REVIEW.
+> 
 > **For production use, run the official [cardano-node](https://github.com/IntersectMBO/cardano-node).**
 
 ![Dion TUI](docs/assets/tui-preview.png)

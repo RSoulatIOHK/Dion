@@ -223,10 +223,9 @@ def handleRequestNext (registryRef : IO.Ref PeerRegistry)
 partial def servePushSession (sock : Socket) (block : ForgedBlock) (tip : Tip)
     (timeoutMs : UInt32 := 5000) (attemptsLeft : Nat := 40) : IO Bool := do
   if attemptsLeft == 0 then return false
-  -- Read mux header with timeout so we don't block forever
   match ← socket_receive_exact_timeout sock 8 timeoutMs with
   | .error _ => return false
-  | .ok none  => return false  -- timeout: peer is Initiator-only, give up
+  | .ok none  => return false  -- timeout
   | .ok (some hdrBytes) =>
     match decodeMuxHeader hdrBytes with
     | none => return false
@@ -237,21 +236,33 @@ partial def servePushSession (sock : Socket) (block : ForgedBlock) (tip : Tip)
         if hdr.protocolId == .ChainSync then
           match decodeChainSyncMessage payload with
           | some (.MsgFindIntersect points) =>
-            -- Peer wants to subscribe to our chain.
-            -- Reply with IntersectFound at the peer's requested point (or genesis).
+            -- Peer subscribing to our chain (I&R producer role)
             let point := points.head?.getD Point.genesis
             let _ ← sendChainSync sock (.MsgIntersectFound point tip)
             servePushSession sock block tip timeoutMs (attemptsLeft - 1)
           | some .MsgRequestNext =>
-            -- Peer is asking for the next block — deliver ours!
+            -- Peer asking for next block — push it!
             let header := forgedBlockToHeader block
             let _ ← sendChainSync sock (.MsgRollForward header tip)
             IO.println s!"[push] Block {block.blockNumber} (slot {block.slot}) pushed via outbound connection"
             return true
+          | some (.MsgIntersectFound _ _) | some (.MsgIntersectNotFound _) =>
+            -- Response to our FindIntersect — advance our consumer state by sending RequestNext.
+            -- This unblocks peers that wait for the initiator to complete their consumer setup
+            -- before starting their own subscription.
+            let _ ← sendChainSync sock .MsgRequestNext
+            servePushSession sock block tip timeoutMs (attemptsLeft - 1)
+          | some .MsgAwaitReply =>
+            -- Peer has no blocks for us yet — keep waiting; they may still send FindIntersect
+            servePushSession sock block tip timeoutMs (attemptsLeft - 1)
+          | some (.MsgRollForward _ _) =>
+            -- Peer sent us a block as producer; send RequestNext to keep consumer alive
+            let _ ← sendChainSync sock .MsgRequestNext
+            servePushSession sock block tip timeoutMs (attemptsLeft - 1)
           | _ =>
             servePushSession sock block tip timeoutMs (attemptsLeft - 1)
         else
-          -- Non-ChainSync message (TxSubmission, KeepAlive, etc.) — skip it
+          -- TxSubmission, KeepAlive, etc. — skip
           servePushSession sock block tip timeoutMs (attemptsLeft - 1)
 
 /-- Push a forged block to an outbound peer by opening a fresh TCP connection.
@@ -260,7 +271,7 @@ partial def servePushSession (sock : Socket) (block : ForgedBlock) (tip : Tip)
     Returns true if the block was successfully pushed. -/
 def pushBlockToPeer (host : String) (port : UInt16)
     (proposal : HandshakeMessage) (block : ForgedBlock) : IO Bool := do
-  match ← socket_connect host port with
+  match ← socket_connect_timeout host port 3000 with  -- 3s connect timeout
   | .error e =>
     IO.eprintln s!"[push] {host}:{port}: connect failed: {e}"
     return false
@@ -278,14 +289,27 @@ def pushBlockToPeer (host : String) (port : UInt16)
         | some hdr =>
           match ← socket_receive_exact sock hdr.payloadLength.toNat.toUInt32 with
           | .error _ => socket_close sock; return false
-          | .ok _ => do
-            -- Send TxSubmission2 MsgInit so the peer's TxSubmission consumer
-            -- doesn't stall waiting for us (we're the TxSubmission producer on
-            -- outbound connections).
+          | .ok hsPayload => do
+            -- Check whether peer declared InitiatorAndResponder diffusion mode.
+            -- Initiator-only peers will never send us MsgFindIntersect.
+            let peerIsIR : Bool := match decodeHandshakeMessage hsPayload with
+              | some (.AcceptVersion _ vd) => vd.initiatorAndResponderDiffusionMode
+              | _ => false  -- Refused or unparseable — assume I-only
+            if !peerIsIR then
+              IO.println s!"[push] {host}:{port}: Initiator-only — peer does not subscribe to us"
+              socket_close sock; return false
+            -- Send TxSubmission2 MsgInit (we're the TxSubmission producer on
+            -- outbound connections, peer's consumer waits for this).
             let _ ← sendTxSubmission2 sock .MsgInit
-            -- Now wait for the peer's ChainSync consumer FindIntersect (I&R mode)
+            -- Start our own ChainSync consumer session at the block's tip point.
+            -- Intersecting at tip means the peer replies AwaitReply immediately
+            -- (nothing new for us) rather than streaming the whole chain.
+            -- Some I&R peers also won't start their subscription until we do this.
             let tip ← forgedBlockToTip block
+            let _ ← sendChainSync sock (.MsgFindIntersect [tip.point])
             let ok ← servePushSession sock block tip 5000 40
+            if !ok then
+              IO.println s!"[push] {host}:{port}: I&R declared but no MsgFindIntersect received (5s timeout)"
             socket_close sock
             return ok
 

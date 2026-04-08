@@ -1,4 +1,4 @@
-# Dion
+# Dion: A C/Lean Cardano Node
 
 [![Lean 4](https://img.shields.io/badge/Lean-4.24.0-blue?logo=lean&logoColor=white)](https://leanprover.github.io/)
 [![Cardano](https://img.shields.io/badge/Cardano-Conway-0033AD?logo=cardano&logoColor=white)](https://cardano.org/)

@@ -5,11 +5,18 @@
 [![Networks](https://img.shields.io/badge/networks-Mainnet%20%7C%20Preprod%20%7C%20Preview-green)](https://docs.cardano.org/cardano-testnets/environments/)
 [![Mithril](https://img.shields.io/badge/Mithril-bootstrap-blueviolet)](https://mithril.network/)
 [![Formally Verified](https://img.shields.io/badge/formally%20verified-Lean%204%20proofs-orange)](Dion/Proofs/)
-[![License](https://img.shields.io/badge/license-Proprietary-red)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 A Cardano node written in Lean 4, with formal proofs of critical protocol components.
 
 Dion runs on Mainnet, Preprod, Preview, and SanchoNet. It can operate as a relay or as a stake pool operator (SPO) node that forges blocks.
+
+> [!WARNING]
+> **DO NOT USE THIS NODE IN PRODUCTION.**
+>
+> Dion is a research and educational project. It has not been audited, is not battle-tested, and makes no guarantees of correctness, safety, or availability. Running it on Mainnet with real funds or as a live stake pool is done entirely at your own risk.
+>
+> **For production use, run the official [cardano-node](https://github.com/IntersectMBO/cardano-node).**
 
 ![Dion TUI](docs/assets/tui-preview.png)
 
@@ -247,8 +254,8 @@ Proofs follow the [Cardano Blueprint](https://cardano-scaling.github.io/cardano-
 
 ## License
 
-**Proprietary — All Rights Reserved**
+Apache License 2.0
 
 Copyright (c) 2024–2025 Romain Soulat
 
-Source code is available for educational and research purposes only. Any use, modification, or distribution requires explicit written permission. See [LICENSE](LICENSE) for full terms.
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for full terms.

@@ -112,6 +112,7 @@ structure TUIState where
   totalTxsValidated : Nat := 0   -- Total txs validated across all blocks
   totalTxsFailed : Nat := 0      -- Total txs that failed validation
   syncOrigin : SyncOrigin := .genesis  -- How this sync session started
+  inboundCount : Nat := 0              -- Currently connected inbound peers
   deriving Repr
 
 /-- Create an empty TUI state -/
@@ -177,6 +178,14 @@ def TUIState.removePeer (s : TUIState) (addr : String) : TUIState :=
 /-- Record a rollback -/
 def TUIState.addRollback (s : TUIState) : TUIState :=
   { s with rollbacks := s.rollbacks + 1 }
+
+/-- Increment inbound peer count -/
+def TUIState.addInbound (s : TUIState) : TUIState :=
+  { s with inboundCount := s.inboundCount + 1 }
+
+/-- Decrement inbound peer count -/
+def TUIState.removeInbound (s : TUIState) : TUIState :=
+  { s with inboundCount := s.inboundCount - 1 }
 
 /-- Add a log line (bounded by maxLogs) -/
 def TUIState.addLog (s : TUIState) (msg : String) : TUIState :=

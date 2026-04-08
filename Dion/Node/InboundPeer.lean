@@ -229,11 +229,13 @@ partial def handleInboundPeer (sock : Socket) (mempoolRef : IO.Ref Mempool)
   | .ok (some _version) =>
       IO.eprintln "[Inbound] Handshake OK, entering mux loop"
       tuiLog tuiRef "Inbound peer connected (handshake OK)"
+      if let some ref := tuiRef then ref.modify (·.addInbound)
       -- Generate a peer ID from the connection
       let reg ← registryRef.get
       let peerId := s!"inbound-{reg.subscribers.size}"
       let pendingBlocks ← IO.mkRef (#[] : Array Dion.Consensus.Praos.BlockForge.ForgedBlock)
       inboundPeerLoop sock mempoolRef tuiRef registryRef peerId pendingBlocks ledgerStateRef
+      if let some ref := tuiRef then ref.modify (·.removeInbound)
 
 open Dion.Consensus.Praos.BlockAnnounce in
 /-- Accept loop: listen for inbound connections, spawn handler per peer -/

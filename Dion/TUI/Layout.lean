@@ -139,7 +139,10 @@ def renderHeader (state : TUIState) (width : Nat) (nowMs : Nat) : List String :=
       (if unknown > 0 then s!" {Ansi.dim}{unknown} unknown{Ansi.reset}" else "") ++
       (if state.blocksWithFailures > 0 then s!" {Ansi.red}{state.blocksWithFailures} invalid{Ansi.reset}" else "") ++
       s!"{Ansi.dim}){Ansi.reset}" ++
-      s!"{Ansi.dim}  |  {Ansi.reset}{Ansi.white}Peers: {Ansi.brightGreen}{state.peers.length}{Ansi.reset}" ++
+      s!"{Ansi.dim}  |  {Ansi.reset}{Ansi.white}Peers: {Ansi.brightGreen}{state.peers.length} out{Ansi.reset}" ++
+      (if state.inboundCount > 0
+       then s!" {Ansi.brightMagenta}{state.inboundCount} in{Ansi.reset}"
+       else s!" {Ansi.dim}0 in{Ansi.reset}") ++
       s!"{Ansi.dim}  |  {Ansi.reset}{Ansi.white}Rollbacks: {Ansi.yellow}{state.rollbacks}{Ansi.reset}",
     s!"{Ansi.white}  {syncOriginLabel}",
     -- Line 5: leadership schedule (own line, below sync origin)

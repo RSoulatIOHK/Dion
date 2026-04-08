@@ -318,12 +318,15 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
     (forgedBlocksRef : IO.Ref (Array ForgedBlock))
     (tuiRef : Option (IO.Ref Dion.TUI.State.TUIState) := none)
     : IO Unit := do
-  let log : String → IO Unit := fun msg => if tuiRef.isNone then IO.println msg else pure ()
+  let log : String → IO Unit := Dion.TUI.State.tuiLog tuiRef
+  -- Mark SPO mode active in TUI immediately
+  if let some tRef := tuiRef then
+    tRef.modify fun s => { s with consensus := { s.consensus with spoActive := true } }
   log "[forge] Block production loop started"
   let state ← stateRef.get
   log s!"[forge] Pool ID: {state.forgeParams.poolId.size} bytes"
   log s!"[forge] Slot clock: system start={state.clock.systemStart}"
-  IO.println "[forge] Waiting for chain sync to provide stake snapshot..."
+  log "[forge] Waiting for chain sync to provide stake snapshot..."
 
   let mut snapshotReady := false
   while true do

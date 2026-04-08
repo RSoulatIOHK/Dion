@@ -59,7 +59,8 @@ structure ConsensusInfo where
   blocksForged     : Nat := 0            -- Total blocks forged this session
   -- Leadership schedule
   leaderSlots      : Array Nat := #[]    -- Precomputed slots we lead this epoch
-  scheduleEpoch    : Nat := 0            -- Epoch the schedule was computed for
+  scheduleEpoch    : Nat := 0            -- Epoch the schedule was computed for (in TUI state)
+  spoActive        : Bool := false       -- Forge loop is running (SPO mode)
   deriving Repr
 
 /-- How the node started syncing -/

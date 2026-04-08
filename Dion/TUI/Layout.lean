@@ -144,17 +144,25 @@ def renderHeader (state : TUIState) (width : Nat) (nowMs : Nat) : List String :=
     -- Leadership schedule: show next scheduled slot and last forged
     let c := state.consensus
     let leaderInfo :=
-      if c.leaderSlots.isEmpty && c.lastForgedSlot.isNone then ""
+      if !c.spoActive then ""
+      else if c.scheduleEpoch != c.currentEpoch then
+        -- Schedule not yet computed for this epoch
+        s!"  {Ansi.dim}★ computing schedule...{Ansi.reset}"
+      else if c.leaderSlots.isEmpty then
+        -- Computed but no slots (pool not elected this epoch)
+        let lastStr := match c.lastForgedSlot with
+          | some s => s!"  {Ansi.dim}(last: {formatNum s}){Ansi.reset}"
+          | none   => ""
+        s!"  {Ansi.dim}★ 0 slots this epoch{Ansi.reset}{lastStr}"
       else
         let nextSlot := c.leaderSlots.find? (· > state.tipSlot)
         let nextStr := match nextSlot with
           | some s => s!"{Ansi.brightYellow}{Ansi.bold}next: slot {formatNum s}{Ansi.reset}"
-          | none   => if c.leaderSlots.isEmpty then "" else s!"{Ansi.dim}next: (none this epoch){Ansi.reset}"
+          | none   => s!"{Ansi.dim}next: (none remaining){Ansi.reset}"
         let lastStr := match c.lastForgedSlot with
           | some s => s!"{Ansi.dim}  (last: {formatNum s}){Ansi.reset}"
           | none   => ""
-        if nextStr.isEmpty then lastStr
-        else s!"  {Ansi.dim}★{Ansi.reset}  {nextStr}{lastStr}"
+        s!"  {Ansi.dim}★{Ansi.reset}  {nextStr}{lastStr}"
     s!"{Ansi.white}  {syncOriginLabel}{leaderInfo}"
   ]
   -- Interleave logo and info: logo on left, info on right

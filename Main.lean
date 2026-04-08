@@ -371,3 +371,5 @@ def main (args : List String) : IO Unit := do
         (update := cfg.update)
   | .spoRotateKES cfg =>
       Dion.CLI.SPO.rotateKES cfg.keyDir cfg.kesPeriod
+  | .spoTestPush cfg =>
+      Dion.CLI.SPO.spoTestPush cfg.peers (toString cfg.network)

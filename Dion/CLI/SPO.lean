@@ -1,6 +1,9 @@
 import Dion.Crypto.TextEnvelope
 import Dion.Crypto.Sign.KESSign
 import Dion.Network.Crypto
+import Dion.Network.Handshake
+import Dion.Consensus.Praos.BlockForge
+import Dion.Consensus.Praos.BlockAnnounce
 
 /-!
 # SPO Key Generation and Registration
@@ -396,5 +399,63 @@ def spoRegister
   IO.println "[spo] Pool registration submitted successfully!"
   IO.println s!"[spo] Payment address: {paymentAddr}"
   IO.println "[spo] Wait 2 epoch boundaries (~2 days on preview) for stake to activate."
+
+-- ==========================
+-- = Test Block Push        =
+-- ==========================
+
+/-- Push a dummy invalid block to peers to verify the outbound push plumbing.
+    The block has garbage header bytes so peers will reject it, but they should
+    still receive it and log a parse/validation error — confirming connectivity. -/
+def spoTestPush (peers : List (String × UInt16))
+    (networkName : String := "Preview") : IO Unit := do
+  let network : Dion.Network.Handshake.NetworkMagic := match networkName with
+    | "Mainnet"  => .Mainnet
+    | "Preprod"  => .Preprod
+    | "SanchoNet" => .SanchoNet
+    | _          => .Preview
+  let proposal := Dion.Network.Handshake.createProposal network
+
+  -- Build a dummy ForgedBlock — valid struct, garbage header bytes.
+  -- Peers will receive MsgRollForward, fail to parse the header, and log an error.
+  -- That's exactly what we want: proof that the push mechanism reaches them.
+  let dummyBody : Dion.Consensus.Praos.BlockForge.BlockBodyComponents := {
+    txBodies    := ⟨#[0x80]⟩  -- CBOR empty array
+    witnessSets := ⟨#[0x80]⟩
+    auxData     := ⟨#[0xa0]⟩  -- CBOR empty map
+    invalidTxs  := ⟨#[0x80]⟩
+  }
+  -- 0x82 0x00 0x00 = CBOR 2-element array [0, 0] — valid CBOR, invalid block header
+  let dummyHeader : ByteArray := ⟨#[0x82, 0x00, 0x00]⟩
+  let dummyVRFProof : Dion.Crypto.VRF.ECVRF.VRFProof := {
+    gamma     := Dion.Crypto.Sign.Ed25519.Point.EdPoint.zero
+    challenge := 0
+    response  := 0
+  }
+  let dummyBlock : Dion.Consensus.Praos.BlockForge.ForgedBlock := {
+    blockNumber    := 0
+    slot           := 0
+    prevHash       := ByteArray.mk (Array.replicate 32 0)
+    headerBytes    := dummyHeader
+    bodyComponents := dummyBody
+    vrfProof       := dummyVRFProof
+    vrfOutput      := List.replicate 64 0
+    selectedTxs    := { transactions := [], totalSize := 0, totalFees := 0 }
+  }
+
+  if peers.isEmpty then
+    IO.println "[test-push] No peers specified. Use --peer HOST:PORT (repeatable)."
+    return
+
+  IO.println s!"[test-push] Pushing dummy block to {peers.length} peer(s)..."
+  IO.println s!"[test-push] Header: {dummyHeader.size} bytes of intentionally bad CBOR"
+  IO.println ""
+  for (host, port) in peers do
+    IO.print s!"  → {host}:{port}  "
+    let ok ← Dion.Consensus.Praos.BlockAnnounce.pushBlockToPeer host port proposal dummyBlock
+    if ok then
+      IO.println "✓  peer received MsgRollForward (check peer logs for header rejection)"
+    else
+      IO.println "✗  (see reason above)"
 
 end Dion.CLI.SPO

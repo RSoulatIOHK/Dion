@@ -126,6 +126,13 @@ structure SPORegisterConfig where
 -- = Command          =
 -- ====================
 
+/-- Config for the test-push command -/
+structure SPOTestPushConfig where
+  keyDir  : String              := "spo-keys"
+  peers   : List (String × UInt16) := []
+  network : Network             := .preview
+  deriving Repr
+
 inductive Command where
   | run (config : NodeConfig)
   | query (target : QueryTarget)
@@ -134,6 +141,7 @@ inductive Command where
   | spoMetadata (config : SPOMetadataConfig)
   | spoRegister (config : SPORegisterConfig)
   | spoRotateKES (config : SPORotateKESConfig)
+  | spoTestPush (config : SPOTestPushConfig)
   | help
   | version
 
@@ -279,6 +287,21 @@ def parseArgs (args : List String) : Command :=
   | "spo" :: "rotate-kes" :: rest =>
       let cfg := parseSPOKeygenFlags rest {}  -- shares --dir / --kes-period flags
       .spoRotateKES { keyDir := cfg.keyDir, kesPeriod := cfg.kesPeriod }
+  | "spo" :: "test-push" :: rest =>
+      let rec parse : List String → SPOTestPushConfig → SPOTestPushConfig
+        | [], cfg => cfg
+        | "--dir" :: d :: t, cfg => parse t { cfg with keyDir := d }
+        | "--preview" :: t, cfg  => parse t { cfg with network := .preview }
+        | "--preprod" :: t, cfg  => parse t { cfg with network := .preprod }
+        | "--mainnet" :: t, cfg  => parse t { cfg with network := .mainnet }
+        | "--peer" :: hp :: t, cfg =>
+            let p := match hp.splitOn ":" with
+              | [h, ps] => ps.toNat?.bind fun n =>
+                  if n > 0 && n < 65536 then some (h, UInt16.ofNat n) else none
+              | _ => none
+            parse t { cfg with peers := cfg.peers ++ p.toList }
+        | _ :: t, cfg => parse t cfg
+      .spoTestPush (parse rest {})
   | "spo" :: _ => .help
   | _ =>
     -- Backward compatibility: treat flags without "run" subcommand as run

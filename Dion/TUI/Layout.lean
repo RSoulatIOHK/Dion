@@ -146,9 +146,8 @@ def renderHeader (state : TUIState) (width : Nat) (nowMs : Nat) : List String :=
     let c := state.consensus
     if !c.spoActive then ""
     else
-      let nextSlot := match c.leaderSlots.find? (· > state.tipSlot) with
-        | some s => some s
-        | none   => c.leaderSlots[0]?
+      -- Only show a future slot (never fall back to past slots)
+      let nextSlot := c.leaderSlots.find? (· > state.tipSlot)
       let lastStr := match c.lastForgedSlot with
         | some s => s!"  {Ansi.dim}(last: {formatNum s}){Ansi.reset}"
         | none   => ""

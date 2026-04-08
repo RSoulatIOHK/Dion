@@ -34,6 +34,7 @@
   }
 #else
   #include <unistd.h>
+  #include <fcntl.h>
   #include <poll.h>
   #include <sys/socket.h>
   #include <sys/un.h>
@@ -175,6 +176,85 @@ lean_obj_res dion_socket_connect(lean_obj_arg host_obj, uint16_t port, lean_obj_
     lean_object* socket = mk_socket((uint32_t)sockfd);
     lean_object* except_ok = mk_except_ok(socket);
     return lean_io_result_mk_ok(except_ok);
+}
+
+/*
+ * Connect with timeout (non-blocking connect + poll)
+ * dion_socket_connect_timeout : String -> UInt16 -> UInt32 -> IO (Except SocketError Socket)
+ * timeoutMs = 0 means use the blocking dion_socket_connect behaviour
+ */
+lean_obj_res dion_socket_connect_timeout(lean_obj_arg host_obj, uint16_t port,
+                                          uint32_t timeout_ms, lean_obj_arg world) {
+    ensure_wsa_init();
+#ifndef _WIN32
+    ensure_sigpipe_ignored();
+#endif
+    const char* host = lean_string_cstr(host_obj);
+
+    struct addrinfo hints, *result, *rp;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    char port_str[6];
+    snprintf(port_str, sizeof(port_str), "%u", port);
+
+    int status = getaddrinfo(host, port_str, &hints, &result);
+    if (status != 0) {
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg), "getaddrinfo: %s", gai_strerror(status));
+        return lean_io_result_mk_ok(mk_except_error(mk_socket_error_connection_failed(lean_mk_string(err_msg))));
+    }
+
+    int sockfd = -1;
+    for (rp = result; rp != NULL; rp = rp->ai_next) {
+        sockfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (sockfd == -1) continue;
+
+#ifdef _WIN32
+        /* Windows: use ioctlsocket for non-blocking */
+        u_long nb = 1;
+        ioctlsocket(sockfd, FIONBIO, &nb);
+        connect(sockfd, rp->ai_addr, rp->ai_addrlen);  /* WSAEWOULDBLOCK expected */
+        struct timeval tv = { (long)(timeout_ms / 1000), (long)((timeout_ms % 1000) * 1000) };
+        fd_set wfds; FD_ZERO(&wfds); FD_SET((SOCKET)sockfd, &wfds);
+        int sel = select(sockfd + 1, NULL, &wfds, NULL, &tv);
+        if (sel <= 0) { CLOSESOCKET(sockfd); sockfd = -1; continue; }
+        int err = 0; int errlen = sizeof(err);
+        getsockopt(sockfd, SOL_SOCKET, SO_ERROR, (char*)&err, &errlen);
+        if (err != 0) { CLOSESOCKET(sockfd); sockfd = -1; continue; }
+        /* Restore blocking */
+        nb = 0; ioctlsocket(sockfd, FIONBIO, &nb);
+#else
+        /* POSIX: use O_NONBLOCK + poll */
+        int flags = fcntl(sockfd, F_GETFL, 0);
+        fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+        int cr = connect(sockfd, rp->ai_addr, rp->ai_addrlen);
+        if (cr == 0) {
+            /* Connected immediately */
+            fcntl(sockfd, F_SETFL, flags);  /* restore blocking */
+            break;
+        }
+        if (errno != EINPROGRESS) { CLOSESOCKET(sockfd); sockfd = -1; continue; }
+        struct pollfd pfd = { sockfd, POLLOUT, 0 };
+        int pr = poll(&pfd, 1, (int)timeout_ms);
+        if (pr <= 0) { CLOSESOCKET(sockfd); sockfd = -1; continue; }  /* timeout or error */
+        int err = 0; socklen_t errlen = sizeof(err);
+        getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &err, &errlen);
+        if (err != 0) { CLOSESOCKET(sockfd); sockfd = -1; continue; }
+        fcntl(sockfd, F_SETFL, flags);  /* restore blocking */
+#endif
+        break;  /* success */
+    }
+    freeaddrinfo(result);
+
+    if (sockfd == -1) {
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg), "Could not connect to %s:%u (timeout %ums)", host, port, timeout_ms);
+        return lean_io_result_mk_ok(mk_except_error(mk_socket_error_connection_failed(lean_mk_string(err_msg))));
+    }
+    return lean_io_result_mk_ok(mk_except_ok(mk_socket((uint32_t)sockfd)));
 }
 
 /*

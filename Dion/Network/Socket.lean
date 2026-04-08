@@ -46,6 +46,10 @@ instance : ToString SocketError where
 @[extern "dion_socket_connect"]
 opaque socket_connect (host : @& String) (port : @& UInt16) : IO (Except SocketError Socket)
 
+/-- Connect with a timeout (milliseconds). Returns error on timeout or refusal. -/
+@[extern "dion_socket_connect_timeout"]
+opaque socket_connect_timeout (host : @& String) (port : @& UInt16) (timeoutMs : @& UInt32) : IO (Except SocketError Socket)
+
 /-- Send bytes over socket -/
 @[extern "dion_socket_send"]
 opaque socket_send (sock : @& Socket) (data : @& ByteArray) : IO (Except SocketError Unit)

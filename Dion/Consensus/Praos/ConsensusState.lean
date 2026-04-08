@@ -262,30 +262,65 @@ where
     else if c >= 'A' && c <= 'F' then some (c.toNat - 'A'.toNat + 10).toUInt8
     else none
 
-/-- Save consensus nonce state to a file for persistence across restarts.
-    Format: epoch epochNonce(hex) evolvingNonce(hex) -/
+/-- Save consensus state (nonces + stake snapshot) to a file for persistence across restarts.
+    Format line 1: epoch epochNonce(hex) evolvingNonce(hex) totalStake
+    Format line 2+: poolId(hex) stake (one pool per line) -/
 def saveConsensusState (state : ConsensusState) (path : String := "data/consensus.state") : IO Unit := do
-  let content := s!"{state.currentEpoch} {bytesToHex state.epochNonce} {bytesToHex state.evolvingNonce}"
+  let header := s!"{state.currentEpoch} {bytesToHex state.epochNonce} {bytesToHex state.evolvingNonce} {state.stakeSnapshot.totalStake}"
+  let poolLines := state.stakeSnapshot.poolStakes.map fun (pid, stake) =>
+    s!"{bytesToHex pid} {stake}"
+  let content := (header :: poolLines).foldl (fun acc l => acc ++ l ++ "\n") ""
   IO.FS.writeFile path content
 
-/-- Load consensus nonce state from file. Returns (epoch, epochNonce, evolvingNonce). -/
-def loadConsensusState (path : String := "data/consensus.state") : IO (Option (Nat × ByteArray × ByteArray)) := do
+/-- Load consensus state from file.
+    Returns (epoch, epochNonce, evolvingNonce, stakeSnapshot). -/
+def loadConsensusState (path : String := "data/consensus.state")
+    : IO (Option (Nat × ByteArray × ByteArray × Dion.Consensus.Praos.LeaderElection.StakeSnapshot)) := do
   try
     let content ← IO.FS.readFile path
-    let parts := content.trim.splitOn " "
-    match parts with
-    | [epochStr, nonceHex, evolvingHex] => do
-      let epoch ← match epochStr.toNat? with
-        | some n => pure n
-        | none => return none
-      let nonce ← match hexToBytes nonceHex with
-        | some bs => pure bs
-        | none => return none
-      let evolving ← match hexToBytes evolvingHex with
-        | some bs => pure bs
-        | none => return none
-      return some (epoch, nonce, evolving)
-    | _ => return none
+    let lines := content.trim.splitOn "\n" |>.filter (· != "")
+    match lines with
+    | [] => return none
+    | headerLine :: poolLines => do
+      let parts := headerLine.trim.splitOn " "
+      match parts with
+      | [epochStr, nonceHex, evolvingHex, totalStakeStr] => do
+        let epoch ← match epochStr.toNat? with
+          | some n => pure n
+          | none => return none
+        let nonce ← match hexToBytes nonceHex with
+          | some bs => pure bs
+          | none => return none
+        let evolving ← match hexToBytes evolvingHex with
+          | some bs => pure bs
+          | none => return none
+        let totalStake := totalStakeStr.toNat!
+        let mut poolStakes : List (ByteArray × Nat) := []
+        for line in poolLines do
+          match line.trim.splitOn " " with
+          | [pidHex, stakeStr] =>
+            match hexToBytes pidHex with
+            | some pid => poolStakes := poolStakes ++ [(pid, stakeStr.toNat!)]
+            | none => pure ()
+          | _ => pure ()
+        let snapshot : Dion.Consensus.Praos.LeaderElection.StakeSnapshot :=
+          { poolStakes, totalStake }
+        return some (epoch, nonce, evolving, snapshot)
+      | [epochStr, nonceHex, evolvingHex] =>
+        -- Legacy format without stake snapshot — load nonces only
+        let epoch ← match epochStr.toNat? with
+          | some n => pure n
+          | none => return none
+        let nonce ← match hexToBytes nonceHex with
+          | some bs => pure bs
+          | none => return none
+        let evolving ← match hexToBytes evolvingHex with
+          | some bs => pure bs
+          | none => return none
+        let emptySnap : Dion.Consensus.Praos.LeaderElection.StakeSnapshot :=
+          { poolStakes := [], totalStake := 0 }
+        return some (epoch, nonce, evolving, emptySnap)
+      | _ => return none
   catch _ => return none
 
 end Dion.Consensus.Praos.ConsensusState

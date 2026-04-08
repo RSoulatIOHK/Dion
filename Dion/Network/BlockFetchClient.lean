@@ -19,52 +19,67 @@ open Dion.Network.BlockFetch
 open Dion.Network.ConwayBlock
 
 /-- Fetch a single block by point. Passes mempoolRef so TxSubmission2
-    messages arriving during BlockFetch are handled inline (not dropped). -/
+    messages arriving during BlockFetch are handled inline (not dropped).
+    Set verbose := false to suppress trace-level prints (e.g. in TUI mode). -/
 def fetchBlock (sock : Socket) (point : Point)
     (mempoolRef : Option (IO.Ref Dion.Network.Mempool.Mempool) := none)
+    (verbose : Bool := true)
     : IO (Except SocketError (Option ByteArray)) := do
-  -- Send request
+  let log : String → IO Unit := fun msg => if verbose then IO.println msg else pure ()
+  log s!"[blockfetch] requesting slot={point.slot} hash={point.hash.size}B"
   match ← sendBlockFetch sock (.MsgRequestRange point point) with
   | .error e => do
-      IO.println s!"[ERR] BlockFetch send error: {e}"
+      log s!"[blockfetch] send error: {e}"
       return .error e
   | .ok () => do
-      -- Receive StartBatch or NoBlocks
+      log "[blockfetch] sent MsgRequestRange, waiting for StartBatch/NoBlocks..."
       match ← receiveBlockFetch sock ⟨#[]⟩ 65535 mempoolRef with
       | .error e => do
-          IO.println s!"[ERR] BlockFetch receive error: {e}"
+          log s!"[blockfetch] receive error (StartBatch): {e}"
           return .error e
       | .ok none => do
-          IO.println "[ERR] BlockFetch receive returned none (timeout or decode failure)"
+          log "[blockfetch] receive returned none (timeout/decode fail) waiting for StartBatch"
           return .ok none
       | .ok (some result) =>
+          log s!"[blockfetch] got: {repr result.message}"
           match result.message with
           | .MsgStartBatch => do
-              -- Receive block
+              log "[blockfetch] MsgStartBatch — waiting for block..."
               match ← receiveBlockFetch sock result.leftoverBytes 2000000 mempoolRef with
-              | .error e => return .error e
-              | .ok none => return .ok none
+              | .error e => do
+                  log s!"[blockfetch] receive error (MsgBlock): {e}"
+                  return .error e
+              | .ok none => do
+                  log "[blockfetch] receive returned none waiting for MsgBlock"
+                  return .ok none
               | .ok (some blockResult) =>
                   match blockResult.message with
                   | .MsgBlock blockBytes => do
-                      -- Receive BatchDone
+                      log s!"[blockfetch] got MsgBlock size={blockBytes.size} — waiting for BatchDone..."
                       match ← receiveBlockFetch sock blockResult.leftoverBytes 65535 mempoolRef with
-                      | .error e => return .error e
+                      | .error e => do
+                          log s!"[blockfetch] receive error (BatchDone): {e}"
+                          return .error e
                       | .ok (some doneResult) =>
+                          log s!"[blockfetch] BatchDone step got: {repr doneResult.message}"
                           match doneResult.message with
-                          | .MsgBatchDone => return .ok (some blockBytes)
+                          | .MsgBatchDone =>
+                              log "[blockfetch] complete ✓"
+                              return .ok (some blockBytes)
                           | _ => do
-                              IO.println "[WARN] Expected BatchDone, got different message"
-                              return .ok (some blockBytes)  -- Return block anyway
-                      | _ => return .ok (some blockBytes)  -- Return block anyway
+                              log "[WARN] Expected BatchDone, got different message"
+                              return .ok (some blockBytes)
+                      | _ =>
+                          log "[blockfetch] no BatchDone frame — returning block anyway"
+                          return .ok (some blockBytes)
                   | _ => do
-                      IO.println "[WARN] Expected MsgBlock"
+                      log s!"[blockfetch] expected MsgBlock, got: {repr blockResult.message}"
                       return .ok none
           | .MsgNoBlocks => do
-              IO.println "[ERR] Server has no blocks in range"
+              log "[blockfetch] MsgNoBlocks — server has no block at this point"
               return .ok none
           | _ => do
-              IO.println "[WARN] Expected MsgStartBatch or MsgNoBlocks"
+              log s!"[blockfetch] unexpected first message: {repr result.message}"
               return .ok none
 
 end Dion.Network.BlockFetchClient

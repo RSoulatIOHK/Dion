@@ -430,7 +430,16 @@ partial def receiveChainSyncFrame (sock : Socket)
                         let peerAddrs := peers.map fun p => (p.host, p.port)
                         if peerAddrs.length > 0 then
                           dRef.modify fun ds =>
-                            let newPeers := peerAddrs.filter fun p => !ds.known.any (· == p)
+                            -- Filter out bogus addresses: multicast (224-239.x.x.x),
+                            -- loopback (127.x), unspecified (0.x), IPv6 literals
+                            let isUsable := fun (host : String) =>
+                              let firstOctet := (host.splitOn ".").head?.bind (·.toNat?) |>.getD 0
+                              !host.contains ':' &&  -- no IPv6
+                              firstOctet != 0 &&
+                              firstOctet != 127 &&
+                              firstOctet < 224  -- no multicast/reserved
+                            let newPeers := peerAddrs.filter fun (h, p) =>
+                              isUsable h && !ds.known.any (· == (h, p))
                             { ds with discovered := ds.discovered ++ newPeers }
                         -- Send MsgDone to cleanly close PeerSharing
                         let _ ← sendPeerSharing sock .MsgDone

@@ -89,10 +89,14 @@ inductive ChainSyncMessage where
 
 /-- Encode Point as CBOR array [slot, hash] -/
 def encodePoint (p : Point) : ByteArray :=
-  let header := encodeArrayHeader 2
-  let slotEncoded := encodeUInt p.slot.toNat
-  let hashEncoded := encodeBytes p.hash
-  header ++ slotEncoded ++ hashEncoded
+  -- Genesis/origin is encoded as empty CBOR array [], NOT as [0, b""]
+  if p.hash.size == 0 then
+    encodeArrayHeader 0
+  else
+    let header := encodeArrayHeader 2
+    let slotEncoded := encodeUInt p.slot.toNat
+    let hashEncoded := encodeBytes p.hash
+    header ++ slotEncoded ++ hashEncoded
 
 /-- Encode Tip as CBOR array [point, blockNo] -/
 def encodeTip (t : Tip) : ByteArray :=

@@ -710,11 +710,7 @@ def validateTransaction (state : LedgerState) (body : TransactionBody)
   | .error e => errors := e :: errors
   | .ok () => pure ()
 
-  -- 11. Plutus script validation (via Plutuz FFI)
-  let txHash ← blake2b_256 body.rawBytes
-  match ← validatePlutusScriptsIO body witnesses state.utxo txHash with
-  | .error e => errors := e :: errors
-  | .ok () => pure ()
+  -- 11. Plutus script validation — handled by caller (validateForgedBlock only).
 
   -- 11a. #390: Check for unspendable Plutus UTXOs (no datum hash)
   -- Only PlutusV1 and V2 script-locked inputs require a datum to be spendable.

@@ -156,7 +156,7 @@ structure ProtocolParamsState where
   currentEra : CardanoEra            -- Current era
   -- Alonzo+ parameters
   maxValueSize : Nat := 5000         -- Max serialized Value size in bytes
-  maxTxExUnits : (Nat × Nat) := (14000000, 10000000000) -- (mem, steps) per tx (base; governance actions may update)
+  maxTxExUnits : (Nat × Nat) := (16500000, 10000000000) -- (mem, steps) per tx — Preview raised this to 16.5M mem via governance (was 14M)
   maxBlockExUnits : (Nat × Nat) := (62000000, 20000000000) -- (mem, steps) per block
   collateralPercentage : Nat := 150  -- Collateral percentage (e.g. 150 = 150%)
   maxCollateralInputs : Nat := 3     -- Max number of collateral inputs

@@ -98,20 +98,28 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
     (blockNoRef : Option (IO.Ref Nat) := none)
     (checkpointRef : Option (IO.Ref Dion.Ledger.State.CheckpointRing) := none)
     (selfAddr : Option Dion.Network.PeerSharing.PeerAddress := none) : IO SyncExit := do
+  let log : String → IO Unit := fun msg => if tuiRef.isNone then IO.println msg else pure ()
   -- Request next block header
+  log s!"[sync] {peerAddr}: sending RequestNext (blockCount={blockCount})"
   match ← sendChainSync sock requestNext with
   | .error e =>
       return .connectionLost s!"Failed to send RequestNext: {e}"
   | .ok _ => do
+      log s!"[sync] {peerAddr}: waiting for ChainSync frame..."
       match ← receiveChainSyncFrame sock discoveryRef mempoolRef txSubmPeerRef txSubmResponderQueue selfAddr with
       | .error e =>
+          log s!"[sync] {peerAddr}: receiveChainSyncFrame error: {e}"
           return .connectionLost e
       | .ok frame => do
+          log s!"[sync] {peerAddr}: got frame size={frame.payload.size}"
           match decodeChainSyncMessage frame.payload with
           | none => do
+              log s!"[sync] {peerAddr}: DECODE FAILED payload={frame.payload.size}B"
               return .protocolError "Failed to decode ChainSync message"
           | some (.MsgRollForward header tip) => do
+              log s!"[sync] {peerAddr}: MsgRollForward era={header.era} tipSlot={tip.point.slot}"
               let ok ← fetchAndDisplayBlock sock header tip chainDb seenBlocks tuiRef peerAddr mempoolRef consensusRef ledgerStateRef prevHashRef blockNoRef checkpointRef
+              log s!"[sync] {peerAddr}: fetchAndDisplayBlock returned ok={ok}"
               if ok then
                 syncLoop sock (blockCount + 1) chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef ledgerStateRef prevHashRef blockNoRef checkpointRef selfAddr
               else
@@ -121,14 +129,21 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
               if let some phRef := prevHashRef then
                 phRef.set rollbackPoint.hash
               -- Restore ledger state from nearest checkpoint at or before rollback slot
-              if let some cpRef := checkpointRef then
-                if let some lsMutex := ledgerStateRef then
+              let rollbackBlockNo ← do
+                if let some cpRef := checkpointRef then
                   let ring ← cpRef.get
                   match ring.findRollbackTarget rollbackPoint.slot.toNat with
                   | some cp =>
-                    lsMutex.atomically fun lsRef => lsRef.set cp.ledger
+                    if let some lsMutex := ledgerStateRef then
+                      lsMutex.atomically fun lsRef => lsRef.set cp.ledger
                     if let some bnRef := blockNoRef then bnRef.set cp.blockNo
-                  | none => pure ()  -- No checkpoint found; UTxO state may be stale
+                    pure cp.blockNo
+                  | none => pure 0  -- No checkpoint found; UTxO state may be stale
+                else pure 0
+              -- Save rollback point to chainDb so reconnect intersects at the canonical
+              -- chain rather than the orphan block we received before the rollback.
+              if let some cdb := chainDb then
+                cdb.saveSyncState rollbackPoint.slot.toNat rollbackBlockNo rollbackPoint.hash
               -- Dedup: only print once across peers (encode as slot + 1B offset)
               let shouldPrint ← do
                 if let some ref := seenBlocks then
@@ -146,6 +161,7 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
                     ]
               syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef ledgerStateRef prevHashRef blockNoRef checkpointRef selfAddr
           | some (.MsgAwaitReply) => do
+              log s!"[sync] {peerAddr}: MsgAwaitReply after {blockCount} blocks"
               -- Dedup: only print once across peers (encode as blockCount + 2B offset)
               let shouldPrint ← do
                 if let some ref := seenBlocks then
@@ -154,12 +170,8 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
                 else pure true
               if shouldPrint then
                 match tuiRef with
-                | some ref => ref.modify (·.addLog "At tip -- waiting for new block...")
-                | none =>
-                  run do
-                    concat [
-                      ("At tip -- waiting for new block...".style |> cyan |> dim)
-                    ]
+                | some ref => ref.modify (·.addLog s!"At tip after {blockCount} blocks — waiting...")
+                | none => pure ()
               -- Server will push MsgRollForward when a new block arrives
               -- Keep receiving, handling KeepAlive frames transparently
               match ← receiveChainSyncFrame sock discoveryRef mempoolRef txSubmPeerRef txSubmResponderQueue selfAddr with
@@ -176,14 +188,19 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
                   | some (.MsgRollBackward rollbackPoint2 _) => do
                       if let some phRef := prevHashRef then
                         phRef.set rollbackPoint2.hash
-                      if let some cpRef := checkpointRef then
-                        if let some lsMutex := ledgerStateRef then
+                      let rollbackBlockNo2 ← do
+                        if let some cpRef := checkpointRef then
                           let ring ← cpRef.get
                           match ring.findRollbackTarget rollbackPoint2.slot.toNat with
                           | some cp =>
-                            lsMutex.atomically fun lsRef => lsRef.set cp.ledger
+                            if let some lsMutex := ledgerStateRef then
+                              lsMutex.atomically fun lsRef => lsRef.set cp.ledger
                             if let some bnRef := blockNoRef then bnRef.set cp.blockNo
-                          | none => pure ()
+                            pure cp.blockNo
+                          | none => pure 0
+                        else pure 0
+                      if let some cdb := chainDb then
+                        cdb.saveSyncState rollbackPoint2.slot.toNat rollbackBlockNo2 rollbackPoint2.hash
                       let shouldPrint2 ← do
                         if let some ref := seenBlocks then
                           let dup ← atomicCheckAndMark ref (rollbackPoint2.slot.toNat + 1_000_000_000)
@@ -200,12 +217,12 @@ partial def syncLoop (sock : Socket) (blockCount : Nat) (chainDb : Option ChainD
                             ]
                       syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef ledgerStateRef prevHashRef blockNoRef checkpointRef selfAddr
                   | some other => do
-                      IO.println s!"Unexpected message: {repr other}"
+                      log s!"Unexpected message: {repr other}"
                       syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef ledgerStateRef prevHashRef blockNoRef checkpointRef selfAddr
                   | none =>
                       return .protocolError "Failed to decode ChainSync message"
           | some other => do
-              IO.println s!"Unexpected message: {repr other}"
+              log s!"Unexpected message: {repr other}"
               syncLoop sock blockCount chainDb discoveryRef seenBlocks tuiRef peerAddr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef ledgerStateRef prevHashRef blockNoRef checkpointRef selfAddr
 
 /-- Connect, handshake, find tip, intersect, and enter sync loop.
@@ -361,8 +378,10 @@ def peerFindTipAndSync (sock : Socket) (addrStr : String) (chainDb : ChainDB)
                 tuiLog tuiRef s!"Peer {addrStr}: intersected at saved point slot {point.slot}"
                 return ← syncLoop sock 0 (some chainDb) discoveryRef seenBlocks tuiRef addrStr mempoolRef txSubmPeerRef txSubmResponderQueue consensusRef ledgerStateRef prevHashRef blockNoRef checkpointRef selfAddr
             | some (.MsgIntersectNotFound _) =>
-                -- Saved point not in peer's chain — fall through to tip intersection below
-                tuiLog tuiRef s!"Peer {addrStr}: saved point not found, falling back to tip"
+                -- Saved point (orphan or stale) not in peer's chain.
+                -- Reset to slot 0 so future reconnects skip straight to tip.
+                chainDb.saveSyncState 0 0 (ByteArray.mk #[])
+                tuiLog tuiRef s!"Peer {addrStr}: saved point not found (orphan?), falling back to tip"
             | _ =>
                 return .protocolError "Unexpected response to MsgFindIntersect"
 

@@ -149,6 +149,8 @@ def ChainDB.getLastSyncedPoint (cdb : ChainDB) : IO (Option Point) := do
   match ← cdb.db.loadSyncState with
   | none => return none
   | some state =>
+    -- Slot 0 / empty hash means "cleared" — treat as no saved point
+    if state.lastSlot == 0 || state.lastHash.size == 0 then return none
     return some { slot := UInt64.ofNat state.lastSlot, hash := state.lastHash }
 
 end Dion.Storage.ChainDB

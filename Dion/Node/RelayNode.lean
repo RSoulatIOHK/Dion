@@ -156,19 +156,32 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
   let initialCs := ConsensusState.initial genesis
   -- Try to restore consensus nonce state from previous run
   let cs ← match ← loadConsensusState with
-    | some (epoch, nonce, evolving) =>
-      IO.println s!"[consensus] Restored: epoch={epoch}, nonce={nonce.size}B"
+    | some (epoch, nonce, evolving, snapshot) =>
+      let snapshotDesc := if snapshot.totalStake > 0
+        then s!", stake={snapshot.totalStake} ({snapshot.poolStakes.length} pools)"
+        else ""
+      IO.println s!"[consensus] Restored: epoch={epoch}, nonce={nonce.size}B{snapshotDesc}"
       pure { initialCs with
         currentEpoch := epoch
         epochFirstSlot := epoch * initialCs.epochLength
         epochNonce := nonce
-        evolvingNonce := evolving }
+        evolvingNonce := evolving
+        stakeSnapshot := snapshot }
     | none =>
       IO.println "[consensus] No saved state — starting fresh"
       pure initialCs
   let consensusRef ← IO.mkRef cs
 
-  IO.eprintln "[dbg] post-consensus-restore"
+  -- Sync ledger epoch + epoch length from consensus state.
+  -- The UTxO snapshot is saved/loaded with mainnet defaults (epochLength=432000, epoch=0).
+  -- Override with the correct values so epochForSlot doesn't fire spurious transitions.
+  if cs.currentEpoch > 0 then
+    ledgerStateRef.atomically fun lsRef => do
+      let ls ← lsRef.get
+      lsRef.set { ls with protocolParams := { ls.protocolParams with
+        epoch       := cs.currentEpoch
+        epochLength := resolvedEpochLength } }
+
   -- Apply epoch nonce seed from CLI if provided (--epoch-nonce HEX)
   if let some hexStr := epochNonceSeed then
     let hexClean := hexStr.trim
@@ -234,39 +247,29 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
           IO.eprintln s!"[consensus] Koios request error: {e}"
           IO.eprintln "[consensus] Use --epoch-nonce <64-hex> to seed manually"
 
-  IO.eprintln "[dbg] pre-stake-snapshot"
   -- Seed initial stake snapshot from ledger state (don't wait for epoch boundary)
   let initLs ← ledgerStateRef.atomically (fun ref => ref.get)
-  IO.eprintln "[dbg] got-ledger"
-  IO.eprintln s!"[dbg] ledger pools={initLs.pools.registeredPools.length} utxo={initLs.utxo.size}"
   let initSnap := Dion.Consensus.Praos.StakeDistribution.buildSnapshotFromLedger initLs
-  IO.eprintln s!"[dbg] snapshot-built stake={initSnap.totalStake} pools={initSnap.poolStakes.length}"
   if initSnap.totalStake > 0 then do
     consensusRef.modify fun c => { c with stakeSnapshot := initSnap }
-    IO.eprintln "[dbg] stake-set"
     IO.println s!"[consensus] Initial stake snapshot: {initSnap.poolStakes.length} pools, {initSnap.totalStake} lovelace"
-  else do
-    IO.eprintln "[dbg] no-stake-branch"
+  else
     IO.println "[consensus] No stake data yet — forge loop will wait for epoch boundary"
 
-  IO.eprintln "[dbg] pre-tui-init"
   -- TUI state (always created — also used by metrics server)
   let now ← Dion.TUI.Render.nowMs
-  IO.eprintln "[dbg] post-nowMs"
   let tuiStateRefInner ← IO.mkRef ({ TUIState.empty networkName now with syncOrigin := syncOrigin })
   let tuiStateRef : Option (IO.Ref TUIState) := some tuiStateRefInner
+  -- In non-TUI mode, peer loops get `none` so displayBlock runs and connection events
+  -- go to stdout instead of being silently swallowed by the TUI state.
+  let peerTuiRef : Option (IO.Ref TUIState) := if tuiMode then some tuiStateRefInner else none
 
   -- Start metrics server if configured
   if let some mp := metricsPort then
     let _ ← Dion.Monitoring.Server.startMetricsServer mp tuiStateRefInner
 
   -- Start periodic status file writer (for `dion query` commands)
-  IO.eprintln "[dbg] pre-status-writer"
   let _ ← IO.asTask (Dion.CLI.Query.statusFileWriterLoop tuiStateRefInner)
-  IO.eprintln "[dbg] post-status-writer"
-
-  -- In TUI mode: launch the render loop; otherwise: print banner
-  IO.eprintln s!"[dbg] tuiMode={tuiMode}"
   if tuiMode then
     let _ ← startTUI tuiStateRefInner
   else do
@@ -345,17 +348,17 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
   for (host, port) in peerAddrs do
     let task ← IO.asTask (do
       try
-        peerReconnectLoop host port proposal chainDb (some discoveryRef) (some seenBlocksRef) tuiStateRef (some mempoolRef) (some consensusRef) (some ledgerStateRef) (some prevHashRef) (some blockNoRef) (some checkpointRef) skipToTip selfAddr
+        peerReconnectLoop host port proposal chainDb (some discoveryRef) (some seenBlocksRef) peerTuiRef (some mempoolRef) (some consensusRef) (some ledgerStateRef) (some prevHashRef) (some blockNoRef) (some checkpointRef) skipToTip selfAddr
       catch e =>
-        tuiLog tuiStateRef s!"Peer {host}:{port}: {e}")
+        IO.println s!"Peer {host}:{port}: {e}")
     tasks := tasks ++ [task]
 
   -- Launch peer discovery spawner
   let spawnerTask ← IO.asTask (do
     try
-      peerSpawnerLoop discoveryRef proposal chainDb (some seenBlocksRef) tuiStateRef (some mempoolRef) (some consensusRef) (some ledgerStateRef) (some prevHashRef) (some blockNoRef) (some checkpointRef) skipToTip selfAddr
+      peerSpawnerLoop discoveryRef proposal chainDb (some seenBlocksRef) peerTuiRef (some mempoolRef) (some consensusRef) (some ledgerStateRef) (some prevHashRef) (some blockNoRef) (some checkpointRef) skipToTip selfAddr
     catch e =>
-      tuiLog tuiStateRef s!"Peer spawner: {e}")
+      IO.println s!"Peer spawner: {e}")
   tasks := tasks ++ [spawnerTask]
 
   -- Start block production forge loop if SPO keys are configured
@@ -372,7 +375,7 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
       slotsPerKESPeriod := baseClock.slotsPerKESPeriod
     }
     let (forgeTask, _forgeStateRef, forgedBlocksRef) ←
-      Dion.Consensus.Praos.ForgeLoop.startForgeLoop fp clock consensusRef mempoolRef ledgerStateRef prevHashRef blockNoRef tuiStateRef
+      Dion.Consensus.Praos.ForgeLoop.startForgeLoop fp clock consensusRef mempoolRef ledgerStateRef prevHashRef blockNoRef peerTuiRef
     tasks := tasks ++ [forgeTask]
     -- Start block announcement loop (broadcasts forged blocks to shared registry)
     let announceTask ← Dion.Consensus.Praos.BlockAnnounce.startAnnouncementLoop registryRef forgedBlocksRef

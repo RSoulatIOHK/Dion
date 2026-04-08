@@ -318,10 +318,11 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
     (forgedBlocksRef : IO.Ref (Array ForgedBlock))
     (tuiRef : Option (IO.Ref Dion.TUI.State.TUIState) := none)
     : IO Unit := do
-  IO.println "[forge] Block production loop started"
+  let log : String → IO Unit := fun msg => if tuiRef.isNone then IO.println msg else pure ()
+  log "[forge] Block production loop started"
   let state ← stateRef.get
-  IO.println s!"[forge] Pool ID: {state.forgeParams.poolId.size} bytes"
-  IO.println s!"[forge] Slot clock: system start={state.clock.systemStart}"
+  log s!"[forge] Pool ID: {state.forgeParams.poolId.size} bytes"
+  log s!"[forge] Slot clock: system start={state.clock.systemStart}"
   IO.println "[forge] Waiting for chain sync to provide stake snapshot..."
 
   let mut snapshotReady := false
@@ -337,19 +338,19 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
       let nowMs ← getUnixTimeMs
       if nowMs % 60000 < 5100 then
         let slot ← state.clock.currentSlot
-        IO.println s!"[forge] Waiting for stake snapshot (epoch={cs.currentEpoch}, slot={slot}, delegation takes effect after 2 epoch boundaries)"
+        log s!"[forge] Waiting for stake snapshot (epoch={cs.currentEpoch}, slot={slot}, delegation takes effect after 2 epoch boundaries)"
       IO.sleep 5000
       continue
     if !snapshotReady then
-      IO.println s!"[forge] Stake snapshot ready: {cs.stakeSnapshot.poolStakes.length} pools, total stake {cs.stakeSnapshot.totalStake}"
-      IO.println s!"[forge] Epoch nonce: {cs.epochNonce.size} bytes, epoch {cs.currentEpoch}"
+      log s!"[forge] Stake snapshot ready: {cs.stakeSnapshot.poolStakes.length} pools, total stake {cs.stakeSnapshot.totalStake}"
+      log s!"[forge] Epoch nonce: {cs.epochNonce.size} bytes, epoch {cs.currentEpoch}"
       snapshotReady := true
       -- Compute leadership schedule for the current epoch immediately at startup
       let curState ← stateRef.get
       let poolStakeForLog := lookupPoolStake cs.stakeSnapshot curState.forgeParams.poolId
       let poolIdHex := Dion.Network.Crypto.bytesToHex curState.forgeParams.poolId
-      IO.println s!"[forge] Pool stake: {poolStakeForLog} / {cs.stakeSnapshot.totalStake} (pool={poolIdHex.take 16}...)"
-      IO.println s!"[forge] Real-time per-slot VRF check active — will forge if elected"
+      log s!"[forge] Pool stake: {poolStakeForLog} / {cs.stakeSnapshot.totalStake} (pool={poolIdHex.take 16}...)"
+      log s!"[forge] Real-time per-slot VRF check active — will forge if elected"
 
     let prevHash ← prevHashRef.get
     let blockNo ← blockNoRef.get
@@ -358,10 +359,10 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
     match result with
     | .notYet _ => pure ()
     | .notLeader slot =>
-      -- Log every 10 minutes so the operator knows the loop is alive
-      if slot % 600 == 0 then
+      -- Log every minute so the operator knows the loop is alive
+      if slot % 60 == 0 then
         let cs ← consensusRef.get
-        IO.println s!"[forge] slot={slot} epoch={cs.currentEpoch} — not elected, waiting for leadership"
+        log s!"[forge] slot={slot} epoch={cs.currentEpoch} — not elected, waiting for leadership"
       pure ()
     | .forged block => do
       -- Notify TUI: block forged
@@ -378,14 +379,14 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
           let blocks' := s.recentBlocks.map fun b =>
             if b.slot == block.slot then { b with isOurs := true } else b
           { s with consensus := c', recentBlocks := blocks' }
-      IO.println s!"[forge] BLOCK FORGED at slot {block.slot}, block #{block.blockNumber}"
-      IO.println s!"[forge]   header: {block.headerBytes.size} bytes, body: {block.bodyComponents.serialize.size} bytes"
-      IO.println s!"[forge]   txs: {block.selectedTxs.transactions.length}"
+      log s!"[forge] BLOCK FORGED at slot {block.slot}, block #{block.blockNumber}"
+      log s!"[forge]   header: {block.headerBytes.size} bytes, body: {block.bodyComponents.serialize.size} bytes"
+      log s!"[forge]   txs: {block.selectedTxs.transactions.length}"
       -- Self-validate before announcing
       let ls ← ledgerStateRef.atomically (fun ref => ref.get)
       let validationErrors ← validateForgedBlock block ls
       if validationErrors.isEmpty then
-        IO.println s!"[forge]   ✓ self-validation PASSED"
+        log s!"[forge]   ✓ self-validation PASSED"
       else
         IO.eprintln s!"[forge]   ✗ self-validation FAILED ({validationErrors.length} errors):"
         for err in validationErrors do
@@ -420,7 +421,7 @@ partial def runForgeLoop (stateRef : IO.Ref ForgeState)
     | .forgeError slot err =>
       IO.eprintln s!"[forge] Error at slot {slot}: {err}"
     | .epochTransition epoch =>
-      IO.println s!"[forge] Now in epoch {epoch} — real-time VRF check continues"
+      log s!"[forge] Now in epoch {epoch} — real-time VRF check continues"
 
 /-- Start the forge loop as a background IO task. -/
 def startForgeLoop (forgeParams : ForgeParams) (clock : SlotClock)

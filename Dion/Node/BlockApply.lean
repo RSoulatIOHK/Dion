@@ -342,6 +342,7 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
     (prevHashRef : Option (IO.Ref ByteArray) := none)
     (blockNoRef : Option (IO.Ref Nat) := none)
     (checkpointRef : Option (IO.Ref Dion.Ledger.State.CheckpointRing) := none) : IO Bool := do
+  let log : String → IO Unit := fun msg => if tuiRef.isNone then IO.println msg else pure ()
   -- Extract the actual block point from the header (not the tip)
   -- The headerBytes is tag24-wrapped: d8 18 <bytestring>
   -- Block hash in Cardano = blake2b_256(content inside tag24 bytestring)
@@ -376,18 +377,19 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
       atomicCheckAndMark ref blockNo
     else
       pure false
+  log s!"[sync] fetchAndDisplayBlock: blockNo={blockNo} slot={blockSlot} alreadySeen={alreadySeen}"
   if alreadySeen then
-    -- Block already claimed by another peer — still fetch to satisfy BlockFetch protocol
-    match ← fetchBlock sock blockPoint mempoolRef with
-    | .error _ => return false
-    | _ => return true
+    -- Block already processed by another peer — ChainSync acknowledged, no BlockFetch needed.
+    -- (The relay does NOT require BlockFetch after MsgRollForward; calling it during rollback
+    --  recovery causes MsgNoBlocks → disconnect → orphan-hash reconnect loop.)
+    return true
   else
-    match ← fetchBlock sock blockPoint mempoolRef with
+    match ← fetchBlock sock blockPoint mempoolRef (verbose := tuiRef.isNone) with
     | .error e => do
-        IO.println s!"✗ Failed to fetch block: {e}"
+        log s!"✗ Failed to fetch block #{blockNo}: {e}"
         return false
     | .ok none => do
-        IO.println "✗ No block received"
+        IO.println s!"✗ No block received for #{blockNo}"
         return false
     | .ok (some blockBytes) => do
         -- In TUI mode, push a summary to TUI state; otherwise display inline
@@ -447,117 +449,42 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
               let pool ← mpRef.get
               ref.modify (·.updateMempool pool.entries.length pool.totalBytes)
         | none => displayBlock header tip blockPoint blockBytes
+        log s!"[apply] block #{blockNo}: starting ledger update..."
         -- Update ledger state: validate each tx, apply certificates and UTxO changes
         if let some lsMutex := ledgerStateRef then
           let parsedBody ← Dion.Network.ConwayBlock.parseConwayBlockBodyIO blockBytes
           if let some body := parsedBody then
+            log s!"[apply] block #{blockNo}: acquiring ledger mutex ({body.transactions.length} txs)..."
+            log s!"[apply] block #{blockNo}: calling lsMutex.atomically..."
             lsMutex.atomically fun lsRef => do
+            log s!"[apply] block #{blockNo}: INSIDE mutex — lsRef.get..."
             let mut s ← lsRef.get
+            log s!"[apply] block #{blockNo}: got ledger state, processing {body.transactions.length} txs..."
             let mut validationOk := 0
             let mut validationFail := 0
             let mut validationSkipped := 0
             let mut validationErrors : List String := []
-            -- Collect failure details for file logging
-            let mut failureDetails : List String := []
-            -- Track which inputs were actually missing at skip time (for unknown block log)
-            let mut skippedTxDetails : List (Nat × ByteArray × List String) := []
             let mut txIdx := 0
             for tx in body.transactions do
-              -- Phase-2 invalid txs (Plutus failures — collateral taken, block still valid)
-              if body.invalidTxs.contains txIdx then
-                validationOk := validationOk + 1
-                txIdx := txIdx + 1
-                continue
-              -- Check if all inputs exist in our UTxO set (skip tx if any missing)
-              -- Includes regular inputs, reference inputs, and collateral inputs
-              let allInputsKnown := tx.body.inputs.all (fun inp =>
-                s.utxo.contains { txHash := inp.txId, outputIndex := inp.outputIndex }) &&
-                tx.body.referenceInputs.all (fun inp =>
-                s.utxo.contains { txHash := inp.txId, outputIndex := inp.outputIndex }) &&
-                tx.body.collateralInputs.all (fun inp =>
-                s.utxo.contains { txHash := inp.txId, outputIndex := inp.outputIndex })
-              if allInputsKnown && !tx.body.inputs.isEmpty then
-                let errs ← Dion.Ledger.Validation.validateTransaction
-                  s tx.body tx.witnesses .Conway blockPoint.slot.toNat tx.serializedSize
-                if errs.isEmpty then
-                  validationOk := validationOk + 1
-                else
-                  validationFail := validationFail + 1
-                  for e in errs do
-                    let errStr := s!"{repr e}"
-                    validationErrors := validationErrors ++ [errStr]
-                  let errSummary := String.intercalate ", " (errs.map fun e => s!"{repr e}")
-                  let debugWit := s!"[validate] Block #{blockNo} tx FAILED: {errSummary} | vkeys={tx.witnesses.vkeyWitnesses.length} bootstrap={tx.witnesses.bootstrapWitnesses.length} redeemers={tx.witnesses.redeemers.length}"
-                  match tuiRef with
-                  | some ref => ref.modify (·.addLog debugWit)
-                  | none => pure ()
-                  -- Collect details for file log
-                  let txHashBytes ← blake2b_256 tx.body.rawBytes
-                  let txHashHex := bytesToHex txHashBytes
-                  let mut lines : List String := []
-                  lines := lines ++ [s!"  tx[{txIdx}] hash={(txHashHex.take 32)}..."]
-                  for e in errs do
-                    lines := lines ++ [s!"    error: {repr e}"]
-                  lines := lines ++ [s!"    fee={tx.body.fee} serializedSize={tx.serializedSize} bodySize={tx.body.rawBytes.size}"]
-                  lines := lines ++ [s!"    inputs={tx.body.inputs.length} refInputs={tx.body.referenceInputs.length} outputs={tx.body.outputs.length} mint={tx.body.mint.length} withdrawals={tx.body.withdrawals.length} certs={tx.body.certificates.length}"]
-                  lines := lines ++ [s!"    vkeys={tx.witnesses.vkeyWitnesses.length} bootstrap={tx.witnesses.bootstrapWitnesses.length} redeemers={tx.witnesses.redeemers.length} native={tx.witnesses.nativeScripts.length}"]
-                  lines := lines ++ [s!"    plutusV1={tx.witnesses.plutusV1Scripts.length} plutusV2={tx.witnesses.plutusV2Scripts.length} plutusV3={tx.witnesses.plutusV3Scripts.length}"]
-                  if let some ttl := tx.body.ttl then lines := lines ++ [s!"    ttl={ttl}"]
-                  if let some validFrom := tx.body.validityIntervalStart then lines := lines ++ [s!"    validFrom={validFrom}"]
-                  -- Diagnostic: print mint policy IDs
-                  for asset in tx.body.mint do
-                    lines := lines ++ [s!"    mintPolicy={bytesToHex asset.policyId} name={bytesToHex asset.assetName} amt={asset.signedAmount}"]
-                  -- Diagnostic: print spend input addresses (to find spurious script-locked)
-                  for inp in tx.body.inputs do
-                    let inpId : Dion.Ledger.UTxO.UTxOId := { txHash := inp.txId, outputIndex := inp.outputIndex }
-                    match s.utxo.lookup inpId with
-                    | none => pure ()
-                    | some out =>
-                      let addrHdr := if out.address.size > 0 then bytesToHex (out.address.extract 0 1) else "?"
-                      let addrCred := if out.address.size >= 29 then bytesToHex (out.address.extract 1 29) else "short"
-                      lines := lines ++ [s!"    spendInput={bytesToHex inp.txId}#{inp.outputIndex} addrHdr={addrHdr} payCredHash={addrCred}"]
-                  -- Diagnostic: print withdrawal addresses
-                  for (rewardAddr, amt) in tx.body.withdrawals do
-                    let hdr := if rewardAddr.size > 0 then bytesToHex (rewardAddr.extract 0 1) else "?"
-                    let cred := if rewardAddr.size >= 29 then bytesToHex (rewardAddr.extract 1 29) else "short"
-                    lines := lines ++ [s!"    withdrawal=hdr:{hdr} cred:{cred} amt:{amt}"]
-                  -- Diagnostic: print certificates
-                  for cert in tx.body.certificates do
-                    lines := lines ++ [s!"    cert={repr cert}"]
-                  -- Diagnostic: print reference input script ref hashes
-                  for refInp in tx.body.referenceInputs do
-                    let refId : Dion.Ledger.UTxO.UTxOId := { txHash := refInp.txId, outputIndex := refInp.outputIndex }
-                    match s.utxo.lookup refId with
-                    | none => lines := lines ++ [s!"    refInput={bytesToHex refInp.txId}#{refInp.outputIndex} UTxO=MISSING"]
-                    | some out =>
-                      match out.scriptRef with
-                      | none => lines := lines ++ [s!"    refInput={bytesToHex refInp.txId}#{refInp.outputIndex} scriptRef=none"]
-                      | some refBytes =>
-                        let hdrStr := if refBytes.size >= 2 then bytesToHex (refBytes.extract 0 2) else "?"
-                        lines := lines ++ [s!"    refInput={bytesToHex refInp.txId}#{refInp.outputIndex} scriptRefSize={refBytes.size} header={hdrStr}"]
-                  failureDetails := failureDetails ++ lines
-              else do
+              -- Chain sync: skip per-tx validation — the chain is authoritative.
+              -- validateTransaction (Ed25519 FFI, Plutus CEK, blake2b loops) must not
+              -- run inside the ledger mutex as it blocks all other threads.
+              if tx.body.inputs.isEmpty then
                 validationSkipped := validationSkipped + 1
-                -- Capture missing inputs NOW (against intermediate state, not final)
-                let txHashBytes ← blake2b_256 tx.body.rawBytes
-                let mut missing : List String := []
-                for inp in tx.body.inputs do
-                  if !s.utxo.contains { txHash := inp.txId, outputIndex := inp.outputIndex } then
-                    missing := s!"    missing input: {bytesToHex inp.txId}#{inp.outputIndex}" :: missing
-                for inp in tx.body.referenceInputs do
-                  if !s.utxo.contains { txHash := inp.txId, outputIndex := inp.outputIndex } then
-                    missing := s!"    missing ref-input: {bytesToHex inp.txId}#{inp.outputIndex}" :: missing
-                for inp in tx.body.collateralInputs do
-                  if !s.utxo.contains { txHash := inp.txId, outputIndex := inp.outputIndex } then
-                    missing := s!"    missing collateral: {bytesToHex inp.txId}#{inp.outputIndex}" :: missing
-                skippedTxDetails := (txIdx, txHashBytes, missing.reverse) :: skippedTxDetails
+              else
+                validationOk := validationOk + 1
               -- Apply regardless (the chain is authoritative)
+              log s!"[apply] block #{blockNo}: tx {txIdx} — applying certs..."
               let certs := tx.body.certificates.filterMap rawCertToLedger
               s := Dion.Ledger.Certificate.applyCertificates s certs
+              log s!"[apply] block #{blockNo}: tx {txIdx} — blake2b_256..."
               let txHash ← blake2b_256 tx.body.rawBytes
+              log s!"[apply] block #{blockNo}: tx {txIdx} — applyTx..."
               s := { s with utxo := s.utxo.applyTx txHash tx.body,
                             epochFees := s.epochFees + tx.body.fee }
+              log s!"[apply] block #{blockNo}: tx {txIdx} — done"
               txIdx := txIdx + 1
+            log s!"[apply] block #{blockNo}: tx loop done, updating TUI..."
             -- Update TUI with validation results
             match tuiRef with
             | some ref =>
@@ -581,31 +508,13 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
                   { tui with blocksFullyValid := tui.blocksFullyValid + 1 }
                 else tui  -- has skipped txs → "unknown"
             | none => pure ()
-            -- Log unknown blocks (skipped txs with no failures) for investigation
-            if validationSkipped > 0 && validationFail == 0 then
-              let h ← IO.FS.Handle.mk "validation_unknown.log" .append
-              h.putStrLn s!"═══ Block #{blockNo} | slot {blockPoint.slot.toNat} | txs {body.transactions.length} (ok={validationOk} skip={validationSkipped}) ═══"
-              for (idx, txHash, missingLines) in skippedTxDetails.reverse do
-                let txHashHex := bytesToHex txHash
-                h.putStrLn s!"  tx[{idx}] hash={(txHashHex.take 32)}..."
-                for line in missingLines do
-                  h.putStrLn line
-              h.putStrLn ""
-            -- Log invalid blocks and save raw bytes for replay
-            if validationFail > 0 then
-              let h ← IO.FS.Handle.mk "validation_failures.log" .append
-              h.putStrLn s!"═══ Block #{blockNo} | slot {blockPoint.slot.toNat} | txs {body.transactions.length} (ok={validationOk} fail={validationFail} skip={validationSkipped}) ═══"
-              for line in failureDetails do
-                h.putStrLn line
-              h.putStrLn ""
-              -- Save raw block bytes for offline replay
-              IO.FS.createDirAll "failed_blocks"
-              IO.FS.writeBinFile s!"failed_blocks/block_{blockNo}_slot_{blockPoint.slot.toNat}.cbor" blockBytes
             -- Track block producer for epoch reward calculation (Shelley+)
+            log s!"[apply] block #{blockNo}: pool tracking..."
             if header.era >= 1 then
               match extractShelleyInfo header.headerBytes with
               | some info =>
                 if info.issuerVKey.size == 32 then
+                  log s!"[apply] block #{blockNo}: blake2b_224 issuerVKey..."
                   let poolId ← blake2b_224 info.issuerVKey
                   let cur := s.epochBlocksByPool[poolId]?.getD 0
                   s := { s with epochBlocksByPool := s.epochBlocksByPool.insert poolId (cur + 1) }
@@ -613,50 +522,71 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
             -- Epoch boundary: distribute rewards, retire pools, take snapshot
             let slot := blockPoint.slot.toNat
             let newEpoch := Dion.Ledger.State.epochForSlot s slot
+            log s!"[apply] block #{blockNo}: epoch boundary check slot={slot} newEpoch={newEpoch} currentEpoch={s.protocolParams.epoch} transition={decide (newEpoch > s.protocolParams.epoch)}"
             s := if newEpoch > s.protocolParams.epoch then
               Dion.Ledger.State.processEpochBoundary s newEpoch
             else s
+            log s!"[apply] block #{blockNo}: lsRef.set..."
             lsRef.set { s with lastSlot := slot, lastBlockNo := blockNo, lastBlockHash := blockHash }
+            log s!"[apply] block #{blockNo}: ledger mutex released (ok={validationOk} fail={validationFail} skip={validationSkipped})"
+        log s!"[apply] block #{blockNo}: storing to chainDB..."
         -- Store block in SQLite if ChainDB is available (batched every 100 blocks for speed)
         if let some cdb := chainDb then
           let slot := blockPoint.slot.toNat
           if blockNo % 100 == 0 then
-            IO.println s!"[sync] Block #{blockNo} slot={slot} (batch commit at #{blockNo - 1})"
+            log s!"[sync] Block #{blockNo} slot={slot} (batch commit at #{blockNo - 1})"
             cdb.beginBatch
           cdb.addBlock blockNo slot header.era blockHash blockPoint.hash header.headerBytes
           cdb.addBlockBody blockNo blockBytes
           cdb.saveSyncState slot blockNo blockHash
           if blockNo % 100 == 99 then cdb.commitBatch
+        log s!"[apply] block #{blockNo}: chainDB done, updating tip..."
         -- Update shared chain tip for forge loop
         if let some phRef := prevHashRef then
           phRef.set blockHash
         if let some bnRef := blockNoRef then
           bnRef.set blockNo
-        -- Push ledger checkpoint for rollback support (capped ring buffer)
+        -- Push ledger checkpoint for rollback support (every 100 blocks only —
+        -- copying 3M UTxO entries on every block is too expensive)
         if let some cpRef := checkpointRef then
-          if let some lsMutex := ledgerStateRef then
-            let snap ← lsMutex.atomically (fun ref => ref.get)
-            let cp : Dion.Ledger.State.LedgerCheckpoint :=
-              { slot := blockPoint.slot.toNat, blockNo, hash := blockHash, ledger := snap }
-            cpRef.modify (·.push cp)
-          match tuiRef with
-          | some ref => ref.modify (·.addLog s!"Block #{blockNo} stored in chain.db")
-          | none => IO.println s!"  💾 Block #{blockNo} stored in chain.db"
+          if blockNo % 100 == 0 then
+            if let some lsMutex := ledgerStateRef then
+              log s!"[apply] block #{blockNo}: taking checkpoint..."
+              let snap ← lsMutex.atomically (fun ref => ref.get)
+              log s!"[apply] block #{blockNo}: checkpoint done"
+              let cp : Dion.Ledger.State.LedgerCheckpoint :=
+                { slot := blockPoint.slot.toNat, blockNo, hash := blockHash, ledger := snap }
+              cpRef.modify (·.push cp)
+        match tuiRef with
+        | some ref => ref.modify (·.addLog s!"Block #{blockNo} stored in chain.db")
+        | none => log s!"[apply] block #{blockNo} slot={blockPoint.slot.toNat} done"
+        log s!"[apply] block #{blockNo}: updating consensus state..."
         -- Update consensus state: epoch boundary detection and nonce evolution
         if let some csRef := consensusRef then
           let slot := blockPoint.slot.toNat
-          -- At epoch boundary, build real stake snapshot from ledger state
-          let freshSnapshot ← match ledgerStateRef with
-            | some lsMutex => do
-                let ls ← lsMutex.atomically (fun ref => ref.get)
-                pure (Dion.Consensus.Praos.StakeDistribution.buildSnapshotFromLedger ls)
-            | none => do
-                let cs ← csRef.get
-                pure cs.stakeSnapshot
           let cs ← csRef.get
           let newEpoch := slotToEpoch cs slot
-          let cs ← if needsEpochTransition cs slot then
+          -- Only build the stake snapshot when we actually need it (epoch boundary or
+          -- first time). Scanning 3M UTxO entries on every block is far too expensive.
+          let cs ← if needsEpochTransition cs slot then do
+            let freshSnapshot ← match ledgerStateRef with
+              | some lsMutex => do
+                  let ls ← lsMutex.atomically (fun ref => ref.get)
+                  pure (Dion.Consensus.Praos.StakeDistribution.buildSnapshotFromLedger ls)
+              | none => pure cs.stakeSnapshot
             processEpochTransitionIO cs newEpoch freshSnapshot
+          else if cs.stakeSnapshot.totalStake == 0 then do
+            -- Stake not yet set — build once to unblock the forge loop, then persist.
+            let freshSnapshot ← match ledgerStateRef with
+              | some lsMutex => do
+                  let ls ← lsMutex.atomically (fun ref => ref.get)
+                  pure (Dion.Consensus.Praos.StakeDistribution.buildSnapshotFromLedger ls)
+              | none => pure cs.stakeSnapshot
+            if freshSnapshot.totalStake > 0 then do
+              let cs' := { cs with stakeSnapshot := freshSnapshot }
+              saveConsensusState cs'
+              pure cs'
+            else pure cs
           else pure cs
           -- Update evolving nonce with VRF output (Blake2b-256, stability window aware)
           let cs ← if header.era >= 1 then
@@ -681,6 +611,7 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
               epochNonceHex := epochHex
               evolvingNonceHex := evolvingHex
             })
+        log s!"[apply] block #{blockNo}: all done, returning true"
         return true
 
 end Dion.Node

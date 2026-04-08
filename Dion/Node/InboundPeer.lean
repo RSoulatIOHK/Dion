@@ -238,7 +238,9 @@ partial def handleInboundPeer (sock : Socket) (mempoolRef : IO.Ref Mempool)
       if let some ref := tuiRef then ref.modify (·.removeInbound)
 
 open Dion.Consensus.Praos.BlockAnnounce in
-/-- Accept loop: listen for inbound connections, spawn handler per peer -/
+/-- Accept loop: listen for inbound connections, handle each one inline.
+    NOTE: connections are handled sequentially (not in parallel) to avoid
+    Lean external-object capture across task boundaries, which segfaults. -/
 partial def acceptLoop (listenSock : Socket) (mempoolRef : IO.Ref Mempool)
     (tuiRef : Option (IO.Ref TUIState))
     (registryRef : IO.Ref PeerRegistry)
@@ -249,9 +251,8 @@ partial def acceptLoop (listenSock : Socket) (mempoolRef : IO.Ref Mempool)
       IO.sleep 1000
       acceptLoop listenSock mempoolRef tuiRef registryRef network ledgerStateRef
   | .ok clientSock => do
-      let _ ← IO.asTask (do
-        try handleInboundPeer clientSock mempoolRef tuiRef registryRef network ledgerStateRef
-        catch _ => let _ ← socket_close clientSock; pure ())
+      try handleInboundPeer clientSock mempoolRef tuiRef registryRef network ledgerStateRef
+      catch _ => let _ ← socket_close clientSock; pure ()
       acceptLoop listenSock mempoolRef tuiRef registryRef network ledgerStateRef
 
 end Dion.Node

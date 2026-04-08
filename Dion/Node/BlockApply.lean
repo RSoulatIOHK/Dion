@@ -455,36 +455,50 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
           let parsedBody ← Dion.Network.ConwayBlock.parseConwayBlockBodyIO blockBytes
           if let some body := parsedBody then
             log s!"[apply] block #{blockNo}: acquiring ledger mutex ({body.transactions.length} txs)..."
-            log s!"[apply] block #{blockNo}: calling lsMutex.atomically..."
             lsMutex.atomically fun lsRef => do
-            log s!"[apply] block #{blockNo}: INSIDE mutex — lsRef.get..."
             let mut s ← lsRef.get
-            log s!"[apply] block #{blockNo}: got ledger state, processing {body.transactions.length} txs..."
             let mut validationOk := 0
             let mut validationFail := 0
             let mut validationSkipped := 0
             let mut validationErrors : List String := []
             let mut txIdx := 0
             for tx in body.transactions do
-              -- Chain sync: skip per-tx validation — the chain is authoritative.
-              -- validateTransaction (Ed25519 FFI, Plutus CEK, blake2b loops) must not
-              -- run inside the ledger mutex as it blocks all other threads.
-              if tx.body.inputs.isEmpty then
-                validationSkipped := validationSkipped + 1
-              else
+              -- Phase-2 invalid txs (Plutus failures): collateral taken, block still valid
+              if body.invalidTxs.contains txIdx then
                 validationOk := validationOk + 1
+                txIdx := txIdx + 1
+                continue
+              -- Only validate when all inputs are present in our UTxO set
+              let allInputsKnown :=
+                tx.body.inputs.all (fun inp =>
+                  s.utxo.contains { txHash := inp.txId, outputIndex := inp.outputIndex }) &&
+                tx.body.referenceInputs.all (fun inp =>
+                  s.utxo.contains { txHash := inp.txId, outputIndex := inp.outputIndex }) &&
+                tx.body.collateralInputs.all (fun inp =>
+                  s.utxo.contains { txHash := inp.txId, outputIndex := inp.outputIndex })
+              if allInputsKnown && !tx.body.inputs.isEmpty then
+                -- validateTransaction runs all checks except Plutus CEK evaluation
+                -- (step 11 is excluded — too expensive inside the mutex; chain is authoritative)
+                let errs ← Dion.Ledger.Validation.validateTransaction
+                  s tx.body tx.witnesses .Conway blockPoint.slot.toNat tx.serializedSize
+                if errs.isEmpty then
+                  validationOk := validationOk + 1
+                else
+                  validationFail := validationFail + 1
+                  let errSummary := String.intercalate ", " (errs.map fun e => s!"{repr e}")
+                  validationErrors := validationErrors ++ [errSummary]
+                  match tuiRef with
+                  | some ref => ref.modify (·.addLog s!"[validate] Block #{blockNo} tx[{txIdx}] FAILED: {errSummary}")
+                  | none => log s!"[validate] Block #{blockNo} tx[{txIdx}] FAILED: {errSummary}"
+              else
+                validationSkipped := validationSkipped + 1
               -- Apply regardless (the chain is authoritative)
-              log s!"[apply] block #{blockNo}: tx {txIdx} — applying certs..."
               let certs := tx.body.certificates.filterMap rawCertToLedger
               s := Dion.Ledger.Certificate.applyCertificates s certs
-              log s!"[apply] block #{blockNo}: tx {txIdx} — blake2b_256..."
               let txHash ← blake2b_256 tx.body.rawBytes
-              log s!"[apply] block #{blockNo}: tx {txIdx} — applyTx..."
               s := { s with utxo := s.utxo.applyTx txHash tx.body,
                             epochFees := s.epochFees + tx.body.fee }
-              log s!"[apply] block #{blockNo}: tx {txIdx} — done"
               txIdx := txIdx + 1
-            log s!"[apply] block #{blockNo}: tx loop done, updating TUI..."
             -- Update TUI with validation results
             match tuiRef with
             | some ref =>
@@ -509,12 +523,10 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
                 else tui  -- has skipped txs → "unknown"
             | none => pure ()
             -- Track block producer for epoch reward calculation (Shelley+)
-            log s!"[apply] block #{blockNo}: pool tracking..."
             if header.era >= 1 then
               match extractShelleyInfo header.headerBytes with
               | some info =>
                 if info.issuerVKey.size == 32 then
-                  log s!"[apply] block #{blockNo}: blake2b_224 issuerVKey..."
                   let poolId ← blake2b_224 info.issuerVKey
                   let cur := s.epochBlocksByPool[poolId]?.getD 0
                   s := { s with epochBlocksByPool := s.epochBlocksByPool.insert poolId (cur + 1) }
@@ -522,13 +534,11 @@ def fetchAndDisplayBlock (sock : Socket) (header : Header) (tip : Tip)
             -- Epoch boundary: distribute rewards, retire pools, take snapshot
             let slot := blockPoint.slot.toNat
             let newEpoch := Dion.Ledger.State.epochForSlot s slot
-            log s!"[apply] block #{blockNo}: epoch boundary check slot={slot} newEpoch={newEpoch} currentEpoch={s.protocolParams.epoch} transition={decide (newEpoch > s.protocolParams.epoch)}"
             s := if newEpoch > s.protocolParams.epoch then
               Dion.Ledger.State.processEpochBoundary s newEpoch
             else s
-            log s!"[apply] block #{blockNo}: lsRef.set..."
             lsRef.set { s with lastSlot := slot, lastBlockNo := blockNo, lastBlockHash := blockHash }
-            log s!"[apply] block #{blockNo}: ledger mutex released (ok={validationOk} fail={validationFail} skip={validationSkipped})"
+            log s!"[apply] block #{blockNo}: ok={validationOk} fail={validationFail} skip={validationSkipped}"
         log s!"[apply] block #{blockNo}: storing to chainDB..."
         -- Store block in SQLite if ChainDB is available (batched every 100 blocks for speed)
         if let some cdb := chainDb then

@@ -104,8 +104,8 @@ def encodeProposeVersions (versions : List (VersionNumber × VersionData)) : Byt
 
 /-- Encode AcceptVersion message -/
 def encodeAcceptVersion (vn : VersionNumber) (vd : VersionData) : ByteArray :=
-  -- Message tag 1 (AcceptVersion)
-  let tag := encodeArrayHeader 2
+  -- Message tag 1 (AcceptVersion): 3-element array [1, versionNumber, versionData]
+  let tag := encodeArrayHeader 3
   let msgId := encodeUInt 1
   let vnEncoded := encodeUInt vn.value
   let vdEncoded := encodeVersionData vd

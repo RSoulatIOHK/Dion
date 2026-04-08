@@ -377,8 +377,9 @@ def relayNode (proposal : HandshakeMessage) (networkName : String)
     let (forgeTask, _forgeStateRef, forgedBlocksRef) ←
       Dion.Consensus.Praos.ForgeLoop.startForgeLoop fp clock consensusRef mempoolRef ledgerStateRef prevHashRef blockNoRef peerTuiRef
     tasks := tasks ++ [forgeTask]
-    -- Start block announcement loop (broadcasts forged blocks to shared registry)
-    let announceTask ← Dion.Consensus.Praos.BlockAnnounce.startAnnouncementLoop registryRef forgedBlocksRef
+    -- Start block announcement loop (inbound subscribers + outbound push)
+    let announceTask ← (Dion.Consensus.Praos.BlockAnnounce.startAnnouncementLoop
+        registryRef forgedBlocksRef peerAddrs (some proposal))
     tasks := tasks ++ [announceTask]
     IO.println "  [spo] Block production + announcement loops started"
 

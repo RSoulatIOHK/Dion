@@ -4,6 +4,8 @@ import Dion.Network.BlockFetch
 import Dion.Network.Multiplexer
 import Dion.Network.Socket
 import Dion.Network.Crypto
+import Dion.Network.Handshake
+import Dion.Network.TxSubmission2
 
 /-!
 # Block Announcement
@@ -43,6 +45,8 @@ open Dion.Network.ChainSync
 open Dion.Network.BlockFetch
 open Dion.Network.Multiplexer
 open Dion.Network.Socket
+open Dion.Network.Handshake
+open Dion.Network.TxSubmission2
 
 -- ====================
 -- = Peer Registry    =
@@ -207,16 +211,107 @@ def handleRequestNext (registryRef : IO.Ref PeerRegistry)
         if sub.peerId == peerId then { sub with isWaiting := true }
         else sub }
 
+-- ==========================
+-- = Outbound Block Push    =
+-- ==========================
+
+/-- Read mux messages from the peer, acting as ChainSync producer, until we
+    successfully push `block` or exhaust the attempt budget.
+    We are the TCP initiator, so we send with mode=Initiator (sendChainSync).
+    This works when the remote peer operates in InitiatorAndResponder diffusion
+    mode and issues a ChainSync consumer session from their side. -/
+partial def servePushSession (sock : Socket) (block : ForgedBlock) (tip : Tip)
+    (timeoutMs : UInt32 := 5000) (attemptsLeft : Nat := 40) : IO Bool := do
+  if attemptsLeft == 0 then return false
+  -- Read mux header with timeout so we don't block forever
+  match ← socket_receive_exact_timeout sock 8 timeoutMs with
+  | .error _ => return false
+  | .ok none  => return false  -- timeout: peer is Initiator-only, give up
+  | .ok (some hdrBytes) =>
+    match decodeMuxHeader hdrBytes with
+    | none => return false
+    | some hdr =>
+      match ← socket_receive_exact sock hdr.payloadLength.toNat.toUInt32 with
+      | .error _ => return false
+      | .ok payload =>
+        if hdr.protocolId == .ChainSync then
+          match decodeChainSyncMessage payload with
+          | some (.MsgFindIntersect points) =>
+            -- Peer wants to subscribe to our chain.
+            -- Reply with IntersectFound at the peer's requested point (or genesis).
+            let point := points.head?.getD Point.genesis
+            let _ ← sendChainSync sock (.MsgIntersectFound point tip)
+            servePushSession sock block tip timeoutMs (attemptsLeft - 1)
+          | some .MsgRequestNext =>
+            -- Peer is asking for the next block — deliver ours!
+            let header := forgedBlockToHeader block
+            let _ ← sendChainSync sock (.MsgRollForward header tip)
+            IO.println s!"[push] Block {block.blockNumber} (slot {block.slot}) pushed via outbound connection"
+            return true
+          | _ =>
+            servePushSession sock block tip timeoutMs (attemptsLeft - 1)
+        else
+          -- Non-ChainSync message (TxSubmission, KeepAlive, etc.) — skip it
+          servePushSession sock block tip timeoutMs (attemptsLeft - 1)
+
+/-- Push a forged block to an outbound peer by opening a fresh TCP connection.
+    After the handshake, waits for the peer's ChainSync consumer session
+    (InitiatorAndResponder diffusion mode) and delivers the block.
+    Returns true if the block was successfully pushed. -/
+def pushBlockToPeer (host : String) (port : UInt16)
+    (proposal : HandshakeMessage) (block : ForgedBlock) : IO Bool := do
+  match ← socket_connect host port with
+  | .error e =>
+    IO.eprintln s!"[push] {host}:{port}: connect failed: {e}"
+    return false
+  | .ok sock => do
+    -- Send handshake (Initiator mode — we opened the connection)
+    match ← sendHandshake sock proposal with
+    | .error _ => socket_close sock; return false
+    | .ok _ => do
+      -- Read handshake response header
+      match ← socket_receive_exact sock 8 with
+      | .error _ => socket_close sock; return false
+      | .ok hdrBytes =>
+        match decodeMuxHeader hdrBytes with
+        | none => socket_close sock; return false
+        | some hdr =>
+          match ← socket_receive_exact sock hdr.payloadLength.toNat.toUInt32 with
+          | .error _ => socket_close sock; return false
+          | .ok _ => do
+            -- Send TxSubmission2 MsgInit so the peer's TxSubmission consumer
+            -- doesn't stall waiting for us (we're the TxSubmission producer on
+            -- outbound connections).
+            let _ ← sendTxSubmission2 sock .MsgInit
+            -- Now wait for the peer's ChainSync consumer FindIntersect (I&R mode)
+            let tip ← forgedBlockToTip block
+            let ok ← servePushSession sock block tip 5000 40
+            socket_close sock
+            return ok
+
+/-- Push a forged block to all known outbound peers (fire-and-forget per peer). -/
+def pushBlockToOutboundPeers (peerAddrs : List (String × UInt16))
+    (proposal : HandshakeMessage) (block : ForgedBlock) : IO Unit := do
+  for (host, port) in peerAddrs do
+    let _ ← IO.asTask (do
+      try
+        let ok ← pushBlockToPeer host port proposal block
+        if !ok then
+          IO.eprintln s!"[push] {host}:{port}: peer did not subscribe (Initiator-only?)"
+      catch e =>
+        IO.eprintln s!"[push] {host}:{port}: {e}")
+  pure ()
+
 -- ====================
 -- = Announcement Loop =
 -- ====================
 
 /-- Background loop that watches the forged blocks queue and announces
-    new blocks to all subscribed peers.
-    Runs alongside the forge loop — the forge loop pushes to `forgedBlocksRef`,
-    this loop drains it and broadcasts. -/
+    new blocks to all subscribed peers (inbound) and pushes to outbound peers. -/
 partial def announcementLoop (registryRef : IO.Ref PeerRegistry)
     (forgedBlocksRef : IO.Ref (Array ForgedBlock))
+    (outboundPeers : List (String × UInt16) := [])
+    (proposal : Option HandshakeMessage := none)
     : IO Unit := do
   while true do
     IO.sleep 100  -- Check every 100ms
@@ -225,14 +320,21 @@ partial def announcementLoop (registryRef : IO.Ref PeerRegistry)
       -- Drain the queue
       forgedBlocksRef.set #[]
       for block in blocks do
+        -- Announce to inbound subscribers (existing mechanism)
         let _ ← announceBlock registryRef block
+        -- Also push to outbound peers (InitiatorAndResponder mode)
+        if let some prop := proposal then
+          if !outboundPeers.isEmpty then
+            pushBlockToOutboundPeers outboundPeers prop block
 
 /-- Start the announcement loop as a background task. -/
 def startAnnouncementLoop (registryRef : IO.Ref PeerRegistry)
     (forgedBlocksRef : IO.Ref (Array ForgedBlock))
+    (outboundPeers : List (String × UInt16) := [])
+    (proposal : Option HandshakeMessage := none)
     : IO (Task (Except IO.Error Unit)) := do
   IO.asTask (prio := .dedicated) do
-    announcementLoop registryRef forgedBlocksRef
+    announcementLoop registryRef forgedBlocksRef outboundPeers proposal
 
 -- ==========================
 -- = BlockFetch Server      =
